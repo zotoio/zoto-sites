@@ -1,11 +1,5 @@
 {
-  "editorials": [
-    {
-      "cache_key": "2026-06-05-99",
-      "title": "Local stub archive item",
-      "image_url": "perspective-dice-random.svg"
-    }
-  ],
+  "editorials": [],
   "pagination": {
     "page": 1,
     "has_next": false

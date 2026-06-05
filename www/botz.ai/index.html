@@ -112,7 +112,9 @@
     const isLocalDev = ['localhost', '127.0.0.1'].includes(window.location.hostname);
 
     function fetchJsonWithLocalStub(url, stubUrl) {
-      return fetch(url)
+      const requestOptions = isLocalDev ? { cache: 'no-store' } : {};
+
+      return fetch(url, requestOptions)
         .then(response => {
           if (!response.ok) {
             throw new Error(`Request failed: ${response.status}`);
@@ -125,7 +127,7 @@
           }
 
           console.warn(`Using local stub for ${url}`, error);
-          return fetch(stubUrl).then(response => {
+          return fetch(stubUrl, { cache: 'no-store' }).then(response => {
             if (!response.ok) {
               throw new Error(`Stub request failed: ${response.status}`);
             }

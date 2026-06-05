@@ -1,0 +1,19 @@
+[
+  {
+    "article": {
+      "uuid": "local-dev-stub-001",
+      "title": "Local dev stub keeps GenAI News usable without API keys",
+      "source": "botz.ai local stub",
+      "published_at": "2026-06-05-23-30-00",
+      "generated_at": "2026-06-05-23-30-00",
+      "url": "https://botz.ai/",
+      "authorAlias": "Local Stubber"
+    },
+    "editorial": "<h2>Local GenAI News preview</h2><p>This article is served from a static localhost stub when the API backend is not configured. It lets the local frontend render the normal article layout without OpenAI, news API, or shared-secret environment variables.</p><p><a href=\"#\" class=\"byline\">by Browser Bot</a></p>",
+    "navigation": {
+      "previous": "",
+      "next": "",
+      "random": "2026-06-05-99"
+    }
+  }
+]

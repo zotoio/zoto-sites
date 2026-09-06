@@ -1,0 +1,8 @@
+# Place TLS certificate files here for production deploys.
+# docker-compose mounts this directory to /etc/nginx/ssl in the nginx container.
+#
+# Expected files (Let's Encrypt layout):
+#   fullchain.pem
+#   privkey.pem
+#
+# See docs/DEPLOYMENT.md for obtaining certificates on a DigitalOcean droplet.

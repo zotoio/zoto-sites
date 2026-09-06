@@ -1,0 +1,8 @@
+{
+  "id": "botz.ai",
+  "domains": ["botz.ai", "www.botz.ai", "localhost"],
+  "proxies": [
+    { "path": "/editorials", "upstream": "http://botz:3000" },
+    { "path": "/archive", "upstream": "http://botz:3000" }
+  ]
+}

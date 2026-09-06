@@ -2,9 +2,8 @@
 set -euo pipefail
 
 # Bootstrap a fresh Ubuntu DigitalOcean droplet for zoto-sites.
-# Run as root on the droplet:
-#   curl -fsSL https://raw.githubusercontent.com/zotoio/zoto-sites/main/scripts/bootstrap-droplet.sh | bash
-# Or copy this script to the droplet and run it after cloning the repo.
+# For disaster recovery / greenfield only — production already has Docker,
+# Let's Encrypt on the host, and Cloudflare in front of each domain.
 
 REPO_URL="${REPO_URL:-https://github.com/zotoio/zoto-sites.git}"
 DEPLOY_PATH="${DEPLOY_PATH:-/opt/zoto-sites}"
@@ -33,7 +32,7 @@ if ! id "${DEPLOY_USER}" >/dev/null 2>&1; then
   usermod -aG docker "${DEPLOY_USER}"
 fi
 
-echo "==> Configuring firewall (SSH, HTTP, HTTPS)..."
+echo "==> Configuring firewall (SSH, HTTP, HTTPS for Cloudflare origin)..."
 ufw --force reset
 ufw default deny incoming
 ufw default allow outgoing
@@ -73,22 +72,23 @@ Bootstrap complete.
 
 Next steps (as ${DEPLOY_USER}):
 
-  1. Add an SSH key for GitHub Actions / your laptop:
+  1. Add SSH keys for GitHub Actions / your laptop:
        sudo -u ${DEPLOY_USER} mkdir -p ~${DEPLOY_USER}/.ssh
-       # append your public key to ~${DEPLOY_USER}/.ssh/authorized_keys
 
   2. Edit secrets on the droplet:
        ${DEPLOY_PATH}/backends/botz.ai/.env
        ${DEPLOY_PATH}/backends/discord/.env
 
-  3. Install TLS certificates (see docs/DEPLOYMENT.md), then place files in:
-       ${DEPLOY_PATH}/ssl/fullchain.pem
-       ${DEPLOY_PATH}/ssl/privkey.pem
+  3. TLS (production uses existing host Let's Encrypt — see docs/DEPLOYMENT.md):
+       - Point Cloudflare proxied DNS at this droplet
+       - Issue or copy LE certs on the host, then: ./scripts/sync-ssl.sh
 
   4. First deploy:
        sudo -u ${DEPLOY_USER} bash -lc 'cd ${DEPLOY_PATH} && ./scripts/deploy.sh'
 
-  5. Configure GitHub repo secrets for CI deploy:
-       DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_PATH
+  5. Cloudflare: SSL/TLS mode Full (strict); bypass cache for botz.ai /editorials and /archive
+
+  6. GitHub repo secrets for CI deploy:
+       DEPLOY_HOST (droplet origin IP), DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_PATH
 
 EOF

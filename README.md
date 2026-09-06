@@ -1,6 +1,6 @@
 # zoto-sites
 
-Multi-domain static sites and small Node backends, served with **Docker Compose** on a DigitalOcean droplet (or locally).
+Multi-domain static sites and small Node backends, served with **Docker Compose** on a DigitalOcean droplet behind **Cloudflare CDN**.
 
 | Path | Purpose |
 | --- | --- |
@@ -8,7 +8,7 @@ Multi-domain static sites and small Node backends, served with **Docker Compose*
 | `sites/` | Virtual host manifest — **source of truth** for nginx routing |
 | `nginx-conf/` | Generated nginx vhost configs (do not edit by hand) |
 | `backends/` | `botz.ai` Express API and `discord` slash-command bot |
-| `scripts/` | `add-site`, `generate-nginx`, `deploy`, `bootstrap-droplet` |
+| `scripts/` | `add-site`, `generate-nginx`, `sync-ssl`, `deploy`, `bootstrap-droplet` |
 
 ## Quick start (local)
 
@@ -23,7 +23,7 @@ node scripts/generate-nginx.js
 docker compose up -d --build
 ```
 
-Nginx listens on ports **80** and **443**. Without real certificates in `ssl/`, the base image serves a **self-signed** certificate (fine for local testing).
+Nginx listens on ports **80** and **443**. Without certs in `ssl/`, the base image serves a **self-signed** certificate (local testing only).
 
 Test botz.ai routing (static + API proxy):
 
@@ -46,7 +46,7 @@ This creates:
 - `www/example.com/` — static files
 - `nginx-conf/example.com.conf` — regenerated automatically
 
-Edit `www/example.com/`, point DNS at your droplet, then redeploy.
+Edit `www/example.com/`, add a **proxied** DNS record in Cloudflare, then redeploy.
 
 ### Proxy paths (like botz.ai)
 
@@ -75,17 +75,21 @@ Then run `node scripts/generate-nginx.js` and redeploy.
 
 Redeploy after changes: `./scripts/deploy.sh`
 
-## Deploy to DigitalOcean
+## Deploy to DigitalOcean (production)
 
-Full droplet setup, TLS, secrets, and GitHub Actions are documented in **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
+Production: **Cloudflare CDN** in front of the droplet, **Let's Encrypt on the host** (already configured), certs synced into `ssl/` for nginx.
+
+Full details: **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** (Cloudflare SSL mode, cache rules for botz.ai, cert renewal).
 
 Summary:
 
-1. **Bootstrap** a new Ubuntu droplet: `sudo bash scripts/bootstrap-droplet.sh`
-2. **Configure secrets** on the VM (`backends/*/.env`)
-3. **Install TLS** certs into `ssl/fullchain.pem` and `ssl/privkey.pem`
-4. **Deploy**: `./scripts/deploy.sh` on the droplet, or `./scripts/deploy.sh deploy@your-droplet-ip` from your laptop
-5. **Optional CI**: set GitHub secrets `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`, `DEPLOY_PATH` — pushes to `main` deploy via `.github/workflows/deploy.yml`
+1. **Secrets** on the VM (`backends/*/.env`)
+2. **TLS**: `./scripts/sync-ssl.sh` copies host LE certs → `ssl/` (runs automatically in `deploy.sh`)
+3. **Deploy**: `./scripts/deploy.sh` on the droplet, or `./scripts/deploy.sh deploy@<droplet-ip>` over SSH
+4. **Cloudflare**: proxied DNS, **Full (strict)** SSL; bypass CDN cache for `botz.ai` `/editorials` and `/archive`
+5. **Optional CI**: GitHub secrets `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`, `DEPLOY_PATH`
+
+`scripts/bootstrap-droplet.sh` is for greenfield/recovery only — production already has LE and Cloudflare.
 
 ## Migration from hand-written nginx configs
 

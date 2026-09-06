@@ -1,8 +1,7 @@
-# Place TLS certificate files here for production deploys.
-# docker-compose mounts this directory to /etc/nginx/ssl in the nginx container.
+# Origin TLS certificates for the nginx container (synced from host Let's Encrypt).
+# docker-compose mounts this directory to /etc/nginx/ssl (read-only).
 #
-# Expected files (Let's Encrypt layout):
-#   fullchain.pem
-#   privkey.pem
+# Production: run ./scripts/sync-ssl.sh on the droplet to copy from
+#   /etc/letsencrypt/live/<name>/fullchain.pem and privkey.pem
 #
-# See docs/DEPLOYMENT.md for obtaining certificates on a DigitalOcean droplet.
+# See docs/DEPLOYMENT.md (Cloudflare Full Strict + host LE renewal).

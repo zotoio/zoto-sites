@@ -16,6 +16,7 @@ Environment (for remote deploy):
 
 Local / on-droplet deploy runs:
   git pull (if inside a git repo)
+  scripts/sync-ssl.sh (host LE certs → ssl/, skipped if absent)
   node scripts/generate-nginx.js
   docker compose up -d --build
 EOF
@@ -27,6 +28,9 @@ deploy_local() {
     echo "Pulling latest ${BRANCH}..."
     git pull origin "${BRANCH}"
   fi
+
+  echo "Syncing host Let's Encrypt certs (if present)..."
+  bash scripts/sync-ssl.sh
 
   echo "Generating nginx configs..."
   node scripts/generate-nginx.js
@@ -60,6 +64,7 @@ ssh "${TARGET}" "set -euo pipefail
   git fetch origin '${REMOTE_BRANCH}'
   git checkout '${REMOTE_BRANCH}'
   git pull origin '${REMOTE_BRANCH}'
+  bash scripts/sync-ssl.sh
   node scripts/generate-nginx.js
   docker compose up -d --build
   docker compose ps

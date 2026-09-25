@@ -109,6 +109,33 @@
       }
     }
 
+    const isLocalDev = ['localhost', '127.0.0.1'].includes(window.location.hostname);
+
+    function fetchJsonWithLocalStub(url, stubUrl) {
+      const requestOptions = isLocalDev ? { cache: 'no-store' } : {};
+
+      return fetch(url, requestOptions)
+        .then(response => {
+          if (!response.ok) {
+            throw new Error(`Request failed: ${response.status}`);
+          }
+          return response.json();
+        })
+        .catch(error => {
+          if (!isLocalDev) {
+            throw error;
+          }
+
+          console.warn(`Using local stub for ${url}`, error);
+          return fetch(stubUrl, { cache: 'no-store' }).then(response => {
+            if (!response.ok) {
+              throw new Error(`Stub request failed: ${response.status}`);
+            }
+            return response.json();
+          });
+        });
+    }
+
     // initial load
     loadArticle();
 
@@ -125,9 +152,7 @@
         url += `?cacheKey=${key}`;
       }
 
-      fetch(url)
-
-        .then(response => response.json())
+      fetchJsonWithLocalStub(url, '/stubs/editorials.json')
         .then(articles => {
           //console.log(articles);
 
@@ -230,8 +255,7 @@
       isLoading = true;
       document.getElementById('loading').style.display = 'block';
 
-      fetch(`/archive?page=${page}`)
-        .then(response => response.json())
+      fetchJsonWithLocalStub(`/archive?page=${page}`, '/stubs/archive.json')
         .then(data => {
           let container = document.querySelector('#editorials-container');
 

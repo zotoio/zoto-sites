@@ -68,3 +68,25 @@ export function formatSunTime(iso, timeZone) {
     return iso.slice(11, 16);
   }
 }
+
+export function moonPhaseInfo(date = new Date()) {
+  const synodic = 29.530588853;
+  const knownNew = Date.UTC(2000, 0, 6, 18, 14, 0);
+  const days = (date.getTime() - knownNew) / 86400000;
+  const phase = ((days % synodic) + synodic) % synodic;
+  const fraction = phase / synodic;
+  const illumination = Math.round((1 - Math.cos(2 * Math.PI * fraction)) / 2 * 100);
+  const names = [
+    'New moon',
+    'Waxing crescent',
+    'First quarter',
+    'Waxing gibbous',
+    'Full moon',
+    'Waning gibbous',
+    'Last quarter',
+    'Waning crescent',
+  ];
+  const idx = Math.floor(fraction * 8 + 0.5) % 8;
+  const emojis = ['🌑', '🌒', '🌓', '🌔', '🌕', '🌖', '🌗', '🌘'];
+  return { fraction, illumination, name: names[idx], emoji: emojis[idx] };
+}

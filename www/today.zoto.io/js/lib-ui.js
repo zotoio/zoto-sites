@@ -108,9 +108,9 @@ export function drawHourlyChart(canvas, hourly) {
   });
 }
 
-export function renderNews(listEl, payload) {
+export function renderNews(listEl, payload, maxItems = 10) {
   listEl.innerHTML = '';
-  (payload.articles || []).forEach((a) => {
+  (payload.articles || []).slice(0, maxItems).forEach((a) => {
     const li = document.createElement('li');
     li.className = 'news-item';
 
@@ -151,7 +151,8 @@ export function renderNews(listEl, payload) {
   });
 }
 
-export function renderTransit(mapEl, listEl, center, payload) {
+export function renderTransit(mapEl, listEl, center, payload, options = {}) {
+  const mapHeight = options.mapHeight || 220;
   listEl.innerHTML = '';
   (payload.stops || []).forEach((s) => {
     const li = document.createElement('li');
@@ -166,6 +167,7 @@ export function renderTransit(mapEl, listEl, center, payload) {
   if (mapEl._leaflet) {
     mapEl._leaflet.remove();
   }
+  mapEl.style.height = `${mapHeight}px`;
   const map = L.map(mapEl, { zoomControl: false, attributionControl: true }).setView(
     [center.lat, center.lon],
     15

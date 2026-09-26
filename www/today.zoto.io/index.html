@@ -4,9 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark" />
-    <meta name="description" content="Location-aware dashboard: weather, news, and nearby transit." />
+    <meta name="description" content="Location-aware widget dashboard: weather, news, transit, and more." />
     <title>Today · zoto.io</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    <link rel="stylesheet" href="/vendor/gridstack/gridstack.min.css" />
     <link rel="stylesheet" href="/css/style.css" />
   </head>
   <body>
@@ -14,59 +15,35 @@
     <div class="scrim" aria-hidden="true"></div>
 
     <main class="shell" id="main">
-      <header class="hero">
-        <p class="eyebrow">Today</p>
-        <h1 id="place-name">Loading your day…</h1>
-        <p class="meta" id="place-meta"></p>
-      </header>
+      <div class="toolbar" role="toolbar" aria-label="Dashboard controls">
+        <button type="button" id="add-widget-btn" class="fab" aria-expanded="false" aria-controls="widget-library" title="Add widget">
+          +
+        </button>
+        <button type="button" id="reset-layout-btn" class="btn-ghost">Reset layout</button>
+      </div>
 
-      <section class="grid" aria-label="Dashboard panels">
-        <article class="panel panel-weather" aria-labelledby="weather-heading">
-          <div class="panel-head">
-            <h2 id="weather-heading">Weather</h2>
-            <span class="badge" id="weather-source">…</span>
-          </div>
-          <div class="weather-now" id="weather-now">
-            <div class="wx-icon" id="wx-icon" aria-hidden="true"></div>
-            <div>
-              <p class="temp" id="wx-temp">—</p>
-              <p class="wx-label" id="wx-label">—</p>
-            </div>
-          </div>
-          <canvas id="hourly-chart" width="800" height="220" role="img" aria-label="Hourly temperature and precipitation for the next 24 hours"></canvas>
-          <div class="daily-strip" id="daily-strip" aria-label="Seven day forecast"></div>
-          <dl class="weather-stats" id="weather-stats" aria-label="Current conditions detail"></dl>
-        </article>
+      <aside id="widget-library" class="widget-library" hidden aria-label="Widget library">
+        <header class="library-head">
+          <h2>Add a widget</h2>
+          <p class="library-help">Removed widgets reappear here. Drag headers to move; resize from corners.</p>
+        </header>
+        <ul id="widget-library-list" class="library-list"></ul>
+      </aside>
 
-        <article class="panel panel-news" aria-labelledby="news-heading">
-          <div class="panel-head">
-            <h2 id="news-heading">News</h2>
-            <span class="badge" id="news-source">…</span>
-          </div>
-          <ul class="news-list" id="news-list"></ul>
-        </article>
-
-        <article class="panel panel-transit" aria-labelledby="transit-heading">
-          <div class="panel-head">
-            <h2 id="transit-heading">Nearby transit</h2>
-            <span class="badge" id="transit-source">…</span>
-          </div>
-          <div id="transit-map" class="transit-map" role="application" aria-label="Map of nearby transit stops"></div>
-          <ol class="transit-list" id="transit-list"></ol>
-        </article>
-      </section>
+      <div id="widget-grid" class="grid-stack widget-canvas" aria-label="Widget canvas"></div>
 
       <footer class="foot">
         <p>
-          Imagery © Esri, Maxar, Earthstar Geographics · Weather &amp; geocoding via
+          Imagery © Esri, Maxar · Weather &amp; air quality via
           <a href="https://open-meteo.com/" rel="noopener noreferrer">Open-Meteo</a>
-          · Map data © OpenStreetMap contributors
+          · Radar © RainViewer · Map © OpenStreetMap
         </p>
         <p class="demo-hint" id="demo-hint"></p>
       </footer>
     </main>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script src="/vendor/gridstack/gridstack-all.js"></script>
     <script type="module" src="/js/app.js"></script>
   </body>
 </html>

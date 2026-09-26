@@ -3,12 +3,14 @@ import express from 'express';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import {
+  demoAirQuality,
   demoLocation,
   demoNews,
   demoTransit,
   demoWeather,
   isDemoRequest,
 } from './lib/demo.js';
+import { fetchAirQuality } from './lib/air-quality.js';
 import {
   enrichPlaceName,
   locationFromCloudflareHeaders,
@@ -133,6 +135,23 @@ app.get('/api/transit', async (req, res) => {
     return res.json(data);
   } catch {
     return res.json(demoTransit());
+  }
+});
+
+app.get('/api/air-quality', async (req, res) => {
+  if (isDemoRequest(req)) {
+    return res.json(demoAirQuality());
+  }
+  const lat = parseFloat(req.query.lat);
+  const lon = parseFloat(req.query.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return res.status(400).json({ error: 'lat and lon required' });
+  }
+  try {
+    const data = await fetchAirQuality(lat, lon);
+    return res.json({ ...data, pollen: { grass: null, tree: null, weed: null, label: 'Pollen data unavailable for this region' } });
+  } catch {
+    return res.json(demoAirQuality());
   }
 });
 

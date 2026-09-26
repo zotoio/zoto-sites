@@ -72,8 +72,8 @@ export function demoWeather() {
       weather_code: dailyCode,
       temperature_2m_max: dailyMax,
       temperature_2m_min: dailyMin,
-      sunrise: dailyTime.map((d) => `${d}T06:48:00`),
-      sunset: dailyTime.map((d) => `${d}T19:42:00`),
+      sunrise: dailySunrise,
+      sunset: dailySunset,
       uv_index_max: [4, 5, 5, 3, 6, 6, 4],
       wind_speed_10m_max: [12, 18, 15, 22, 10, 14, 16],
     },
@@ -154,6 +154,30 @@ export function demoNews() {
     },
   ];
   return { source: 'demo', locale: 'us', articles: items };
+}
+
+export function demoAirQuality() {
+  const base = Date.now();
+  const hourlyTime = [];
+  const uv = [];
+  for (let i = 0; i < 24; i += 1) {
+    hourlyTime.push(new Date(base + i * 3600000).toISOString());
+    uv.push(Number((0.5 + (i / 24) * 5).toFixed(1)));
+  }
+  return {
+    source: 'demo',
+    timezone: 'America/Los_Angeles',
+    current: {
+      us_aqi: 42,
+      european_aqi: 35,
+      pm2_5: 8.2,
+      pm10: 14,
+      ozone: 42,
+      nitrogen_dioxide: 12,
+    },
+    hourly: { time: hourlyTime, uv_index: uv },
+    pollen: { grass: 2, tree: 1, weed: 0, label: 'Low (demo estimate)' },
+  };
 }
 
 export function demoTransit() {

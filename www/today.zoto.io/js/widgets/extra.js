@@ -286,7 +286,7 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
     }
     case 'radar': {
       const leaflet = mountLeafletInWidget(body, (mapEl) => {
-        const map = L.map(mapEl, { zoomControl: true }).setView([loc.lat, loc.lon], 8);
+        const map = L.map(mapEl, { zoomControl: true, maxZoom: 7 }).setView([loc.lat, loc.lon], 7);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
           attribution: '&copy; OpenStreetMap',
         }).addTo(map);
@@ -315,7 +315,7 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
         if (data.demo || !data.tileUrlTemplate) {
           addDemoRings();
         } else {
-          L.tileLayer(data.tileUrlTemplate, { opacity: 0.68, maxZoom: 12 }).addTo(leaflet.map);
+          L.tileLayer(data.tileUrlTemplate, { opacity: 0.68, maxZoom: 7, minZoom: 2 }).addTo(leaflet.map);
           caption.textContent = 'RainViewer · latest frame';
         }
       } catch {

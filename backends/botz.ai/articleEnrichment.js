@@ -1,5 +1,3 @@
-import cheerio from 'cheerio';
-
 export const DEFAULT_ARTICLE_FETCH_UA =
     'botz.ai-editorial/1.0 (+https://botz.ai; editorial summarization; respects robots)';
 
@@ -85,24 +83,52 @@ export async function readResponseWithByteCap(response, maxBytes) {
     return Buffer.concat(chunks).toString('utf8');
 }
 
-export function extractOpenGraphAndExcerpt(html, { maxExcerptChars = 500 } = {}) {
-    const $ = cheerio.load(html);
-    const ogTitle = $('meta[property="og:title"]').attr('content') || $('meta[name="og:title"]').attr('content');
-    const ogDescription =
-        $('meta[property="og:description"]').attr('content') ||
-        $('meta[name="og:description"]').attr('content') ||
-        $('meta[name="description"]').attr('content');
-    const ogImage = $('meta[property="og:image"]').attr('content') || $('meta[name="og:image"]').attr('content');
+function metaContent(html, names) {
+    for (const name of names) {
+        const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const re = new RegExp(
+            `<meta[^>]+(?:property|name)=["']${escaped}["'][^>]+content=["']([^"']+)["']`,
+            'i'
+        );
+        const match = re.exec(html);
+        if (match?.[1]) {
+            return match[1].trim();
+        }
+        const reReverse = new RegExp(
+            `<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${escaped}["']`,
+            'i'
+        );
+        const match2 = reReverse.exec(html);
+        if (match2?.[1]) {
+            return match2[1].trim();
+        }
+    }
+    return '';
+}
 
-    const articleRoot = $('article').first();
-    const textSource = articleRoot.length ? articleRoot : $('body');
-    const rawText = textSource.text().replace(/\s+/g, ' ').trim();
+function stripHtmlToText(html) {
+    return html
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+export function extractOpenGraphAndExcerpt(html, { maxExcerptChars = 500 } = {}) {
+    const ogTitle = metaContent(html, ['og:title']);
+    const ogDescription =
+        metaContent(html, ['og:description']) || metaContent(html, ['description']);
+    const ogImage = metaContent(html, ['og:image']);
+
+    const articleMatch = /<article[\s\S]*?<\/article>/i.exec(html);
+    const rawText = stripHtmlToText(articleMatch ? articleMatch[0] : html);
     const excerpt = rawText.slice(0, maxExcerptChars);
 
     return {
-        og_title: ogTitle?.trim() || '',
-        og_description: ogDescription?.trim() || '',
-        og_image: ogImage?.trim() || '',
+        og_title: ogTitle,
+        og_description: ogDescription,
+        og_image: ogImage,
         excerpt,
     };
 }

@@ -35,7 +35,8 @@ jobs:
       - name: nginx configuration test (hardened image)
         run: |
           docker build -q -t zoto-sites-nginx-ci .
-          docker run --rm --entrypoint nginx zoto-sites-nginx-ci -t
+          # Standalone container has no Compose DNS; stub botz so proxy_pass validates.
+          docker run --rm --add-host botz:127.0.0.1 --entrypoint nginx zoto-sites-nginx-ci -t
 
       - name: botz.ai OpenAI image API contract
         run: yarn --cwd backends/botz.ai test

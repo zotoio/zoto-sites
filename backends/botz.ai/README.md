@@ -31,7 +31,8 @@ The script:
 - Skips any day that already has **any** `cache/YYYY-MM-DD-*.json` file (idempotent).
 - Never overwrites an existing cache file.
 - Defaults to **dry-run**; pass **`--execute`** to call the live generation path (`GET /editorials?cacheKey=…&asOf=…&purgeCache=false` with `x-shared-secret`).
-- Appends progress to `cache/backfill-editorials.log.jsonl` (resumable).
+- Dry-run writes **nothing** under the archive/cache directory (no log file unless you pass `--log`).
+- Execute mode appends progress to `/tmp/backfill-editorials.log.jsonl` by default (override with `--log`).
 - Stops on the first error with a clear message (including News API plan/historical query failures).
 
 Historical generation uses The News API `published_on` for that UTC date only. Each saved editorial includes `as_of`, `backfilled: true`, display `generated_at` for the target day, and `backfilled_at` for the real run time.

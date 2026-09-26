@@ -23,8 +23,18 @@ const { buildTopNewsParams, describeTopNewsRequest } = await import(
     pathToFileURL(path.join(botzPackageRoot, 'newsApi.js')).href
 );
 
+const { purgeCloudflareCacheByUrl } = await import(
+    pathToFileURL(path.join(botzPackageRoot, 'cloudflarePurge.js')).href
+);
+
+const { sumUsageCalls } = await import(
+    pathToFileURL(path.join(botzPackageRoot, 'openaiUsageLog.js')).href
+);
+
 const DEFAULT_KEYWORDS =
     'claude|anthropic|runwayml|llm|ollama|sora|chatgpt|midjourney|dall-e|openai|genai|generative ai|copilot|gemini|bard|gpt-4|hugging face|meta llama';
+
+const DEFAULT_EXECUTE_LOG = '/tmp/backfill-editorials.log.jsonl';
 
 function printUsage() {
     console.log(`Usage: node scripts/backfill-editorials.mjs --from YYYY-MM-DD --to YYYY-MM-DD [options]
@@ -34,7 +44,7 @@ Options:
   --execute           Perform OpenAI generation and cache writes (default: dry-run only)
   --limit <N>         Process at most N pending days after skips
   --delay-ms <ms>     Pause between successful days (default: 5000)
-  --log <path>        Append-only JSONL progress log (default: <CACHE_DIR>/backfill-editorials.log.jsonl)
+  --log <path>        Append-only JSONL progress log (execute mode default: ${DEFAULT_EXECUTE_LOG}; dry-run writes no log unless this is set)
   --base-url <url>    botz API base URL (default: http://127.0.0.1:3000)
   --purge-cf          Purge Cloudflare cache once after the run (requires CF_* env vars)
   --help              Show this help
@@ -49,7 +59,7 @@ function parseArgs(argv) {
         dryRun: true,
         limit: Infinity,
         delayMs: 5000,
-        logPath: null,
+        logPath: undefined,
         baseUrl: process.env.BACKFILL_BASE_URL || 'http://127.0.0.1:3000',
         purgeCf: false,
     };
@@ -95,12 +105,33 @@ function parseArgs(argv) {
     return options;
 }
 
+function resolveLogPath(options) {
+    if (options.logPath !== undefined) {
+        return options.logPath;
+    }
+    if (options.dryRun) {
+        return null;
+    }
+    return DEFAULT_EXECUTE_LOG;
+}
+
 function appendLog(logPath, entry) {
+    if (!logPath) {
+        return;
+    }
     fs.appendFileSync(logPath, `${JSON.stringify(entry)}\n`, 'utf8');
 }
 
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function formatUsageSummary(totals) {
+    return (
+        `tokens prompt=${totals.prompt_tokens} completion=${totals.completion_tokens} ` +
+        `reasoning=${totals.reasoning_tokens} total=${totals.total_tokens} ` +
+        `chat_calls=${totals.chat_calls} image_calls=${totals.image_calls}`
+    );
 }
 
 async function requestEditorial({ baseUrl, sharedSecret, cacheKey, asOfDate }) {
@@ -116,32 +147,14 @@ async function requestEditorial({ baseUrl, sharedSecret, cacheKey, asOfDate }) {
 
     const body = await response.json().catch(() => ({}));
     if (response.status >= 400) {
-        const message = body?.message || response.statusText || `HTTP ${response.status}`;
-        const err = new Error(`Editorial generation failed for ${asOfDate} (${cacheKey}): ${message}`);
+        const err = new Error(
+            `Editorial generation failed for ${asOfDate} (${cacheKey}): HTTP ${response.status}. ` +
+                'The botz server logs a redacted editorial_generation_error entry with details.'
+        );
         err.status = response.status;
         throw err;
     }
     return body;
-}
-
-async function purgeEditorialsCdnOnce(editorialUrl) {
-    const zoneId = process.env.CF_ZONE_ID;
-    const apiToken = process.env.CF_API_TOKEN;
-    if (!zoneId || !apiToken) {
-        throw new Error('CF_ZONE_ID and CF_API_TOKEN are required for --purge-cf');
-    }
-    const response = await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/purge_cache`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${apiToken}`,
-        },
-        body: JSON.stringify({ files: [editorialUrl] }),
-    });
-    const data = await response.json();
-    if (!data.success) {
-        throw new Error(`Cloudflare purge failed: ${JSON.stringify(data)}`);
-    }
 }
 
 async function main() {
@@ -154,8 +167,7 @@ async function main() {
     const cacheDir = process.env.CACHE_DIR || '/home/root/cache';
     const sharedSecret = process.env.SHARED_SECRET;
     const newsApiKey = process.env.NEWS_API_KEY || 'REDACTED';
-    const logPath =
-        options.logPath || path.join(cacheDir, 'backfill-editorials.log.jsonl');
+    const logPath = resolveLogPath(options);
 
     if (!options.dryRun && !sharedSecret) {
         throw new Error('SHARED_SECRET is required when using --execute');
@@ -169,6 +181,7 @@ async function main() {
     );
     console.log(options.dryRun ? 'Mode: dry-run (pass --execute to generate).' : 'Mode: execute');
 
+    const usageCalls = [];
     let processed = 0;
     for (const date of pending) {
         if (processed >= options.limit) {
@@ -214,18 +227,27 @@ async function main() {
             }
 
             console.log(`Generating ${date} → ${cacheKey} ...`);
-            await requestEditorial({
+            const editorialPayload = await requestEditorial({
                 baseUrl: options.baseUrl,
                 sharedSecret,
                 cacheKey,
                 asOfDate: date,
             });
 
+            const dayUsage = editorialPayload?.[0]?._openai_usage;
+            if (dayUsage?.totals) {
+                console.log(`Usage ${date}: ${formatUsageSummary(dayUsage.totals)}`);
+                if (dayUsage.calls?.length) {
+                    usageCalls.push(...dayUsage.calls);
+                }
+            }
+
             appendLog(logPath, {
                 at: new Date().toISOString(),
                 date,
                 cacheKey,
                 status: 'ok',
+                usage: dayUsage?.totals,
             });
             processed += 1;
             if (options.delayMs > 0) {
@@ -244,6 +266,10 @@ async function main() {
         }
     }
 
+    if (!options.dryRun && usageCalls.length > 0) {
+        console.log(`Run usage total: ${formatUsageSummary(sumUsageCalls(usageCalls))}`);
+    }
+
     if (!options.dryRun && options.purgeCf) {
         const editorialUrl = process.env.EDITORIAL_API_URL_PREFIX
             ? `${process.env.EDITORIAL_API_URL_PREFIX}/editorials`
@@ -252,7 +278,16 @@ async function main() {
             console.warn('--purge-cf set but EDITORIAL_API_URL_PREFIX is missing; skipping purge.');
         } else {
             console.log('Purging Cloudflare cache once for latest editorials URL...');
-            await purgeEditorialsCdnOnce(editorialUrl);
+            const result = await purgeCloudflareCacheByUrl({
+                zoneId: process.env.CF_ZONE_ID,
+                apiToken: process.env.CF_API_TOKEN,
+                url: editorialUrl,
+            });
+            if (result.skipped) {
+                console.warn('Cloudflare purge skipped (CF_ZONE_ID or CF_API_TOKEN not set).');
+            } else if (!result.ok) {
+                throw new Error(`Cloudflare purge failed: ${result.message || 'unknown'}`);
+            }
         }
     }
 

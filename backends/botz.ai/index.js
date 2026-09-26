@@ -9,10 +9,9 @@ import path from 'path';
 import sanitize from 'sanitize-filename';
 import helmet from 'helmet';
 import crypto from 'crypto';
-import curlirize from 'axios-curlirize';
 import cheerio from 'cheerio';
 import sanitizeHtml from 'sanitize-html';
-import { requestGeneratedImage } from './openaiImages.js';
+import { buildImageGenerateParams, requestGeneratedImage } from './openaiImages.js';
 import {
     assertCacheFileWritable,
     formatGeneratedAtFromAsOf,
@@ -24,9 +23,13 @@ import {
     buildTopNewsParams,
     formatHistoricalNewsApiFailure,
 } from './newsApi.js';
-import { clearCloudflareCache as purgeCloudflareUrl } from './cloudflarePurge.js';
-
-curlirize(axios);
+import { purgeCloudflareCacheByUrl } from './cloudflarePurge.js';
+import {
+    attachUsageToEditorial,
+    logOpenAiUsage,
+    usageFromChatCompletion,
+    usageFromImageGenerateParams,
+} from './openaiUsageLog.js';
 
 dotenv.config();
 
@@ -74,6 +77,31 @@ const limiter = rateLimit({
 app.use(limiter);
 
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+
+/** Per-request OpenAI usage records for the active editorial generation. */
+let editorialUsageCollector = null;
+
+const recordChatUsage = (model, completion) => {
+    const record = usageFromChatCompletion(model, completion);
+    if (!record) {
+        return;
+    }
+    logOpenAiUsage(record);
+    editorialUsageCollector?.push(record);
+};
+
+const logEditorialRouteError = (error) => {
+    const payload = {
+        event: 'editorial_generation_error',
+        statusCode: error?.statusCode || 500,
+        name: error?.name,
+        message: error?.message,
+    };
+    if (error?.response?.status) {
+        payload.upstreamStatus = error.response.status;
+    }
+    console.error(JSON.stringify(payload));
+};
 
 /** Chat completion body for reasoning models (no temperature / max_tokens). */
 const buildChatCompletionRequest = ({ model, messages, jsonMode = false }) => {
@@ -227,7 +255,7 @@ const aiJSONResponse = async (prompt, model) => {
             })
         );
         const endTime = Date.now();
-        console.log(chatCompletion.choices);
+        recordChatUsage(modelName, chatCompletion);
         console.log(`aiJSONResponse API call took ${endTime - startTime} ms`);
         return chatCompletion.choices[0].message.content;
     } catch (error) {
@@ -248,7 +276,7 @@ const aiResponse = async (prompt, model) => {
             })
         );
         const endTime = Date.now();
-        console.log(chatCompletion.choices);
+        recordChatUsage(modelName, chatCompletion);
         console.log(`aiResponse API call took ${endTime - startTime} ms`);
         return chatCompletion.choices[0].message.content;
     } catch (error) {
@@ -320,8 +348,7 @@ app.get('/editorials', async (req, res) => {
 
         if (asOfDate && fs.existsSync(cacheFilePath)) {
             return res.status(409).json({
-                message: 'Cache file already exists; historical backfill refuses to overwrite.',
-                cacheKey,
+                message: 'Requested editorial cache already exists.',
             });
         }
 
@@ -331,6 +358,7 @@ app.get('/editorials', async (req, res) => {
             cacheKey,
             cacheKeyHour: hourFromCacheKey(cacheKey),
         };
+        editorialUsageCollector = [];
         const articles = await fetchAiNews(req);
         const editorials = [];
 
@@ -369,6 +397,8 @@ app.get('/editorials', async (req, res) => {
             editorials.push({ article, editorial });
 
         }
+        attachUsageToEditorial(editorials, editorialUsageCollector);
+        editorialUsageCollector = null;
         if (CACHE === 'true' && editorials.length > 0) {
             if (asOfDate) {
                 assertCacheFileWritable(cacheFilePath);
@@ -395,11 +425,14 @@ app.get('/editorials', async (req, res) => {
         }
 
     } catch (error) {
-        console.error('Error generating editorials:', error);
+        editorialUsageCollector = null;
+        logEditorialRouteError(error);
         const status = error?.statusCode || 500;
-        res.status(status).json({
-            message: error?.message || 'An internal server error occurred.',
-        });
+        const message =
+            status === 409
+                ? 'Requested editorial cache already exists.'
+                : 'An internal server error occurred.';
+        res.status(status).json({ message });
     }
 });
 
@@ -566,7 +599,11 @@ const generateImage = async (prompt, supaSafeFallbackPrompt, generationContext =
         try {
             const startTime = Date.now();
             console.log(`${startTime} - imageGen ${attempt.label}: sending prompt`);
+            const imageParams = buildImageGenerateParams(attempt.text);
             const response = await requestGeneratedImage(openai, attempt.text);
+            const imageUsage = usageFromImageGenerateParams(imageParams);
+            logOpenAiUsage(imageUsage);
+            editorialUsageCollector?.push(imageUsage);
             const endTime = Date.now();
             console.log(`generateImage ${attempt.label} API call took ${endTime - startTime} ms`);
             return await saveImageToFile(response, generationContext);
@@ -796,18 +833,11 @@ app.get('/archive', async (req, res) => {
 });
 
 const clearCloudflareCache = async (url) => {
-    try {
-        const result = await purgeCloudflareUrl(url, {
-            zoneId: CF_ZONE_ID,
-            apiToken: CF_API_TOKEN,
-        });
-        if (result.skipped) {
-            return;
-        }
-        console.log('Cloudflare: cache cleared successfully');
-    } catch (error) {
-        console.error('Cloudflare: Error clearing cache:', error.response ? error.response.data : error.message);
-    }
+    await purgeCloudflareCacheByUrl({
+        zoneId: CF_ZONE_ID,
+        apiToken: CF_API_TOKEN,
+        url,
+    });
 };
 
 app.listen(PORT, () => {

@@ -18,6 +18,11 @@ jobs:
       - name: Verify nginx configs match sites manifest
         run: node scripts/generate-nginx.js --check
 
+      - name: Validate botz.ai subdomain manifests
+        run: |
+          node scripts/validate-botz-projects.js
+          node --test scripts/lib/botz-projects.test.mjs
+
       - name: Validate persistent bind mounts (docker compose)
         run: node scripts/check-persistent-mounts.js
 
@@ -25,9 +30,28 @@ jobs:
         run: |
           bash -n scripts/deploy-safe.sh
           bash -n scripts/deploy.sh
+          bash -n scripts/compose-stack.sh
           if command -v shellcheck >/dev/null 2>&1; then
             shellcheck -x scripts/deploy-safe.sh scripts/deploy.sh scripts/sync-ssl.sh || true
           fi
+
+      - name: nginx configuration test (hardened image)
+        run: |
+          docker build -q -t zoto-sites-nginx-ci .
+          mapfile -t PROXY_HOSTS < <(node scripts/nginx-ci-proxy-hosts.js)
+          HOST_ARGS=()
+          for h in "${PROXY_HOSTS[@]}"; do
+            HOST_ARGS+=(--add-host "${h}:127.0.0.1")
+          done
+          docker run --rm "${HOST_ARGS[@]}" --entrypoint /bin/sh zoto-sites-nginx-ci -ec '
+            CERT_DIR=/etc/nginx/ssl
+            mkdir -p "$CERT_DIR"
+            if [ ! -s "$CERT_DIR/default_cert.pem" ]; then
+              openssl req -subj "/CN=localhost" -x509 -newkey rsa:4096 -nodes \
+                -keyout "$CERT_DIR/default_key.pem" -out "$CERT_DIR/default_cert.pem" -days 365
+            fi
+            nginx -t
+          '
 
       - name: botz.ai OpenAI image API contract
         run: yarn --cwd backends/botz.ai test

@@ -269,6 +269,10 @@ Each deploy runs `scripts/deploy-safe.sh`:
 
 GitHub Actions (`.github/workflows/deploy.yml`) runs `git fetch origin main` and `bash scripts/deploy-safe.sh` over SSH when `DEPLOY_*` secrets are set.
 
+## botz.ai subdomains (`*.botz.ai`)
+
+For projects on `something.botz.ai` (not a separate apex domain), use the manifest flow in [SUBDOMAINS.md](./SUBDOMAINS.md) instead of `add-site.sh`.
+
 ## Add a site in production
 
 ```bash

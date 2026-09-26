@@ -11,6 +11,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# shellcheck source=compose-stack.sh
+source "$ROOT/scripts/compose-stack.sh"
+zoto_compose_init "$ROOT"
+
 MANIFEST="${ROOT}/deploy/persistent-data.txt"
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
 STATE_FILE=""
@@ -153,7 +157,7 @@ assert_data_guards() {
 }
 
 compose_bind_sources() {
-  docker compose config --format json | run_node -e "
+  zoto_compose config --format json | run_node -e "
 const fs = require('fs');
 const j = JSON.parse(fs.readFileSync(0, 'utf8'));
 const out = new Set();
@@ -208,7 +212,7 @@ compare_mounts_preflight() {
   done
 
   local botz_cache_mount
-  botz_cache_mount="$(docker compose config --format json | run_node -e "
+  botz_cache_mount="$(zoto_compose config --format json | run_node -e "
 const j = JSON.parse(require('fs').readFileSync(0,'utf8'));
 const botz = j.services?.botz;
 const env = botz?.environment || {};
@@ -310,7 +314,7 @@ else
 fi
 
 echo "Building and starting services..."
-docker compose up -d --build
+zoto_compose up -d --build
 
 # --- (e) Post-check ---
 assert_data_guards "post-deploy"
@@ -334,4 +338,4 @@ done
 
 echo ""
 echo "Deploy complete."
-docker compose ps
+zoto_compose ps

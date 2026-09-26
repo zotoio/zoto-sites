@@ -55,3 +55,16 @@ export function formatDay(iso) {
     return iso.slice(5, 10);
   }
 }
+
+export function formatSunTime(iso, timeZone) {
+  if (!iso) return '—';
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZone: timeZone || undefined,
+    }).format(new Date(iso));
+  } catch {
+    return iso.slice(11, 16);
+  }
+}

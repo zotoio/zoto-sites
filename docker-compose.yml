@@ -12,7 +12,6 @@ services:
       - ${SSL_CERT_DIR:-./ssl}:/etc/nginx/certs:ro
     depends_on:
       - botz
-      - today
 
   botz:
     build: ./backends/botz.ai

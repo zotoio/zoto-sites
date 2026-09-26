@@ -6,6 +6,7 @@ import {
   renderDaily,
   renderNews,
   renderTransit,
+  renderWeatherStats,
   setBackdrop,
 } from './lib-ui.js';
 
@@ -91,6 +92,7 @@ async function bootstrap() {
 
   drawHourlyChart(document.getElementById('hourly-chart'), weather.hourly || {});
   renderDaily(document.getElementById('daily-strip'), weather.daily || {});
+  renderWeatherStats(document.getElementById('weather-stats'), weather);
 
   renderNews(document.getElementById('news-list'), news);
   renderTransit(

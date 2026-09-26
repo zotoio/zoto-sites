@@ -23,8 +23,7 @@ dotenv.config();
 const { NEWS_API_KEY, PORT = 3001 } = process.env;
 
 if (!NEWS_API_KEY) {
-  console.error('NEWS_API_KEY is required');
-  process.exit(1);
+  console.warn('NEWS_API_KEY is not set — /api/news will use demo data only until configured.');
 }
 
 const app = express();
@@ -106,6 +105,9 @@ app.get('/api/news', async (req, res) => {
     return res.json(demoNews());
   }
   const locale = (req.query.locale || req.query.country || 'us').toString().toLowerCase().slice(0, 2);
+  if (!NEWS_API_KEY) {
+    return res.json(demoNews());
+  }
   try {
     const data = await fetchTopNews(NEWS_API_KEY, locale);
     return res.json(data);

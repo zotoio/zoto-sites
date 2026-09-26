@@ -278,6 +278,11 @@ assert_host_ssl_dir_consistent() {
 
 assert_host_ssl_dir_consistent "$(resolve_ssl_dir)"
 
+TODAY_ENV="${ROOT}/backends/today.zoto.io/.env"
+if [[ ! -f "$TODAY_ENV" ]]; then
+  echo "Note: $TODAY_ENV missing — today API will serve demo news until configured; nginx and other sites are unaffected."
+fi
+
 # --- (b) Record pre-deploy counts and data guards ---
 record_data_counts
 for p in "${DATA_PATHS[@]}"; do
@@ -326,13 +331,25 @@ for p in "${DATA_PATHS[@]}"; do
   fi
 done
 
+warn_container() {
+  echo "deploy-safe: warning: $*" >&2
+}
+
 echo "Waiting ~20s for containers to settle..."
 sleep 20
-for c in nginx botz discord today; do
+for c in nginx botz discord; do
   status="$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null || echo missing)"
   restarting="$(docker inspect -f '{{.State.Restarting}}' "$c" 2>/dev/null || echo true)"
   if [[ "$status" != "running" ]] || [[ "$restarting" == "true" ]]; then
     die "container $c not healthy (status=$status restarting=$restarting)"
+  fi
+done
+
+for c in today; do
+  status="$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null || echo missing)"
+  restarting="$(docker inspect -f '{{.State.Restarting}}' "$c" 2>/dev/null || echo true)"
+  if [[ "$status" != "running" ]] || [[ "$restarting" == "true" ]]; then
+    warn_container "optional container $c not healthy (status=$status restarting=$restarting) — other sites remain up"
   fi
 done
 

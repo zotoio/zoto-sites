@@ -38,30 +38,44 @@ export function demoWeather() {
   const dailyMax = [];
   const dailyMin = [];
   const dailyCode = [];
+  const dailySunrise = [];
+  const dailySunset = [];
   for (let d = 0; d < 7; d += 1) {
     dailyTime.push(new Date(base + d * 86400000).toISOString().slice(0, 10));
     dailyMax.push(19 + d % 3);
     dailyMin.push(11 + d % 2);
     dailyCode.push([0, 2, 3, 61, 1, 0, 2][d]);
+    const day = dailyTime[d];
+    dailySunrise.push(`${day}T06:48:00-07:00`);
+    dailySunset.push(`${day}T19:42:00-07:00`);
   }
   return {
     source: 'demo',
+    timezone: 'America/Los_Angeles',
     current: {
       time: new Date().toISOString(),
       temperature_2m: 17,
+      apparent_temperature: 16,
       weather_code: 2,
       precipitation: 0,
+      wind_speed_10m: 14,
+      uv_index: 4.2,
     },
     hourly: {
       time: hourlyTime,
       temperature_2m: hourlyTemp,
       precipitation_probability: hourlyPrecip,
+      apparent_temperature: hourlyTemp.map((t) => t - 1),
     },
     daily: {
       time: dailyTime,
       weather_code: dailyCode,
       temperature_2m_max: dailyMax,
       temperature_2m_min: dailyMin,
+      sunrise: dailyTime.map((d) => `${d}T06:48:00`),
+      sunset: dailyTime.map((d) => `${d}T19:42:00`),
+      uv_index_max: [4, 5, 5, 3, 6, 6, 4],
+      wind_speed_10m_max: [12, 18, 15, 22, 10, 14, 16],
     },
   };
 }

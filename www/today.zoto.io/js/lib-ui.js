@@ -1,4 +1,4 @@
-import { formatDay, weatherIcon } from './weather-utils.js';
+import { formatDay, formatSunTime, weatherIcon } from './weather-utils.js';
 
 const params = new URLSearchParams(window.location.search);
 export const forceDemo = params.get('demo') === '1' || params.get('demo') === 'true';
@@ -17,25 +17,48 @@ export async function fetchJson(path, extra = {}) {
   return res.json();
 }
 
-export function setBackdrop(lat, lon, zoom = 14) {
+export function setBackdrop(lat, lon, zoom = 16) {
+  const el = document.getElementById('backdrop');
+  el.replaceChildren();
+
   const n = 2 ** zoom;
   const latRad = (lat * Math.PI) / 180;
   const x = Math.floor(((lon + 180) / 360) * n);
   const y = Math.floor(((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n);
+  const radius = 2;
+  const size = radius * 2 + 1;
 
-  const urls = [];
-  for (let dy = -1; dy <= 1; dy += 1) {
-    for (let dx = -1; dx <= 1; dx += 1) {
-      urls.push(
-        `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${zoom}/${y + dy}/${x + dx}`
-      );
+  const grid = document.createElement('div');
+  grid.className = 'backdrop-grid';
+  grid.style.gridTemplateColumns = `repeat(${size}, 256px)`;
+  grid.style.gridTemplateRows = `repeat(${size}, 256px)`;
+
+  for (let dy = -radius; dy <= radius; dy += 1) {
+    for (let dx = -radius; dx <= radius; dx += 1) {
+      const img = document.createElement('img');
+      img.src = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${zoom}/${y + dy}/${x + dx}`;
+      img.alt = '';
+      img.decoding = 'async';
+      grid.appendChild(img);
     }
   }
+  el.appendChild(grid);
 
-  const el = document.getElementById('backdrop');
-  el.style.backgroundImage = urls.map((u) => `url("${u}")`).join(', ');
-  el.style.backgroundSize = '300% 300%';
-  el.style.backgroundPosition = 'center center';
+  const fitBackdrop = () => {
+    const vw = window.innerWidth;
+    const vh = Math.max(window.innerHeight, document.documentElement.scrollHeight);
+    const gridW = size * 256;
+    const gridH = size * 256;
+    const scale = Math.max(vw / gridW, vh / gridH) * 1.12;
+    grid.style.transform = `translate(-50%, -50%) scale(${scale})`;
+  };
+
+  fitBackdrop();
+  if (el._backdropResize) {
+    window.removeEventListener('resize', el._backdropResize);
+  }
+  el._backdropResize = fitBackdrop;
+  window.addEventListener('resize', fitBackdrop, { passive: true });
 }
 
 export function drawHourlyChart(canvas, hourly) {
@@ -72,7 +95,17 @@ export function drawHourlyChart(canvas, hourly) {
 
   ctx.fillStyle = 'rgba(168,176,192,0.9)';
   ctx.font = '11px system-ui,sans-serif';
-  ctx.fillText('24h temp (line) · precip % (bars)', pad, 16);
+  ctx.fillText('24h temperature · precip chance (bars)', pad, 16);
+
+  ctx.fillStyle = 'rgba(168,176,192,0.75)';
+  ctx.font = '10px system-ui,sans-serif';
+  const labelEvery = Math.max(1, Math.floor(n / 6));
+  (hourly.time || []).slice(0, n).forEach((t, i) => {
+    if (i % labelEvery !== 0 && i !== n - 1) return;
+    const x = pad + (i / (n - 1 || 1)) * (w - pad * 2);
+    const label = typeof t === 'string' ? t.slice(11, 16) : '';
+    ctx.fillText(label, x - 12, h - 6);
+  });
 }
 
 export function renderNews(listEl, payload) {
@@ -159,6 +192,25 @@ export function renderTransit(mapEl, listEl, center, payload) {
   if (group.getLayers().length) {
     map.fitBounds(group.getBounds().pad(0.2));
   }
+}
+
+export function renderWeatherStats(statsEl, weather) {
+  const cur = weather.current || {};
+  const daily = weather.daily || {};
+  const rows = [
+    ['Feels like', `${Math.round(cur.apparent_temperature ?? cur.temperature_2m ?? 0)}°`],
+    ['Wind', `${Math.round(cur.wind_speed_10m ?? daily.wind_speed_10m_max?.[0] ?? 0)} km/h`],
+    ['UV index', `${Number(cur.uv_index ?? daily.uv_index_max?.[0] ?? 0).toFixed(1)}`],
+    ['Sunrise', formatSunTime(daily.sunrise?.[0], weather.timezone)],
+    ['Sunset', formatSunTime(daily.sunset?.[0], weather.timezone)],
+    ['Today', `${Math.round(daily.temperature_2m_min?.[0] ?? 0)}° – ${Math.round(daily.temperature_2m_max?.[0] ?? 0)}°`],
+  ];
+  statsEl.innerHTML = rows
+    .map(
+      ([label, value]) =>
+        `<div><dt>${label}</dt><dd>${value}</dd></div>`
+    )
+    .join('');
 }
 
 export function renderDaily(stripEl, daily) {

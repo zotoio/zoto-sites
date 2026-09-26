@@ -43,14 +43,42 @@ function loadSites() {
   });
 }
 
-function renderProxyBlock(proxy) {
-  const { path: locationPath, upstream, websocket } = proxy;
+function siteApiFallbackName(siteId) {
+  return `@${String(siteId).replace(/\./g, '_')}_api_unavailable`;
+}
+
+function renderApiUnavailableFallback(fallbackName) {
+  return `    location ${fallbackName} {
+        internal;
+        default_type application/json;
+        add_header Cache-Control "no-store" always;
+        return 503 '{"ok":false,"error":"API temporarily unavailable. Static pages still load; retry shortly."}';
+    }`;
+}
+
+function renderProxyBlock(proxy, { apiFallbackName } = {}) {
+  const { path: locationPath, upstream, websocket, dynamic_dns: dynamicDns } = proxy;
   const wsHeaders = websocket
     ? `
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";`
     : '';
+
+  if (dynamicDns) {
+    const fallback = apiFallbackName || '@api_unavailable';
+    return `    location ${locationPath} {
+        resolver 127.0.0.11 valid=30s ipv6=off;
+        set $dynamic_upstream "${upstream}";
+        proxy_set_header Host $host;
+        proxy_read_timeout 900s;
+        proxy_connect_timeout 75s;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_intercept_errors on;${wsHeaders}
+        proxy_pass $dynamic_upstream;
+        error_page 502 503 504 = ${fallback};
+    }`;
+  }
 
   return `    location ${locationPath} {
         proxy_set_header Host $host;
@@ -73,8 +101,15 @@ function renderExtraHeaders(headers) {
 
 function renderSite(site) {
   const serverNames = site.domains.join(' ');
-  const proxyBlocks = (site.proxies || []).map(renderProxyBlock).join('\n\n');
-  const proxySection = proxyBlocks ? `\n\n${proxyBlocks}` : '';
+  const proxies = site.proxies || [];
+  const apiFallbackName = proxies.some((p) => p.dynamic_dns)
+    ? siteApiFallbackName(site.id)
+    : null;
+  const proxyBlocks = proxies
+    .map((p) => renderProxyBlock(p, { apiFallbackName }))
+    .join('\n\n');
+  const fallbackBlock = apiFallbackName ? `\n\n${renderApiUnavailableFallback(apiFallbackName)}` : '';
+  const proxySection = proxyBlocks ? `\n\n${proxyBlocks}${fallbackBlock}` : '';
 
   return `server {
     listen 443 ssl;

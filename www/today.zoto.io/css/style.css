@@ -34,11 +34,27 @@ body {
   position: fixed;
   inset: 0;
   background-color: #1a2332;
-  background-size: cover;
-  background-position: center;
-  transform: scale(1.04);
-  filter: saturate(1.05) contrast(1.05);
   z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.backdrop-grid {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: grid;
+  gap: 0;
+  filter: saturate(1.08) contrast(1.06);
+  will-change: transform;
+}
+
+.backdrop-grid img {
+  width: 256px;
+  height: 256px;
+  display: block;
+  object-fit: cover;
 }
 
 .scrim {
@@ -105,10 +121,12 @@ body {
 
 .panel-weather {
   grid-column: span 7;
+  min-height: 520px;
 }
 
 .panel-news {
   grid-column: span 5;
+  min-height: 520px;
 }
 
 .panel-transit {
@@ -181,6 +199,42 @@ body {
   display: block;
   border-radius: 12px;
   background: rgba(0, 0, 0, 0.25);
+  min-height: 180px;
+}
+
+.weather-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin: 0.85rem 0 0;
+  padding: 0;
+}
+
+.weather-stats div {
+  margin: 0;
+  padding: 0.55rem 0.65rem;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.weather-stats dt {
+  margin: 0;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.weather-stats dd {
+  margin: 0.2rem 0 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+@media (max-width: 900px) {
+  .weather-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .daily-strip {

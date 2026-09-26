@@ -4,7 +4,8 @@ services:
     restart: unless-stopped
     container_name: today
     env_file:
-      - ./backends/today.zoto.io/.env
+      - path: ./backends/today.zoto.io/.env
+        required: false
     environment:
       PORT: 3001
     expose:

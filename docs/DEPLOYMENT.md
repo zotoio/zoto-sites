@@ -1,6 +1,6 @@
 # Deploying zoto-sites on DigitalOcean
 
-Production runs on a **DigitalOcean droplet** behind **Cloudflare CDN**. TLS certificates are issued on the **host VM** with Let's Encrypt (already in place) and copied into the repo `ssl/` directory for the nginx container.
+Production runs on a **DigitalOcean droplet** behind **Cloudflare CDN**. The **origin** nginx container serves a **self-signed** certificate (`CN=localhost`, 365 days) generated on **every container start** into `/etc/nginx/ssl/default_*` (vhosts inherit those paths). Cloudflare is in front and is **not** validating that origin cert today (e.g. **Full** or **Flexible**, not **Full (strict)**). Optional: install a real origin cert in host `ssl/` (Let's Encrypt via `sync-ssl.sh`, or Cloudflare Origin CA) and move zones to **Full (strict)** — see below.
 
 ## Architecture
 
@@ -17,19 +17,38 @@ discord (Docker) ◄── Discord API (outbound only)
 | --- | --- |
 | **Cloudflare** | Public DNS, TLS to visitors, CDN caching for static assets |
 | **Droplet (host)** | Docker Compose, Let's Encrypt cert storage, `deploy` user |
-| **nginx container** | Terminates origin TLS using certs mounted from `./ssl/` |
+| **nginx container** | Terminates origin TLS; vhosts inherit `krewh/hardened-nginx` paths under `/etc/nginx/ssl/` (populated from `./ssl/` at start — see [Production TLS](#production-tls-existing-lets-encrypt-on-the-host)) |
 | **botz container** | Dynamic editorial API; optional Cloudflare cache purge via API |
 
 All services are managed with **Docker Compose** from the repository root.
 
-## Production TLS (existing Let's Encrypt on the host)
+## Production TLS
 
-Certificates already live on the droplet under `/etc/letsencrypt/live/<name>/` (typical layout). The nginx container does **not** read `/etc/letsencrypt` directly — it mounts `./ssl/` from the repo:
+**Checkout path (live droplet):** `/home/andrewv/git/zoto-sites` — compose project `zoto-sites`, `com.docker.compose.project.working_dir` on all three containers. `DEPLOY_PATH` (GitHub Actions secret and `scripts/deploy.sh` default) must be exactly this path; `deploy-safe.sh` aborts if running containers were started from a different working directory.
 
-| File in `ssl/` | Source on host |
+**How nginx finds TLS material**
+
+| Stage | Behaviour |
 | --- | --- |
-| `fullchain.pem` | `/etc/letsencrypt/live/<name>/fullchain.pem` |
-| `privkey.pem` | `/etc/letsencrypt/live/<name>/privkey.pem` |
+| **Origin today** | On each container start, the entrypoint runs `openssl` and writes a fresh self-signed `default_cert.pem` / `default_key.pem` under `/etc/nginx/ssl/`. Site vhosts do not set `ssl_certificate`; they use the base image defaults at those paths. There is no long-lived “real” origin cert to preserve across recreates. |
+| **After this PR** | Host `./ssl/` → container `/etc/nginx/certs:ro`. `docker/nginx-entrypoint.sh` copies a **complete** pair from the mount (`fullchain.pem`+`privkey.pem` or `default_cert.pem`+`default_key.pem`) into `/etc/nginx/ssl/` before `nginx` starts. If `ssl/` is empty, it generates the same self-signed fallback as today. |
+| **sync-ssl.sh** | When host Let's Encrypt material exists under `/etc/letsencrypt/live/<name>/`, copies `fullchain.pem` and `privkey.pem` into `ssl/` (never committed). |
+
+| File in `ssl/` | Typical source |
+| --- | --- |
+| `fullchain.pem` | `sync-ssl.sh` from host LE, or Cloudflare Origin CA `origin.pem` renamed |
+| `privkey.pem` | `sync-ssl.sh` from host LE, or Origin CA private key |
+| `default_cert.pem` / `default_key.pem` | Optional: copy from a running container for debugging (`docker cp nginx:/etc/nginx/ssl/. ssl/`) — not required for deploy |
+
+### Optional: Cloudflare Origin CA + Full (strict)
+
+Not required for the first deploy. When you want Cloudflare to validate the origin:
+
+1. In Cloudflare → SSL/TLS → Origin Server, create an Origin Certificate for your zone hostnames.
+2. Save the cert and key into `ssl/fullchain.pem` and `ssl/privkey.pem` (gitignored), or as `default_*` if you prefer that naming.
+3. Set Cloudflare SSL mode to **Full (strict)** for the zone(s).
+
+Host LE under `/etc/letsencrypt` can still be synced with `sync-ssl.sh` instead of Origin CA if you prefer.
 
 ### Sync certs into the repo before deploy
 
@@ -57,12 +76,12 @@ docker compose restart nginx
 A typical host cron hook (adjust paths to match your setup):
 
 ```bash
-0 3 * * * certbot renew --quiet && /opt/zoto-sites/scripts/sync-ssl.sh && cd /opt/zoto-sites && docker compose restart nginx
+0 3 * * * certbot renew --quiet && /home/andrewv/git/zoto-sites/scripts/sync-ssl.sh && cd /home/andrewv/git/zoto-sites && docker compose restart nginx
 ```
 
 ### Local development
 
-Leave `ssl/` empty. `krewh/hardened-nginx` generates a **self-signed** certificate — fine for `curl -k` testing only.
+Leave `ssl/` empty (only `ssl/.gitkeep`). The entrypoint generates a **self-signed** cert under `/etc/nginx/ssl/` — fine for `curl -k` testing only.
 
 ### Greenfield droplet only
 
@@ -80,22 +99,21 @@ Every public domain is proxied through Cloudflare (orange cloud ☁️). The ori
 
 When adding a site, create the DNS record in Cloudflare **before** expecting traffic. `./scripts/add-site.sh` only creates repo files — DNS is configured in the Cloudflare dashboard (or API).
 
-### SSL/TLS mode (required: Full (strict))
+### SSL/TLS mode (Cloudflare)
 
-In Cloudflare → **SSL/TLS** → **Overview**:
+**Production today:** zones typically use **Full** or **Flexible** — Cloudflare does not validate the self-signed origin cert. Visitor HTTPS is terminated at Cloudflare.
 
-- Set encryption mode to **Full (strict)** (not Flexible, not Full without valid origin cert).
-- Cloudflare terminates HTTPS for visitors; it connects to the origin on **port 443** using the Let's Encrypt cert nginx presents from `ssl/`.
-- **Flexible** mode (HTTPS visitor → HTTP origin) is **not** compatible with this stack: nginx vhosts listen on 443 with SSL only for site traffic.
+**Recommended when you install a real origin cert in `ssl/`:** **Full (strict)** so Cloudflare checks the origin certificate.
 
-Edge certificates (Cloudflare → browser) are managed by Cloudflare. Origin certificates are the host LE certs synced into `ssl/`.
+- **Flexible** (HTTPS visitor → HTTP origin) is **not** compatible with this stack if you rely on origin :443 with SSL-only vhosts.
+- Edge certificates (visitor → Cloudflare) are managed by Cloudflare.
 
 ### What stays on the origin
 
 | Concern | Setting |
 | --- | --- |
-| Origin TLS | Valid LE `fullchain.pem` / `privkey.pem` in `ssl/` |
-| Cloudflare SSL mode | **Full (strict)** |
+| Origin TLS | Self-signed per container start, or optional `ssl/*.pem` from LE / Origin CA |
+| Cloudflare SSL mode | **Full** or **Flexible** today; **Full (strict)** after real origin cert in `ssl/` |
 | Origin ports | `80` and `443` open on droplet (Cloudflare connects to both depending on config; 443 + strict is the production path) |
 | Bot secrets / API keys | Host `.env` files only — never in Cloudflare |
 | Editorial disk cache | `backends/botz.ai/cache` volume on droplet |
@@ -138,7 +156,7 @@ chmod 600 backends/botz.ai/.env backends/discord/.env
 | `OPENAI_API_KEY` | Yes | OpenAI API key |
 | `NEWS_API_KEY` | Yes | News API key for article fetching |
 | `SHARED_SECRET` | Yes | Shared with Discord bot for auth |
-| `CACHE_DIR` | No | Defaults to `/home/root/cache` in container (mounted volume) |
+| `CACHE_DIR` | No | Compose sets `/home/root/cache` (bind mount). Code default matches; keep in `.env` for local non-Docker runs |
 | `CF_ZONE_ID` | No | Cloudflare zone ID for cache purge after new editorials |
 | `CF_API_TOKEN` | No | API token with `Cache Purge` permission |
 
@@ -151,29 +169,86 @@ chmod 600 backends/botz.ai/.env backends/discord/.env
 | `SHARED_SECRET` | Yes | Must match botz.ai |
 | `EDITORIAL_FRONTEND_URL_PREFIX` | No | URL shown to users (e.g. `https://botz.ai/#`) |
 
+## Persistent data
+
+Host paths below are **relative to the git checkout** (`/home/andrewv/git/zoto-sites` on the live droplet). They are listed in `deploy/persistent-data.txt`. **Backups are handled outside this repository** (your own snapshot/backup process). `scripts/deploy-safe.sh` guarantees deploys will not overwrite, delete, or orphan these paths: it refuses mount regressions, dirty trees, and any drop in editorial cache file counts.
+
+| Host path | Container path | Writer | Criticality |
+| --- | --- | --- | --- |
+| `backends/botz.ai/cache/` | botz: `/home/root/cache`; nginx: `/usr/share/nginx/html/botz.ai/cache` (read-only) | botz API | **Critical** — ~21k+ editorial JSON + PNG archive |
+| `backends/botz.ai/.env` | (env_file) | operator | **Critical** — API keys, `SHARED_SECRET`, optional `CACHE_DIR` |
+| `backends/discord/.env` | (env_file) | operator | **Critical** — Discord token and shared secret |
+| `ssl/` | nginx: `/etc/nginx/certs` (read-only) → copied to `/etc/nginx/ssl` at start | optional `sync-ssl.sh`, Origin CA, or manual copy | Optional — empty `ssl/` keeps self-signed origin behaviour |
+
+Compose bind-mount sources allowed by policy: `./backends/botz.ai/cache`, `${SSL_CERT_DIR:-./ssl}` → `/etc/nginx/certs`. There are **no** named Docker volumes.
+
+**Never run on the droplet checkout** (they can delete or orphan the archive and secrets):
+
+- `git clean -fdx` / `git clean -X`
+- `git reset --hard`
+- `git stash`
+- `docker compose down -v` or `--volumes`
+- `docker volume rm` / `docker volume prune`
+- `rm -rf backends/botz.ai/cache` (or other manifest paths)
+
+### FIRST-DEPLOY checklist (live droplet → this PR)
+
+Run on the droplet **before** the first deploy that uses `deploy-safe.sh`. The GitHub Actions deploy job runs `git fetch` then `bash scripts/deploy-safe.sh` from the **current** checkout; the first time this lands, ensure `scripts/deploy-safe.sh` exists (merge this PR, or copy the script and manifest from `main` once manually).
+
+1. Record running mounts and compose labels:
+   ```bash
+   for c in nginx botz discord; do
+     echo "== $c"
+     docker inspect -f '{{json .Mounts}}' "$c"
+     docker inspect -f 'working_dir={{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$c"
+   done
+   ```
+2. Confirm botz writes to the bind mount, not the container layer:
+   ```bash
+   docker exec botz printenv CACHE_DIR
+   docker exec botz ls /var/lib/cache
+   ```
+   If files exist under `/var/lib/cache`, copy them **before** recreating botz:
+   ```bash
+   docker cp botz:/var/lib/cache/. backends/botz.ai/cache/
+   ```
+3. Confirm checkout path matches `DEPLOY_PATH`: **`/home/andrewv/git/zoto-sites`** (compose `working_dir` on nginx/botz/discord must match).
+4. Confirm your **external backup** is current; count cache files:
+   ```bash
+   find backends/botz.ai/cache -maxdepth 1 -name '*.json' | wc -l
+   ```
+5. `git status` clean; no untracked files that would collide with incoming tracked paths; note `git log -1`.
+6. Ensure `backends/botz.ai/node_modules` and `backends/discord/node_modules` exist (Dockerfiles `COPY` them).
+7. `docker compose version` (v2).
+8. Deploy: `./scripts/deploy.sh` or GitHub Actions; verify cache file counts unchanged and https://botz.ai/archive loads.
+
+**Optional (not required for first deploy):** populate `ssl/` with a real origin cert (`sync-ssl.sh`, Cloudflare Origin CA, or `docker cp nginx:/etc/nginx/ssl/. ssl/` for the current self-signed pair) and move Cloudflare to **Full (strict)**. `deploy-safe.sh` only errors if `ssl/` contains a **partial** cert/key pair (one file present or empty, the other missing).
+
 ## Deploy and update
 
 On the droplet as `deploy`:
 
 ```bash
-cd /opt/zoto-sites
+cd /home/andrewv/git/zoto-sites
 ./scripts/deploy.sh
 ```
 
 From your laptop (SSH to droplet IP — not the Cloudflare edge IP):
 
 ```bash
-DEPLOY_PATH=/opt/zoto-sites ./scripts/deploy.sh deploy@YOUR_DROPLET_IP
+DEPLOY_PATH=/home/andrewv/git/zoto-sites ./scripts/deploy.sh deploy@YOUR_DROPLET_IP
 ```
 
-Each deploy:
+Each deploy runs `scripts/deploy-safe.sh`:
 
-1. `git pull` (branch `main` by default)
-2. `scripts/sync-ssl.sh` — copy host LE certs into `ssl/` when present
-3. `node scripts/generate-nginx.js` — render vhosts from `sites/`
-4. `docker compose up -d --build`
+1. Preflight (clean tree, untracked collision check, compose v2, bind-mount regression guard)
+2. Data guards on manifest data paths (file counts; abort if non-empty paths would be lost)
+3. `git pull --ff-only origin main`
+4. `scripts/sync-ssl.sh`
+5. `node scripts/generate-nginx.js` only when `node` is on the host (skipped otherwise; image regenerates confs)
+6. `docker compose up -d --build` and post-checks (counts and container health)
 
-GitHub Actions (`.github/workflows/deploy.yml`) runs the same steps over SSH when `DEPLOY_*` secrets are set.
+GitHub Actions (`.github/workflows/deploy.yml`) runs `git fetch origin main` and `bash scripts/deploy-safe.sh` over SSH when `DEPLOY_*` secrets are set.
 
 ## Add a site in production
 
@@ -204,7 +279,7 @@ Use bootstrap only for disaster recovery or a second environment. After bootstra
 | `DEPLOY_HOST` | Droplet **origin** IP or SSH hostname (not a Cloudflare edge IP) |
 | `DEPLOY_USER` | `deploy` |
 | `DEPLOY_SSH_KEY` | Private key matching `authorized_keys` on the droplet |
-| `DEPLOY_PATH` | `/opt/zoto-sites` |
+| `DEPLOY_PATH` | `/home/andrewv/git/zoto-sites` |
 
 ## Troubleshooting
 

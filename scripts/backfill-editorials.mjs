@@ -6,7 +6,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
-import { fetchWithRetries } from './lib/backfillHttp.js';
+import { fetchWithRetries } from './lib/backfillHttp.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const botzPackageRoot =

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { fetchWithRetries } from './backfillHttp.js';
+import { fetchWithRetries } from './backfillHttp.mjs';
 
 test('fetchWithRetries succeeds after transient failures', async () => {
     let calls = 0;

@@ -1,6 +1,6 @@
 # Deploying zoto-sites on DigitalOcean
 
-Production runs on a **DigitalOcean droplet** behind **Cloudflare CDN**. TLS certificates are issued on the **host VM** with Let's Encrypt (already in place) and copied into the repo `ssl/` directory for the nginx container.
+Production runs on a **DigitalOcean droplet** behind **Cloudflare CDN**. The **origin** nginx container serves a **self-signed** certificate (`CN=localhost`, 365 days) generated on **every container start** into `/etc/nginx/ssl/default_*` (vhosts inherit those paths). Cloudflare is in front and is **not** validating that origin cert today (e.g. **Full** or **Flexible**, not **Full (strict)**). Optional: install a real origin cert in host `ssl/` (Let's Encrypt via `sync-ssl.sh`, or Cloudflare Origin CA) and move zones to **Full (strict)** — see below.
 
 ## Architecture
 
@@ -22,7 +22,7 @@ discord (Docker) ◄── Discord API (outbound only)
 
 All services are managed with **Docker Compose** from the repository root.
 
-## Production TLS (existing Let's Encrypt on the host)
+## Production TLS
 
 **Checkout path (live droplet):** `/home/andrewv/git/zoto-sites` — compose project `zoto-sites`, `com.docker.compose.project.working_dir` on all three containers. `DEPLOY_PATH` (GitHub Actions secret and `scripts/deploy.sh` default) must be exactly this path; `deploy-safe.sh` aborts if running containers were started from a different working directory.
 
@@ -30,17 +30,25 @@ All services are managed with **Docker Compose** from the repository root.
 
 | Stage | Behaviour |
 | --- | --- |
-| **Live today (pre-PR)** | No `ssl/` bind mount. Certs at `/etc/nginx/ssl/default_cert.pem` and `default_key.pem` live in the container writable layer (e.g. copied in via `docker cp` / exec). Recreating nginx would lose them. Site vhosts do not set `ssl_certificate`; they use the base image defaults under `/etc/nginx/ssl/`. |
-| **After this PR** | Host `./ssl/` → container `/etc/nginx/certs:ro`. `docker/nginx-entrypoint.sh` copies `fullchain.pem`+`privkey.pem` **or** `default_cert.pem`+`default_key.pem` into `/etc/nginx/ssl/` before `nginx` starts. Vhosts still use the same effective paths (`/etc/nginx/ssl/default_*`). Empty `ssl/` on a fresh laptop still gets a one-off self-signed generate inside the container. |
-| **sync-ssl.sh** | When host LE exists, writes `ssl/fullchain.pem` and `ssl/privkey.pem` (never committed). |
-
-Certificates also live on the droplet under `/etc/letsencrypt/live/<name>/`. The container does **not** read `/etc/letsencrypt` directly.
+| **Origin today** | On each container start, the entrypoint runs `openssl` and writes a fresh self-signed `default_cert.pem` / `default_key.pem` under `/etc/nginx/ssl/`. Site vhosts do not set `ssl_certificate`; they use the base image defaults at those paths. There is no long-lived “real” origin cert to preserve across recreates. |
+| **After this PR** | Host `./ssl/` → container `/etc/nginx/certs:ro`. `docker/nginx-entrypoint.sh` copies a **complete** pair from the mount (`fullchain.pem`+`privkey.pem` or `default_cert.pem`+`default_key.pem`) into `/etc/nginx/ssl/` before `nginx` starts. If `ssl/` is empty, it generates the same self-signed fallback as today. |
+| **sync-ssl.sh** | When host Let's Encrypt material exists under `/etc/letsencrypt/live/<name>/`, copies `fullchain.pem` and `privkey.pem` into `ssl/` (never committed). |
 
 | File in `ssl/` | Typical source |
 | --- | --- |
-| `fullchain.pem` | `/etc/letsencrypt/live/<name>/fullchain.pem` via `sync-ssl.sh` |
-| `privkey.pem` | `/etc/letsencrypt/live/<name>/privkey.pem` via `sync-ssl.sh` |
-| `default_cert.pem` / `default_key.pem` | `docker cp nginx:/etc/nginx/ssl/. ssl/` before first post-PR recreate (migration) |
+| `fullchain.pem` | `sync-ssl.sh` from host LE, or Cloudflare Origin CA `origin.pem` renamed |
+| `privkey.pem` | `sync-ssl.sh` from host LE, or Origin CA private key |
+| `default_cert.pem` / `default_key.pem` | Optional: copy from a running container for debugging (`docker cp nginx:/etc/nginx/ssl/. ssl/`) — not required for deploy |
+
+### Optional: Cloudflare Origin CA + Full (strict)
+
+Not required for the first deploy. When you want Cloudflare to validate the origin:
+
+1. In Cloudflare → SSL/TLS → Origin Server, create an Origin Certificate for your zone hostnames.
+2. Save the cert and key into `ssl/fullchain.pem` and `ssl/privkey.pem` (gitignored), or as `default_*` if you prefer that naming.
+3. Set Cloudflare SSL mode to **Full (strict)** for the zone(s).
+
+Host LE under `/etc/letsencrypt` can still be synced with `sync-ssl.sh` instead of Origin CA if you prefer.
 
 ### Sync certs into the repo before deploy
 
@@ -91,22 +99,21 @@ Every public domain is proxied through Cloudflare (orange cloud ☁️). The ori
 
 When adding a site, create the DNS record in Cloudflare **before** expecting traffic. `./scripts/add-site.sh` only creates repo files — DNS is configured in the Cloudflare dashboard (or API).
 
-### SSL/TLS mode (required: Full (strict))
+### SSL/TLS mode (Cloudflare)
 
-In Cloudflare → **SSL/TLS** → **Overview**:
+**Production today:** zones typically use **Full** or **Flexible** — Cloudflare does not validate the self-signed origin cert. Visitor HTTPS is terminated at Cloudflare.
 
-- Set encryption mode to **Full (strict)** (not Flexible, not Full without valid origin cert).
-- Cloudflare terminates HTTPS for visitors; it connects to the origin on **port 443** using the Let's Encrypt cert nginx presents from `ssl/`.
-- **Flexible** mode (HTTPS visitor → HTTP origin) is **not** compatible with this stack: nginx vhosts listen on 443 with SSL only for site traffic.
+**Recommended when you install a real origin cert in `ssl/`:** **Full (strict)** so Cloudflare checks the origin certificate.
 
-Edge certificates (Cloudflare → browser) are managed by Cloudflare. Origin certificates are the host LE certs synced into `ssl/`.
+- **Flexible** (HTTPS visitor → HTTP origin) is **not** compatible with this stack if you rely on origin :443 with SSL-only vhosts.
+- Edge certificates (visitor → Cloudflare) are managed by Cloudflare.
 
 ### What stays on the origin
 
 | Concern | Setting |
 | --- | --- |
-| Origin TLS | Valid LE `fullchain.pem` / `privkey.pem` in `ssl/` |
-| Cloudflare SSL mode | **Full (strict)** |
+| Origin TLS | Self-signed per container start, or optional `ssl/*.pem` from LE / Origin CA |
+| Cloudflare SSL mode | **Full** or **Flexible** today; **Full (strict)** after real origin cert in `ssl/` |
 | Origin ports | `80` and `443` open on droplet (Cloudflare connects to both depending on config; 443 + strict is the production path) |
 | Bot secrets / API keys | Host `.env` files only — never in Cloudflare |
 | Editorial disk cache | `backends/botz.ai/cache` volume on droplet |
@@ -171,7 +178,7 @@ Host paths below are **relative to the git checkout** (`/home/andrewv/git/zoto-s
 | `backends/botz.ai/cache/` | botz: `/home/root/cache`; nginx: `/usr/share/nginx/html/botz.ai/cache` (read-only) | botz API | **Critical** — ~21k+ editorial JSON + PNG archive |
 | `backends/botz.ai/.env` | (env_file) | operator | **Critical** — API keys, `SHARED_SECRET`, optional `CACHE_DIR` |
 | `backends/discord/.env` | (env_file) | operator | **Critical** — Discord token and shared secret |
-| `ssl/` | nginx: `/etc/nginx/certs` (read-only) → copied to `/etc/nginx/ssl` at start | `sync-ssl.sh`, or migration `docker cp` from nginx | **Critical for recreate** — also regenerable from LE or copied from old container layer |
+| `ssl/` | nginx: `/etc/nginx/certs` (read-only) → copied to `/etc/nginx/ssl` at start | optional `sync-ssl.sh`, Origin CA, or manual copy | Optional — empty `ssl/` keeps self-signed origin behaviour |
 
 Compose bind-mount sources allowed by policy: `./backends/botz.ai/cache`, `${SSL_CERT_DIR:-./ssl}` → `/etc/nginx/certs`. There are **no** named Docker volumes.
 
@@ -206,22 +213,16 @@ Run on the droplet **before** the first deploy that uses `deploy-safe.sh`. The G
    docker cp botz:/var/lib/cache/. backends/botz.ai/cache/
    ```
 3. Confirm checkout path matches `DEPLOY_PATH`: **`/home/andrewv/git/zoto-sites`** (compose `working_dir` on nginx/botz/discord must match).
-4. **Migrate nginx TLS off the container layer** (required before the first recreate). Production certs today are only inside the running `nginx` container under `/etc/nginx/ssl/`. Copy them to the host mount source (gitignored), then fix permissions — `deploy-safe.sh` refuses to deploy while `nginx` is running if `ssl/` has no cert/key pair:
-   ```bash
-   cd /home/andrewv/git/zoto-sites
-   docker cp nginx:/etc/nginx/ssl/. ssl/
-   chmod 644 ssl/default_cert.pem
-   chmod 600 ssl/default_key.pem
-   ```
-   Alternatively, after `sudo ./scripts/sync-ssl.sh` if host LE paths exist (`fullchain.pem` + `privkey.pem`).
-5. Confirm your **external backup** is current; count cache files:
+4. Confirm your **external backup** is current; count cache files:
    ```bash
    find backends/botz.ai/cache -maxdepth 1 -name '*.json' | wc -l
    ```
-6. `git status` clean; no untracked files that would collide with incoming tracked paths; note `git log -1`.
-7. Ensure `backends/botz.ai/node_modules` and `backends/discord/node_modules` exist (Dockerfiles `COPY` them).
-8. `docker compose version` (v2).
-9. Deploy: `./scripts/deploy.sh` or GitHub Actions; verify cache file counts unchanged and https://botz.ai/archive loads.
+5. `git status` clean; no untracked files that would collide with incoming tracked paths; note `git log -1`.
+6. Ensure `backends/botz.ai/node_modules` and `backends/discord/node_modules` exist (Dockerfiles `COPY` them).
+7. `docker compose version` (v2).
+8. Deploy: `./scripts/deploy.sh` or GitHub Actions; verify cache file counts unchanged and https://botz.ai/archive loads.
+
+**Optional (not required for first deploy):** populate `ssl/` with a real origin cert (`sync-ssl.sh`, Cloudflare Origin CA, or `docker cp nginx:/etc/nginx/ssl/. ssl/` for the current self-signed pair) and move Cloudflare to **Full (strict)**. `deploy-safe.sh` only errors if `ssl/` contains a **partial** cert/key pair (one file present or empty, the other missing).
 
 ## Deploy and update
 

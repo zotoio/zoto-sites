@@ -234,32 +234,36 @@ resolve_ssl_dir() {
   fi
 }
 
-host_ssl_material_present() {
+assert_host_ssl_dir_consistent() {
   local d="$1"
-  if [[ -s "${d}/fullchain.pem" && -s "${d}/privkey.pem" ]]; then
+  [[ -d "$d" ]] || return 0
+
+  local le_cert=0 le_key=0 def_cert=0 def_key=0
+  [[ -e "${d}/fullchain.pem" ]] && le_cert=1
+  [[ -e "${d}/privkey.pem" ]] && le_key=1
+  [[ -e "${d}/default_cert.pem" ]] && def_cert=1
+  [[ -e "${d}/default_key.pem" ]] && def_key=1
+
+  if [[ "$le_cert" -eq 1 || "$le_key" -eq 1 ]]; then
+    if [[ ! -s "${d}/fullchain.pem" || ! -s "${d}/privkey.pem" ]]; then
+      die "host ssl/ has a partial LE pair (need non-empty fullchain.pem and privkey.pem, or remove both)"
+    fi
+    echo "Host TLS: LE fullchain.pem + privkey.pem in ${d}"
     return 0
   fi
-  if [[ -s "${d}/default_cert.pem" && -s "${d}/default_key.pem" ]]; then
+
+  if [[ "$def_cert" -eq 1 || "$def_key" -eq 1 ]]; then
+    if [[ ! -s "${d}/default_cert.pem" || ! -s "${d}/default_key.pem" ]]; then
+      die "host ssl/ has a partial default pair (need non-empty default_cert.pem and default_key.pem, or remove both)"
+    fi
+    echo "Host TLS: default_cert.pem + default_key.pem in ${d}"
     return 0
   fi
-  return 1
+
+  echo "Host ssl/ empty — nginx entrypoint will use self-signed origin TLS (same as today)."
 }
 
-# If nginx is already running, the next deploy may recreate it; refuse without host TLS files.
-assert_nginx_host_tls_before_recreate() {
-  if ! docker inspect nginx >/dev/null 2>&1; then
-    return 0
-  fi
-  local d
-  d="$(resolve_ssl_dir)"
-  if host_ssl_material_present "$d"; then
-    echo "Host TLS material present in ${d}"
-    return 0
-  fi
-  die "nginx is running but ${d} has no non-empty cert/key pair (fullchain.pem+privkey.pem or default_cert.pem+default_key.pem). Copy from the running container before recreate — see docs/DEPLOYMENT.md (docker cp nginx:/etc/nginx/ssl/. …). deploy-safe does not write ssl/."
-}
-
-assert_nginx_host_tls_before_recreate
+assert_host_ssl_dir_consistent "$(resolve_ssl_dir)"
 
 # --- (b) Record pre-deploy counts and data guards ---
 record_data_counts
@@ -285,7 +289,7 @@ assert_data_guards "post-pull"
 echo "Syncing host Let's Encrypt certs (if present)..."
 bash scripts/sync-ssl.sh
 
-assert_nginx_host_tls_before_recreate
+assert_host_ssl_dir_consistent "$(resolve_ssl_dir)"
 
 if command -v node >/dev/null 2>&1; then
   node scripts/generate-nginx.js

@@ -267,6 +267,13 @@ elif [[ -d "$ROOT/$DATA_PATH" ]]; then
   echo "Note: ${DATA_PATH} exists but has no json/image files yet."
 fi
 
+if [[ "$PRE_COUNT" -gt 0 ]]; then
+  now="$(count_data_files "$ROOT/$DATA_PATH")"
+  if [[ "$now" -eq 0 ]]; then
+    die "${DATA_PATH} was non-empty but is empty now; aborting before git pull"
+  fi
+fi
+
 # --- (d) Update ---
 echo "Checking out ${DEPLOY_BRANCH} and pulling (ff-only)..."
 git checkout "${DEPLOY_BRANCH}"

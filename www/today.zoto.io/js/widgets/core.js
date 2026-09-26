@@ -77,12 +77,16 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
       return { resize: render, destroy() {} };
     }
     case 'transit': {
+      const hasStops = (transit.stops || []).length > 0;
+      body.classList.toggle('widget-body-transit-compact', !hasStops);
       body.innerHTML = '<div class="transit-map"></div><ol class="transit-list"></ol>';
       const mapEl = body.querySelector('.transit-map');
       const listEl = body.querySelector('.transit-list');
       const render = () =>
         renderTransit(mapEl, listEl, loc, transit, {
-          mapHeight: Math.max(120, Math.floor(body.clientHeight * 0.45)),
+          mapHeight: hasStops
+            ? Math.max(120, Math.floor(body.clientHeight * 0.45))
+            : Math.min(128, Math.max(96, Math.floor(body.clientHeight * 0.3))),
         });
       render();
       return {

@@ -622,29 +622,69 @@ html.ultrawide-mode #ultrawide-mode-btn[aria-pressed='true'] {
   display: block;
 }
 
+.widget-body.widget-body-iss {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 0.55rem;
+}
+
+.iss-widget-mount {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .iss-map-wrap {
   margin: 0;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.iss-map-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .iss-map {
   width: 100%;
+  max-height: 100%;
   height: auto;
-  min-height: 88px;
+  aspect-ratio: 2 / 1;
   border-radius: 8px;
-  border: 1px solid rgba(110, 231, 255, 0.12);
+  border: 1px solid rgba(110, 231, 255, 0.18);
+  display: block;
+}
+
+.iss-map .ne-land path {
+  fill: rgba(52, 211, 153, 0.48);
+  stroke: rgba(187, 247, 208, 0.82);
+  stroke-width: 0.45;
+  stroke-linejoin: round;
 }
 
 .iss-meta {
   display: flex;
   flex-wrap: wrap;
   gap: 0.35rem 0.75rem;
-  margin: 0.35rem 0 0;
+  margin: 0.4rem 0 0;
+  flex-shrink: 0;
   font-size: 0.72rem;
   color: var(--muted);
 }
 
-.iss-widget-mount {
-  min-height: 100px;
+.widget-body-transit-compact .transit-map {
+  margin-bottom: 0.35rem;
+}
+
+.widget-body-transit-compact .transit-list {
+  margin-top: 0;
 }
 
 .pollen-bars {

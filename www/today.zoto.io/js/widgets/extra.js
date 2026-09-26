@@ -245,6 +245,7 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
       return { resize() {}, destroy() {} };
     }
     case 'iss': {
+      body.classList.add('widget-body-iss');
       body.innerHTML = '<div class="iss-widget-mount"></div>';
       const mapHost = body.querySelector('.iss-widget-mount');
       const first = await fetch('/api/iss').catch(() => ({ source: 'demo' }));

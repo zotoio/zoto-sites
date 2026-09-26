@@ -31,3 +31,6 @@ jobs:
 
       - name: botz.ai OpenAI image API contract
         run: yarn --cwd backends/botz.ai test
+
+      - name: Verify botz Docker image includes runtime modules
+        run: bash scripts/verify-botz-docker-image.sh

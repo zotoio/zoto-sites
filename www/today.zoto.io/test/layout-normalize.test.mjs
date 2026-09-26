@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeWidgetLayout, rectsConflict } from '../js/layout-normalize.js';
+import { normalizeWidgetLayout, packWidgetLayoutLeft, rectsConflict } from '../js/layout-normalize.js';
 
 test('rectsConflict detects overlapping grid cells', () => {
   assert.equal(rectsConflict({ x: 0, y: 0, w: 4, h: 4 }, { x: 3, y: 0, w: 2, h: 2 }), true);
@@ -19,4 +19,16 @@ test('normalizeWidgetLayout separates overlapping widgets', () => {
   const a = out.find((w) => w.id === 'a');
   const b = out.find((w) => w.id === 'b');
   assert.equal(rectsConflict(a, b), false);
+});
+
+test('packWidgetLayoutLeft removes horizontal holes when possible', () => {
+  const out = packWidgetLayoutLeft(
+    [
+      { id: 'a', type: 'a', x: 0, y: 0, w: 4, h: 2 },
+      { id: 'b', type: 'b', x: 8, y: 0, w: 2, h: 2 },
+    ],
+    12
+  );
+  const b = out.find((w) => w.id === 'b');
+  assert.equal(b.x, 4);
 });

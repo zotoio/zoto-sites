@@ -232,12 +232,18 @@ export function renderTransit(mapEl, listEl, center, payload, options = {}) {
     mapEl._leaflet.remove();
   }
   mapEl.style.height = `${mapHeight}px`;
+  mapEl.style.minHeight = `${mapHeight}px`;
+  mapEl.style.maxHeight = `${mapHeight}px`;
   const map = L.map(mapEl, { zoomControl: false, attributionControl: true }).setView(
     [center.lat, center.lon],
     15
   );
   mapEl._leaflet = map;
   attachLeafletResizeObserver(mapEl, map);
+  map.whenReady(() => {
+    map.invalidateSize({ animate: false });
+    window.setTimeout(() => map.invalidateSize({ animate: false }), 100);
+  });
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
     attribution: '&copy; OpenStreetMap',

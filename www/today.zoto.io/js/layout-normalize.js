@@ -37,5 +37,23 @@ export function normalizeWidgetLayout(widgets, columns = 12) {
     }
     placed.push(w);
   }
-  return placed;
+  return packWidgetLayoutLeft(placed, columns);
+}
+
+/**
+ * Slide widgets left within their row when grid cells are free (reduces holes with float:false).
+ * @param {LayoutRect[]} widgets
+ * @param {number} columns
+ */
+export function packWidgetLayoutLeft(widgets, columns = 12) {
+  const sorted = [...widgets].sort((a, b) => a.y - b.y || a.x - b.x);
+  for (const w of sorted) {
+    for (let x = 0; x < w.x; x += 1) {
+      const trial = { ...w, x };
+      if (trial.x + trial.w > columns) continue;
+      const blocked = sorted.some((p) => p !== w && rectsConflict(trial, p));
+      if (!blocked) w.x = x;
+    }
+  }
+  return sorted;
 }

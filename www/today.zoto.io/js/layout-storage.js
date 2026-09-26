@@ -33,11 +33,11 @@ export function demoShowcaseLayout() {
     ['air-quality', 0, 9, 3, 3],
     ['radar', 3, 9, 4, 4],
     ['iss', 7, 9, 3, 3],
-    ['wiki-nearby', 10, 7, 2, 5],
+    ['daily-quote', 7, 12, 3, 2],
+    ['wiki-nearby', 10, 5, 2, 3],
     ['walk-rings', 0, 12, 4, 5],
-    ['bikes', 4, 12, 4, 4],
-    ['calculator', 8, 12, 2, 4],
-    ['daily-quote', 10, 12, 2, 2],
+    ['bikes', 4, 12, 3, 4],
+    ['calculator', 10, 12, 2, 4],
     ['transit', 0, 17, 12, 5],
   ];
   return {

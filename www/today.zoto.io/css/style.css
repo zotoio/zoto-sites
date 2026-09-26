@@ -703,6 +703,13 @@ html.ultrawide-mode #ultrawide-mode-btn[aria-pressed='true'] {
 .widget-body-transit-compact .transit-map {
   flex: 0 0 auto;
   margin-bottom: 0.35rem;
+  overflow: hidden;
+}
+
+.widget-body-transit-compact .transit-map.leaflet-container,
+.widget-body-transit-compact .transit-map .leaflet-container {
+  width: 100%;
+  height: 100%;
 }
 
 .widget-body-transit-compact .transit-list {

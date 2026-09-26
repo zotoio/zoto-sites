@@ -30,6 +30,10 @@ import {
     usageFromChatCompletion,
     usageFromImageGenerateResponse,
 } from './openaiUsageLog.js';
+import {
+    isPublicEditorialCacheFileName,
+    listPublicEditorialCacheFileNames,
+} from './cacheListing.js';
 import { stripPrivateEditorialFields, writeEditorialUsageRecord } from './editorialUsageStore.js';
 import {
     buildGenAiNewsSearchQuery,
@@ -697,8 +701,7 @@ function parseFilename(filename) {
 
 function getNextAndPreviousFilenames(currentFilename) {
     console.log(`currentFilename: ${currentFilename}`);
-    const files = fs.readdirSync(cacheDir);
-    //console.log(`files: ${files}`);
+    const files = listPublicEditorialCacheFileNames(cacheDir);
 
     const dates = files
         .map(parseFilename)
@@ -732,7 +735,7 @@ function getNextAndPreviousFilenames(currentFilename) {
 }
 
 function getLatestFileCacheKey() {
-    const files = fs.readdirSync(cacheDir);
+    const files = listPublicEditorialCacheFileNames(cacheDir);
 
     const dates = files
         .map(parseFilename)
@@ -785,8 +788,8 @@ app.get('/archive', async (req, res) => {
     });
 
     let jsonFiles = files
-        .filter(file => file.isFile() && path.extname(file.name) === '.json')
-        .map(file => file.name)
+        .filter((file) => file.isFile() && isPublicEditorialCacheFileName(file.name))
+        .map((file) => file.name)
         .sort((a, b) => b.localeCompare(a));
 
     console.log(`found ${jsonFiles.length} editorials in archive..`);

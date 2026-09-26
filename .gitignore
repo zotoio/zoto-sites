@@ -80,6 +80,7 @@ ssl/*
 .env
 cache/
 backends/botz.ai/cache/
+backends/botz.ai/usage/
 .aider*
 
 .vscode/

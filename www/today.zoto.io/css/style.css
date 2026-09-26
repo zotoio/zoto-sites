@@ -761,7 +761,39 @@ html.ultrawide-mode #ultrawide-mode-btn[aria-pressed='true'] {
   color: var(--accent);
 }
 
+.news-meta {
   color: var(--muted);
+}
+
+.widget-body.widget-body-map {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 0.5rem;
+}
+
+.widget-body-map .leaflet-map-shell {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.widget-body-map .leaflet-map {
+  flex: 1;
+  min-height: 120px;
+  margin-bottom: 0.35rem;
+}
+
+.widget-body-map .radar-caption {
+  flex-shrink: 0;
+  margin: 0;
+  font-size: 0.72rem;
+}
+
+.iss-credit {
+  font-size: 0.65rem;
+  opacity: 0.85;
 }
 
 .transit-map,

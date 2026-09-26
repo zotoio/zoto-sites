@@ -46,6 +46,7 @@ import { fetchNearbyTrafficCameras } from './lib/traffic-cams.js';
 import { fetchWeather } from './lib/weather.js';
 import { fetchOnThisDay, fetchWikiNearby } from './lib/wiki.js';
 import { fetchNearbyWebcams } from './lib/webcams.js';
+import { getRadarPayload } from './lib/radar.js';
 
 dotenv.config();
 
@@ -259,6 +260,12 @@ app.get('/api/iss', async (req, res) => {
   } catch {
     return res.json(demoIss());
   }
+});
+
+app.get('/api/radar', async (req, res) => {
+  res.set('Cache-Control', 'public, max-age=60');
+  const payload = await getRadarPayload();
+  return res.json(payload);
 });
 
 app.get('/api/iss/track', async (req, res) => {

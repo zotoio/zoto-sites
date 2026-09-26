@@ -7,6 +7,7 @@ import { demoBadge, attachSettingsPopover, PRODUCTIVITY_STORE } from '../widget-
 import { formatSunTime, moonPhaseInfo, weatherIcon, weatherLabel } from '../weather-utils.js';
 import { getSettingsFields } from '../widget-registry.js';
 import { mountIssMapWidget } from '../iss-map.js';
+import { mountLeafletInWidget } from '../leaflet-widget.js';
 import {
   aqiGaugeSvg,
   bestOutsideStripSvg,
@@ -284,23 +285,50 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
       return { resize() {}, destroy() {} };
     }
     case 'radar': {
-      body.innerHTML = '<div class="leaflet-map"></div><p class="radar-caption">RainViewer</p>';
-      const mapEl = body.querySelector('.leaflet-map');
-      mapEl.style.height = 'calc(100% - 1rem)';
-      const map = L.map(mapEl).setView([loc.lat, loc.lon], 8);
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OSM' }).addTo(map);
-      fetch('https://api.rainviewer.com/public/weather-maps.json')
-        .then((r) => r.json())
-        .then((data) => {
-          const past = data?.radar?.past;
-          if (!past?.length) return;
-          L.tileLayer(
-            `https://tilecache.rainviewer.com/v2/radar/${past[past.length - 1].path}/256/{z}/{x}/{y}/2/1_1.png`,
-            { opacity: 0.65, maxZoom: 10 }
-          ).addTo(map);
-        })
-        .catch(() => {});
-      return { resize: () => map.invalidateSize(), destroy: () => map.remove() };
+      const leaflet = mountLeafletInWidget(body, (mapEl) => {
+        const map = L.map(mapEl, { zoomControl: true }).setView([loc.lat, loc.lon], 8);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '&copy; OpenStreetMap',
+        }).addTo(map);
+        return map;
+      });
+
+      const caption = document.createElement('p');
+      caption.className = 'radar-caption';
+      caption.textContent = 'Loading radar…';
+      body.appendChild(caption);
+
+      const addDemoRings = () => {
+        [40, 80, 120].forEach((km, idx) => {
+          L.circle([loc.lat, loc.lon], {
+            radius: km * 1000,
+            color: ['#38bdf8', '#22d3ee', '#a78bfa'][idx],
+            weight: 1.5,
+            fillOpacity: 0.12,
+          }).addTo(leaflet.map);
+        });
+        caption.textContent = 'Precipitation overlay unavailable (demo rings)';
+      };
+
+      try {
+        const data = await fetch('/api/radar');
+        if (data.demo || !data.tileUrlTemplate) {
+          addDemoRings();
+        } else {
+          L.tileLayer(data.tileUrlTemplate, { opacity: 0.68, maxZoom: 12 }).addTo(leaflet.map);
+          caption.textContent = 'RainViewer · latest frame';
+        }
+      } catch {
+        addDemoRings();
+      }
+
+      return {
+        resize: leaflet.resize,
+        destroy: () => {
+          leaflet.destroy();
+          caption.remove();
+        },
+      };
     }
     case 'wind-feels': {
       const cur = weather.current || {};

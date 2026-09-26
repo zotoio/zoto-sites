@@ -1,17 +1,27 @@
-/** Equirectangular ISS map (SVG) — no API keys; scales with container. */
+/** Equirectangular ISS map (SVG) — Natural Earth 110m land; no API keys. */
 
-// Simplified continent silhouettes (viewBox 0 0 360 180, lon/lat degrees)
-const CONTINENTS = [
-  'M 280 75 295 70 310 72 325 68 340 75 335 90 320 95 300 92 285 88 275 80 Z',
-  'M 345 55 355 50 358 62 352 72 345 68 Z',
-  'M 10 45 25 38 45 42 55 55 50 70 35 78 20 72 8 58 Z',
-  'M 60 35 95 30 110 38 105 55 85 62 65 58 55 45 Z',
-  'M 115 70 135 65 150 72 145 95 125 100 110 88 Z',
-  'M 155 55 175 50 190 58 185 75 165 78 150 68 Z',
-  'M 200 45 230 40 250 48 245 65 220 70 205 58 Z',
-  'M 255 95 275 88 290 95 285 115 265 118 250 108 Z',
-  'M 300 115 320 108 335 115 330 135 310 138 295 128 Z',
-];
+const LAND_SVG_URL = new URL('../assets/world-land-110m.svg', import.meta.url);
+
+/** @type {Promise<string> | null} */
+let landLayerPromise = null;
+
+function loadLandLayerInner() {
+  return fetch(LAND_SVG_URL)
+    .then((r) => {
+      if (!r.ok) throw new Error('land svg');
+      return r.text();
+    })
+    .then((text) => {
+      const match = text.match(/<g[^>]*class="ne-land"[^>]*>([\s\S]*?)<\/g>/i);
+      if (match) return match[1];
+      return text.replace(/^[\s\S]*?<svg[^>]*>/i, '').replace(/<\/svg>[\s\S]*$/i, '');
+    });
+}
+
+function loadLandLayer() {
+  landLayerPromise ??= loadLandLayerInner();
+  return landLayerPromise;
+}
 
 /**
  * @param {number} lon -180..180
@@ -42,13 +52,15 @@ function trackToPolyline(track, w, h) {
  * @param {HTMLElement} container
  * @param {{ lat: number, lon: number, altitude?: number, velocity?: number, visibility?: string, source?: string }} state
  * @param {{ lat: number, lon: number }[]} [track]
+ * @param {string} [landPathsHtml] - inner SVG for Natural Earth land (360×180 coords)
  */
-export function renderIssMap(container, state, track = []) {
+export function renderIssMap(container, state, track = [], landPathsHtml = '') {
   const w = Math.max(120, container.clientWidth);
-  const h = Math.max(80, Math.min(container.clientHeight - 48, w * 0.52));
+  const h = Math.max(80, Math.min(container.clientHeight - 56, w * 0.52));
   const pos = project(state.lon, state.lat, w, h);
   const trail = trackToPolyline(track, w, h);
   const orbit = trackToPolyline(track.slice(-40), w, h);
+  const landPaths = landPathsHtml || '';
 
   container.innerHTML = `
     <figure class="iss-map-wrap" role="img" aria-label="World map showing ISS position">
@@ -72,7 +84,7 @@ export function renderIssMap(container, state, track = []) {
           const x = (w / 12) * i;
           return `<line x1="${x}" y1="0" x2="${x}" y2="${h}" stroke="rgba(110,231,255,0.06)" stroke-width="1"/>`;
         }).join('')}
-        ${CONTINENTS.map((d) => `<path d="${d}" transform="scale(${w / 360} ${h / 180})" fill="rgba(34,197,94,0.22)" stroke="rgba(134,239,172,0.35)" stroke-width="0.6"/>`).join('')}
+        ${landPaths ? `<g transform="scale(${w / 360} ${h / 180})">${landPaths}</g>` : ''}
         ${orbit ? `<path d="${orbit}" fill="none" stroke="rgba(167,139,250,0.55)" stroke-width="1.5" stroke-dasharray="4 3"/>` : ''}
         ${trail ? `<path d="${trail}" fill="none" stroke="rgba(110,231,255,0.45)" stroke-width="1.2"/>` : ''}
         <circle cx="${pos.x}" cy="${pos.y}" r="5" fill="#f472b6" filter="url(#iss-glow)"/>
@@ -82,6 +94,7 @@ export function renderIssMap(container, state, track = []) {
         <span>${Number(state.lat).toFixed(2)}°, ${Number(state.lon).toFixed(2)}°</span>
         <span>${Math.round(state.altitude ?? 0)} km · ${Math.round(state.velocity ?? 0)} km/h</span>
         <span class="iss-vis">${state.visibility || '—'}</span>
+        <span class="iss-credit">Land © Natural Earth</span>
       </figcaption>
     </figure>`;
 }
@@ -95,8 +108,10 @@ export function mountIssMapWidget(container, fetchNow, fetchTrack) {
   /** @type {{ lat: number, lon: number }[]} */
   let trail = [];
   let state = { lat: 0, lon: 0, altitude: 0, velocity: 0, visibility: '—' };
+  /** @type {string} */
+  let landPathsHtml = '';
 
-  const paint = () => renderIssMap(container, state, trail);
+  const paint = () => renderIssMap(container, state, trail, landPathsHtml);
 
   const refresh = async () => {
     try {
@@ -129,7 +144,13 @@ export function mountIssMapWidget(container, fetchNow, fetchTrack) {
   };
 
   container.innerHTML = '<p class="muted-note">Loading ISS…</p>';
-  void refresh();
+  void loadLandLayer()
+    .then((paths) => {
+      landPathsHtml = paths;
+      return refresh();
+    })
+    .catch(() => refresh());
+
   const id = setInterval(() => void refresh(), 30000);
 
   return {

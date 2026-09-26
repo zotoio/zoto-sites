@@ -12,6 +12,7 @@ import crypto from 'crypto';
 import curlirize from 'axios-curlirize';
 import cheerio from 'cheerio';
 import sanitizeHtml from 'sanitize-html';
+import { requestGeneratedImage } from './openaiImages.js';
 
 curlirize(axios);
 
@@ -20,8 +21,7 @@ dotenv.config();
 const {
     OPENAI_API_KEY,
     OPENAI_MODEL_STRONG = 'gpt-4o',
-    OPENAI_MODEL_WEAK = 'gpt-3.5-turbo-0125',
-    OPENAI_IMAGE_QUALITY = 'standard', // or 'hd'
+    OPENAI_MODEL_WEAK = 'gpt-4o-mini',
     NEWS_API_KEY,
     PORT = 3000,
     FREQUENCY = 'daily',
@@ -30,7 +30,7 @@ const {
     SINGLE_RANDOM = 'true',
     CACHE = 'true',
     CATEGORY_HOURS = 12,
-    CACHE_DIR = '/var/lib/cache',
+    CACHE_DIR = '/home/root/cache',
     SHARED_SECRET,
     CF_ZONE_ID,
     CF_API_TOKEN,
@@ -281,7 +281,13 @@ app.get('/editorials', async (req, res) => {
             let imagePrompt = await getImagePrompt(editorial);
             const imageResponse = await generateImage(imagePrompt, article.title);
 
-            article.image_url = CACHE === 'true' ? imageResponse.data[0].localUrl : imageResponse.data[0].url;
+            if (imageResponse?.data?.[0]?.localUrl) {
+                article.image_url = imageResponse.data[0].localUrl;
+            } else if (imageResponse?.data?.[0]?.url) {
+                article.image_url = imageResponse.data[0].url;
+            } else {
+                console.warn('Editorial saved without generated image (image generation failed or was skipped).');
+            }
             article.authorAlias = author.alias;
             const now = new Date();
             article.generated_at = `${now.getFullYear()}-${padNumber(now.getMonth() + 1)}-${padNumber(now.getDate())}-${padNumber(now.getHours())}-${padNumber(now.getMinutes())}-${padNumber(now.getSeconds())}`;
@@ -456,43 +462,50 @@ async function getImagePrompt(article) {
 }
 
 const generateImage = async (prompt, supaSafeFallbackPrompt) => {
-    //console.log(prompt);
-    let response;
-    try {
-        const startTime = Date.now();
-        //console.log(`${startTime} - sending: ${prompt}`);
-        response = await openai.images.generate({ model: 'dall-e-3', prompt, quality: OPENAI_IMAGE_QUALITY, style: getRandomInt(0, 1) === 0 ? 'natural' : 'vivid' });
-        const endTime = Date.now();
-        console.log(`generateImage API call took ${endTime - startTime} ms`);
-    } catch (error) {
+    const attemptPrompts = [
+        { label: 'primary', text: prompt },
+        { label: 'fallback', text: `Anonymous hackers in a scene related to ${prompt}` },
+        { label: 'supa-safe', text: supaSafeFallbackPrompt },
+    ];
+
+    for (const attempt of attemptPrompts) {
         try {
             const startTime = Date.now();
-            console.error(`imageGen: ${error}`);
-            const fallbackPrompt = `Anonymous hackers in a scene related to ${prompt}`;
-            console.log(`${startTime} - sending fallback prompt: ${fallbackPrompt}`);
-            response = await openai.images.generate({ model: 'dall-e-3', prompt: fallbackPrompt, quality: OPENAI_IMAGE_QUALITY, style: getRandomInt(0, 1) === 0 ? 'natural' : 'vivid' });
+            console.log(`${startTime} - imageGen ${attempt.label}: sending prompt`);
+            const response = await requestGeneratedImage(openai, attempt.text);
             const endTime = Date.now();
-            console.log(`generateImage fallback API call took ${endTime - startTime} ms`);
+            console.log(`generateImage ${attempt.label} API call took ${endTime - startTime} ms`);
+            return await saveImageToFile(response);
         } catch (error) {
-            const startTime = Date.now();
-            console.error(`imageGen: ${error}`);
-            console.log(`${startTime} - sending supaSafeFallbackPrompt prompt: ${supaSafeFallbackPrompt}`);
-            response = await openai.images.generate({ model: 'dall-e-3', prompt: supaSafeFallbackPrompt, quality: OPENAI_IMAGE_QUALITY, style: getRandomInt(0, 1) === 0 ? 'natural' : 'vivid' });
-            const endTime = Date.now();
-            console.log(`generateImage supa-safe fallback API call took ${endTime - startTime} ms`);
+            console.error(`imageGen ${attempt.label} failed (non-fatal):`, error?.message || error);
         }
     }
 
-    response = saveImageToFile(response);
-
-    return response;
+    console.error('imageGen: all attempts failed; editorial will continue without a generated image.');
+    return null;
 };
 
 const saveImageToFile = async (response) => {
-    const { url } = response.data[0];
-    const urlHash = crypto.createHash('sha256').update(url).digest('hex');
-    let res = await axios.get(url, { responseType: 'arraybuffer' });
-    const buffer = Buffer.from(res.data, 'binary');
+    if (!response?.data?.[0]) {
+        throw new Error('saveImageToFile: empty image response');
+    }
+
+    const item = response.data[0];
+    let buffer;
+    let hashInput;
+
+    if (item.b64_json) {
+        buffer = Buffer.from(item.b64_json, 'base64');
+        hashInput = item.b64_json.slice(0, 256);
+    } else if (item.url) {
+        hashInput = item.url;
+        const res = await axios.get(item.url, { responseType: 'arraybuffer' });
+        buffer = Buffer.from(res.data, 'binary');
+    } else {
+        throw new Error('saveImageToFile: response missing url and b64_json');
+    }
+
+    const urlHash = crypto.createHash('sha256').update(hashInput).digest('hex');
     const currentDate = new Date();
     const cacheKey = `${currentDate.getFullYear()}-${padNumber(currentDate.getMonth() + 1)}-${padNumber(currentDate.getDate())}-${padNumber(currentDate.getHours())}-${urlHash}`;
     const cacheFilePath = `${path.join(cacheDir, 'images', cacheKey)}.png`;
@@ -500,8 +513,7 @@ const saveImageToFile = async (response) => {
     fs.writeFileSync(cacheFilePath, buffer);
     response.data[0].localUrl = `/cache/images/${cacheKey}.png`;
     return response;
-
-}
+};
 
 function parseFilename(filename) {
 

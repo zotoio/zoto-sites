@@ -24,7 +24,18 @@ jobs:
       - name: Validate persistent bind mounts (docker compose)
         run: node scripts/check-persistent-mounts.js
 
+      - name: Shell syntax check (deploy scripts)
+        run: |
+          bash -n scripts/deploy-safe.sh
+          bash -n scripts/deploy.sh
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck -x scripts/deploy-safe.sh scripts/deploy.sh scripts/sync-ssl.sh || true
+          fi
+
       - name: nginx configuration test (hardened image)
         run: |
           docker build -q -t zoto-sites-nginx-ci .
           docker run --rm --entrypoint nginx zoto-sites-nginx-ci -t
+
+      - name: botz.ai OpenAI image API contract
+        run: yarn --cwd backends/botz.ai test

@@ -10,3 +10,6 @@ FROM krewh/hardened-nginx
 COPY www /usr/share/nginx/html
 COPY projects/botz.ai /usr/share/nginx/html/projects/botz.ai
 COPY --from=nginx-config /build/nginx-conf /etc/nginx/conf.d/sites
+COPY docker/nginx-entrypoint.sh /usr/local/bin/zoto-nginx-entrypoint.sh
+RUN chmod +x /usr/local/bin/zoto-nginx-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/zoto-nginx-entrypoint.sh"]

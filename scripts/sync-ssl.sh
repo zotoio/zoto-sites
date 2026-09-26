@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Copy existing host Let's Encrypt certificates into ssl/ for the nginx container.
+# Copy existing host Let's Encrypt certificates into ssl/ (mounted at /etc/nginx/certs in nginx).
+# docker/nginx-entrypoint.sh copies them into /etc/nginx/ssl where hardened-nginx expects them.
 # Production droplets already have certs under /etc/letsencrypt/live/<name>/.
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

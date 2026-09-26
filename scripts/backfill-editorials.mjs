@@ -190,12 +190,25 @@ async function requestEditorial({ baseUrl, sharedSecret, cacheKey, asOfDate, max
         url.searchParams.set('maxNewsRequests', String(maxNewsRequests));
     }
 
-    const response = await fetchWithRetries(url.toString(), {
-        headers: { 'x-shared-secret': sharedSecret },
-        signal: AbortSignal.timeout(600000),
-    });
+    const response = await fetchWithRetries(
+        url.toString(),
+        { headers: { 'x-shared-secret': sharedSecret } },
+        { timeoutMs: 600_000, maxRetries: 2 }
+    );
 
     const body = await response.json().catch(() => ({}));
+    const headerNewsRequests = Number.parseInt(
+        response.headers.get('x-news-fetch-requests') ||
+            response.headers.get('x-thenewsapi-requests') ||
+            '',
+        10
+    );
+    const bodyNewsRequests = Number(body?.news_fetch_requests);
+    const newsRequestsFromResponse = Number.isFinite(headerNewsRequests)
+        ? headerNewsRequests
+        : Number.isFinite(bodyNewsRequests)
+          ? bodyNewsRequests
+          : 0;
     if (response.status === 503 && body?.error === 'news_quota_exhausted') {
         const err = new Error('The News API quota is exhausted (news_quota_exhausted).');
         err.isNewsQuotaExhausted = true;
@@ -207,6 +220,7 @@ async function requestEditorial({ baseUrl, sharedSecret, cacheKey, asOfDate, max
             `SKIP ${asOfDate} (${cacheKey}): no qualifying GenAI news story (HTTP 422). See botz logs (no_articles / no_match).`
         );
         err.isNoQualifyingStory = true;
+        err.newsRequestsUsed = newsRequestsFromResponse;
         throw err;
     }
     if (response.status >= 400) {
@@ -218,13 +232,10 @@ async function requestEditorial({ baseUrl, sharedSecret, cacheKey, asOfDate, max
         throw err;
     }
 
-    const newsRequests = Number.parseInt(
-        response.headers.get('x-news-fetch-requests') ||
-            response.headers.get('x-thenewsapi-requests') ||
-            '0',
-        10
-    );
-    return { body, newsRequests: Number.isFinite(newsRequests) ? newsRequests : 0 };
+    return {
+        body,
+        newsRequests: Number.isFinite(newsRequestsFromResponse) ? newsRequestsFromResponse : 0,
+    };
 }
 
 function recordDayUsage(cacheDir, cacheKey, date, usageCalls) {
@@ -424,12 +435,16 @@ async function main() {
             }
             if (error.isNoQualifyingStory) {
                 console.log(error.message);
+                if (Number.isFinite(error.newsRequestsUsed)) {
+                    newsRequestsUsed += error.newsRequestsUsed;
+                }
                 appendLog(logPath, {
                     at: new Date().toISOString(),
                     date,
                     cacheKey,
                     status: 'skipped_no_qualifying_story',
                     message: error.message,
+                    news_api_requests: error.newsRequestsUsed ?? 0,
                 });
                 processed += 1;
                 continue;

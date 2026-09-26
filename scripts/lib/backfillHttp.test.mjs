@@ -23,6 +23,25 @@ test('fetchWithRetries succeeds after transient failures', async () => {
     assert.equal(calls, 3);
 });
 
+test('fetchWithRetries uses a fresh AbortSignal per attempt when timeoutMs is set', async () => {
+    const signals = [];
+    await fetchWithRetries(
+        'http://example.test',
+        {},
+        {
+            maxRetries: 1,
+            baseDelayMs: 1,
+            timeoutMs: 5000,
+            fetchImpl: async (_url, options) => {
+                signals.push(options.signal);
+                throw new Error('fail');
+            },
+        }
+    ).catch(() => {});
+    assert.equal(signals.length, 2);
+    assert.notEqual(signals[0], signals[1]);
+});
+
 test('fetchWithRetries throws after exhausting retries', async () => {
     await assert.rejects(() =>
         fetchWithRetries('http://example.test', {}, {

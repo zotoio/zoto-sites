@@ -6,6 +6,7 @@ import {
     mapAlgoliaHitToCandidate,
     mergeAlgoliaPages,
 } from './hnAlgolia.js';
+import { filterExcludedStoryCandidates } from './liveStoryDedup.js';
 import { noQualifyingStoryError } from './newsApiErrors.js';
 import {
     passesHnStoryTypeGate,
@@ -22,19 +23,19 @@ export function resetHnCandidateCache() {
 }
 
 export function getHnCandidateCacheKey(asOfDate) {
-    if (asOfDate) {
-        return `hn:historical:${asOfDate}`;
+    if (!asOfDate) {
+        return null;
     }
-    const today = new Date();
-    const y = today.getUTCFullYear();
-    const m = String(today.getUTCMonth() + 1).padStart(2, '0');
-    const d = String(today.getUTCDate()).padStart(2, '0');
-    return `hn:live:${y}-${m}-${d}`;
+    return `hn:historical:${asOfDate}`;
 }
 
-function getOrCreateHnState(cacheKey) {
+function createEphemeralHnState() {
+    return { hits: [], fetchedPages: new Set() };
+}
+
+function getOrCreateHistoricalHnState(cacheKey) {
     if (!hnCandidatesByDayKey.has(cacheKey)) {
-        hnCandidatesByDayKey.set(cacheKey, { hits: [], fetchedPages: new Set() });
+        hnCandidatesByDayKey.set(cacheKey, createEphemeralHnState());
     }
     return hnCandidatesByDayKey.get(cacheKey);
 }
@@ -80,9 +81,11 @@ export async function fetchQualifyingStoryFromHn({
     maxNewsRequests = Infinity,
     minPoints = DEFAULT_MIN_POINTS,
     enrichDeps = {},
+    excludeStoryIdentifiers = null,
 }) {
-    const cacheKey = getHnCandidateCacheKey(asOfDate);
-    const state = getOrCreateHnState(cacheKey);
+    const state = asOfDate
+        ? getOrCreateHistoricalHnState(getHnCandidateCacheKey(asOfDate))
+        : createEphemeralHnState();
     let newsRequestCount = 0;
 
     for (let page = 0; page < MAX_ALGOLIA_PAGES; page++) {
@@ -92,6 +95,7 @@ export async function fetchQualifyingStoryFromHn({
                 err.statusCode = 503;
                 err.code = 'NEWS_REQUEST_BUDGET_EXHAUSTED';
                 err.clientError = 'news_request_budget_exhausted';
+                err.newsRequestCount = newsRequestCount;
                 throw err;
             }
             const hits = await fetchAlgoliaPage({ asOfDate, page, minPoints, httpGet, log });
@@ -110,14 +114,16 @@ export async function fetchQualifyingStoryFromHn({
                 );
                 throw noQualifyingStoryError(
                     'no_articles',
-                    'No Hacker News stories returned for the requested period'
+                    'No Hacker News stories returned for the requested period',
+                    { newsRequestCount }
                 );
             }
         }
 
-        const rawCandidates = state.hits
-            .map(mapAlgoliaHitToCandidate)
-            .filter(passesHnStoryTypeGate);
+        const rawCandidates = filterExcludedStoryCandidates(
+            state.hits.map(mapAlgoliaHitToCandidate).filter(passesHnStoryTypeGate),
+            excludeStoryIdentifiers
+        );
 
         const toEnrich = prepareHnCandidatesForScoring(rawCandidates);
         const enrichedPool = await enrichCandidatesInBatches(toEnrich, { log, ...enrichDeps });
@@ -145,7 +151,9 @@ export async function fetchQualifyingStoryFromHn({
             news_source: 'hn',
         })
     );
-    throw noQualifyingStoryError('no_match', 'No qualifying GenAI news story for the requested period');
+    throw noQualifyingStoryError('no_match', 'No qualifying GenAI news story for the requested period', {
+        newsRequestCount,
+    });
 }
 
 /**

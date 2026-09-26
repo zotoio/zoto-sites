@@ -72,3 +72,25 @@ test('fetchQualifyingStoryFromHn caches Algolia pages per day', async () => {
     await fetchQualifyingStoryFromHn(deps);
     assert.equal(calls, 1);
 });
+
+test('fetchQualifyingStoryFromHn live path does not reuse Algolia cache across calls', async () => {
+    resetHnCandidateCache();
+    let calls = 0;
+    const httpGet = async () => {
+        calls += 1;
+        return { data: fixture };
+    };
+    const deps = {
+        asOfDate: null,
+        httpGet,
+        scoreArticle: async () =>
+            JSON.stringify({ qualifies: true, score: 90, sensitive_harm: false, reason: 'ok' }),
+        enrichDeps: {
+            fetchArticle: async () => ({ og_description: 'OpenAI ChatGPT generative AI' }),
+            fetchComment: async () => '',
+        },
+    };
+    await fetchQualifyingStoryFromHn(deps);
+    await fetchQualifyingStoryFromHn(deps);
+    assert.equal(calls, 2);
+});

@@ -47,9 +47,10 @@ export class NewsQuotaExhaustedError extends Error {
     }
 }
 
-export function noQualifyingStoryError(reason, message) {
+export function noQualifyingStoryError(reason, message, { newsRequestCount = 0 } = {}) {
     const err = new NoQualifyingStoryError(message);
     err.reason = reason;
+    err.newsRequestCount = newsRequestCount;
     return err;
 }
 

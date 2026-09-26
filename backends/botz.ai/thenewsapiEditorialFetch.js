@@ -5,6 +5,7 @@ import {
 } from './newsFetchPlan.js';
 import { buildTopNewsParams, TOP_NEWS_URL } from './newsApi.js';
 import { mapAxiosNewsApiError, noQualifyingStoryError } from './newsApiErrors.js';
+import { filterExcludedStoryCandidates } from './liveStoryDedup.js';
 import {
     buildGenAiNewsSearchQuery,
     GENAI_NEWS_CATEGORIES,
@@ -18,20 +19,20 @@ export function resetThenewsapiCandidateCache() {
     candidatesByDayKey.clear();
 }
 
-export function getThenewsapiCandidateCacheKey(asOfDate, isWeekend) {
-    if (asOfDate) {
-        return `historical:${asOfDate}`;
+export function getThenewsapiCandidateCacheKey(asOfDate) {
+    if (!asOfDate) {
+        return null;
     }
-    const today = new Date();
-    const y = today.getUTCFullYear();
-    const m = String(today.getUTCMonth() + 1).padStart(2, '0');
-    const d = String(today.getUTCDate()).padStart(2, '0');
-    return `live:${y}-${m}-${d}:weekend=${isWeekend ? 1 : 0}`;
+    return `historical:${asOfDate}`;
 }
 
-function getOrCreateDayState(cacheKey) {
+function createEphemeralFetchState() {
+    return { pool: [], fetchedPages: new Set() };
+}
+
+function getOrCreateHistoricalState(cacheKey) {
     if (!candidatesByDayKey.has(cacheKey)) {
-        candidatesByDayKey.set(cacheKey, { pool: [], fetchedPages: new Set() });
+        candidatesByDayKey.set(cacheKey, createEphemeralFetchState());
     }
     return candidatesByDayKey.get(cacheKey);
 }
@@ -44,10 +45,12 @@ export async function fetchQualifyingStoryFromThenewsapi({
     scoreArticle,
     log = () => {},
     maxNewsRequests = Infinity,
+    excludeStoryIdentifiers = null,
 }) {
-    const cacheKey = getThenewsapiCandidateCacheKey(asOfDate, isWeekend);
     const pages = asOfDate ? historicalPageSequence() : livePageSequence(isWeekend);
-    const state = getOrCreateDayState(cacheKey);
+    const state = asOfDate
+        ? getOrCreateHistoricalState(getThenewsapiCandidateCacheKey(asOfDate))
+        : createEphemeralFetchState();
 
     let newsRequestCount = 0;
 
@@ -58,6 +61,7 @@ export async function fetchQualifyingStoryFromThenewsapi({
                 err.statusCode = 503;
                 err.code = 'NEWS_REQUEST_BUDGET_EXHAUSTED';
                 err.clientError = 'news_request_budget_exhausted';
+                err.newsRequestCount = newsRequestCount;
                 throw err;
             }
 
@@ -91,16 +95,16 @@ export async function fetchQualifyingStoryFromThenewsapi({
                         news_source: 'thenewsapi',
                     })
                 );
-                throw noQualifyingStoryError(
-                    'no_articles',
-                    'No news articles returned for the requested period'
-                );
+                throw noQualifyingStoryError('no_articles', 'No news articles returned for the requested period', {
+                    newsRequestCount,
+                });
             }
 
             state.pool.push(...batch);
         }
 
-        const selected = await selectBestQualifyingStory(state.pool, {
+        const poolForSelection = filterExcludedStoryCandidates(state.pool, excludeStoryIdentifiers);
+        const selected = await selectBestQualifyingStory(poolForSelection, {
             scoreArticle,
             log,
         });
@@ -118,5 +122,7 @@ export async function fetchQualifyingStoryFromThenewsapi({
             news_source: 'thenewsapi',
         })
     );
-    throw noQualifyingStoryError('no_match', 'No qualifying GenAI news story for the requested period');
+    throw noQualifyingStoryError('no_match', 'No qualifying GenAI news story for the requested period', {
+        newsRequestCount,
+    });
 }

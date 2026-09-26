@@ -48,3 +48,5 @@ for (const rel of relImports) {
 
 console.log(`Verified ${relImports.length} relative module(s) in botz Docker image.`);
 NODE
+
+docker run --rm --entrypoint node "$IMAGE" /home/root/scripts/backfill-editorials.mjs --help

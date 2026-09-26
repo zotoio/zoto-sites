@@ -34,6 +34,7 @@ import {
 import { stripPrivateEditorialFields, writeEditorialUsageRecord } from './editorialUsageStore.js';
 import { buildRelevanceScoringPrompt } from './storySelection.js';
 import { assertNewsSourceEnv, parseNewsSource } from './newsSourceConfig.js';
+import { readRecentLiveStoryIdentifiers } from './liveStoryDedup.js';
 
 dotenv.config();
 
@@ -169,24 +170,38 @@ const fetchAiNews = async (req) => {
             ? maxNewsRequestsParam
             : Infinity;
 
-    const { article, newsRequestCount } = await fetchQualifyingStoryForEditorial({
-        newsSource: NEWS_SOURCE,
-        asOfDate,
-        isWeekend: isWeekend(),
-        newsApiKey: NEWS_API_KEY,
-        httpGet: async ({ url, params }) => {
-            const startTime = Date.now();
-            const response = await axios.get(url, { params });
-            console.log(
-                `${NEWS_SOURCE} news fetch took ${Date.now() - startTime} ms (${url.split('/').slice(-2).join('/')})`
-            );
-            return response;
-        },
-        scoreArticle: async (article) =>
-            aiJSONResponse(buildRelevanceScoringPrompt(article), OPENAI_MODEL_WEAK),
-        log: (message) => console.log(message),
-        maxNewsRequests,
-    });
+    const excludeStoryIdentifiers = asOfDate ? null : readRecentLiveStoryIdentifiers(cacheDir);
+
+    let newsRequestCount = 0;
+    let article;
+    try {
+        const result = await fetchQualifyingStoryForEditorial({
+            newsSource: NEWS_SOURCE,
+            asOfDate,
+            isWeekend: isWeekend(),
+            newsApiKey: NEWS_API_KEY,
+            httpGet: async ({ url, params }) => {
+                const startTime = Date.now();
+                const response = await axios.get(url, { params });
+                console.log(
+                    `${NEWS_SOURCE} news fetch took ${Date.now() - startTime} ms (${url.split('/').slice(-2).join('/')})`
+                );
+                return response;
+            },
+            scoreArticle: async (article) =>
+                aiJSONResponse(buildRelevanceScoringPrompt(article), OPENAI_MODEL_WEAK),
+            log: (message) => console.log(message),
+            maxNewsRequests,
+            excludeStoryIdentifiers,
+        });
+        article = result.article;
+        newsRequestCount = result.newsRequestCount;
+    } catch (error) {
+        if (typeof error.newsRequestCount === 'number') {
+            newsRequestCount = error.newsRequestCount;
+        }
+        throw error;
+    }
 
     req.newsFetchRequestCount = newsRequestCount;
     if (NEWS_SOURCE === 'thenewsapi') {
@@ -440,7 +455,22 @@ app.get('/editorials', async (req, res) => {
 
     } catch (error) {
         editorialUsageCollector = null;
+        if (typeof error.newsRequestCount === 'number') {
+            req.newsFetchRequestCount = error.newsRequestCount;
+            if (NEWS_SOURCE === 'thenewsapi') {
+                req.theNewsApiRequestCount = error.newsRequestCount;
+            }
+        }
         logEditorialRouteError(error);
+        const isAdmin = authorisedAdminRequest(req);
+        const attachNewsFetchHeaders = () => {
+            if (isAdmin && req.newsFetchRequestCount != null) {
+                res.setHeader('X-News-Fetch-Requests', String(req.newsFetchRequestCount));
+                if (req.theNewsApiRequestCount != null) {
+                    res.setHeader('X-TheNewsApi-Requests', String(req.theNewsApiRequestCount));
+                }
+            }
+        };
         if (error instanceof NewsQuotaExhaustedError || error.code === 'NEWS_QUOTA_EXHAUSTED') {
             console.error(
                 JSON.stringify({
@@ -461,7 +491,12 @@ app.get('/editorials', async (req, res) => {
         } else if (status === 422 && error.code === 'NO_QUALIFYING_STORY') {
             message = 'Unable to produce an editorial for the requested period.';
         }
-        res.status(status).json({ message });
+        attachNewsFetchHeaders();
+        const body = { message };
+        if (req.newsFetchRequestCount != null) {
+            body.news_fetch_requests = req.newsFetchRequestCount;
+        }
+        res.status(status).json(body);
     }
 });
 

@@ -80,3 +80,45 @@ test('fetchQualifyingStoryForEditorial reuses cached candidates without extra HT
     });
     assert.equal(requests, 1);
 });
+
+test('thenewsapi live path refetches on each editorial (no day-wide cache)', async () => {
+    resetNewsCandidateCache();
+    let requests = 0;
+    const httpGet = async () => {
+        requests += 1;
+        return {
+            data: {
+                data: [{ title: 'OpenAI news', description: 'ChatGPT generative AI' }],
+            },
+        };
+    };
+    const scoreArticle = async () =>
+        JSON.stringify({ qualifies: true, score: 80, sensitive_harm: false, reason: 'ok' });
+    const opts = {
+        newsSource: 'thenewsapi',
+        asOfDate: null,
+        isWeekend: false,
+        newsApiKey: 'x',
+        httpGet,
+        scoreArticle,
+    };
+    await fetchQualifyingStoryForEditorial(opts);
+    await fetchQualifyingStoryForEditorial(opts);
+    assert.equal(requests, 2);
+});
+
+test('no_articles carries newsRequestCount for budget accounting', async () => {
+    resetNewsCandidateCache();
+    await assert.rejects(
+        () =>
+            fetchQualifyingStoryForEditorial({
+                newsSource: 'thenewsapi',
+                asOfDate: '2026-06-04',
+                isWeekend: false,
+                newsApiKey: 'x',
+                httpGet: async () => ({ data: { data: [] } }),
+                scoreArticle: async () => '{}',
+            }),
+        (err) => err instanceof NoQualifyingStoryError && err.newsRequestCount === 1
+    );
+});

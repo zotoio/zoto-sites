@@ -31,7 +31,8 @@ test('mapAxiosNewsApiError maps 402 to NewsQuotaExhaustedError', () => {
 });
 
 test('noQualifyingStoryError sets reason no_articles', () => {
-    const err = noQualifyingStoryError('no_articles', 'empty');
+    const err = noQualifyingStoryError('no_articles', 'empty', { newsRequestCount: 2 });
     assert.equal(err.statusCode, 422);
     assert.equal(err.reason, 'no_articles');
+    assert.equal(err.newsRequestCount, 2);
 });

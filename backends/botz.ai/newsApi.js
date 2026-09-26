@@ -4,9 +4,10 @@ export function buildTopNewsParams({
     apiToken,
     search,
     language = 'en',
-    limit = 1,
+    limit = 10,
     page = 1,
     asOfDate = null,
+    categories = 'tech',
 }) {
     const params = {
         search,
@@ -16,6 +17,9 @@ export function buildTopNewsParams({
         limit,
         page,
     };
+    if (categories) {
+        params.categories = categories;
+    }
     if (asOfDate) {
         params.published_on = asOfDate;
     }

@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { sumUsageCalls, usageFromChatCompletion } from './openaiUsageLog.js';
+import {
+    sumUsageCalls,
+    usageFromChatCompletion,
+    usageFromImageGenerateResponse,
+} from './openaiUsageLog.js';
 
 test('usageFromChatCompletion extracts token fields', () => {
     const record = usageFromChatCompletion('gpt-6-luna', {
@@ -14,6 +18,20 @@ test('usageFromChatCompletion extracts token fields', () => {
     assert.equal(record.model, 'gpt-6-luna');
     assert.equal(record.prompt_tokens, 10);
     assert.equal(record.reasoning_tokens, 3);
+});
+
+test('usageFromImageGenerateResponse records API usage when present', () => {
+    const record = usageFromImageGenerateResponse(
+        { usage: { total_tokens: 4200, input_tokens: 1000, output_tokens: 3200 } },
+        { model: 'gpt-image-2.5-flare', size: '1024x1024', quality: 'medium' }
+    );
+    assert.equal(record.total_tokens, 4200);
+    assert.equal(record.input_tokens, 1000);
+});
+
+test('usageFromImageGenerateResponse notes missing usage', () => {
+    const record = usageFromImageGenerateResponse({}, { model: 'gpt-image-2', size: '1024x1024', quality: 'medium' });
+    assert.equal(record.usage_note, 'images_api_usage_not_returned');
 });
 
 test('sumUsageCalls aggregates chat and image calls', () => {

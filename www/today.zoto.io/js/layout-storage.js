@@ -10,12 +10,15 @@ export const STORAGE_KEY = 'today.zoto.io.layout.v1';
 export function defaultLayout() {
   return {
     schema: LAYOUT_SCHEMA,
-    widgets: [
-      createLayoutEntry('location', 0, 0),
-      createLayoutEntry('weather', 0, 2),
-      createLayoutEntry('news', 7, 2),
-      createLayoutEntry('transit', 0, 11),
-    ],
+    widgets: normalizeWidgetLayout(
+      [
+        createLayoutEntry('location', 0, 0),
+        createLayoutEntry('weather', 0, 2),
+        createLayoutEntry('news', 7, 2),
+        createLayoutEntry('transit', 0, 11),
+      ],
+      12
+    ),
   };
 }
 
@@ -39,12 +42,15 @@ export function demoShowcaseLayout() {
   ];
   return {
     schema: LAYOUT_SCHEMA,
-    widgets: types.map(([type, x, y, w, h]) => {
-      const e = createLayoutEntry(type, x, y);
-      e.w = w;
-      e.h = h;
-      return e;
-    }),
+    widgets: normalizeWidgetLayout(
+      types.map(([type, x, y, w, h]) => {
+        const e = createLayoutEntry(type, x, y);
+        e.w = w;
+        e.h = h;
+        return e;
+      }),
+      12
+    ),
   };
 }
 
@@ -70,12 +76,15 @@ export function ultrawideShowcaseLayout() {
   ];
   return {
     schema: LAYOUT_SCHEMA,
-    widgets: types.map(([type, x, y, w, h]) => {
-      const e = createLayoutEntry(type, x, y);
-      e.w = w;
-      e.h = h;
-      return e;
-    }),
+    widgets: normalizeWidgetLayout(
+      types.map(([type, x, y, w, h]) => {
+        const e = createLayoutEntry(type, x, y);
+        e.w = w;
+        e.h = h;
+        return e;
+      }),
+      GRID_COLUMNS_ULTRAWIDE
+    ),
   };
 }
 

@@ -1,2 +1,2 @@
-/** Shared GridStack spacing — visible gutter between widget cards. */
-export const GRID_GUTTER_PX = 14;
+/** Per-side GridStack margin (px); gap between adjacent widgets ≈ 2× this value. */
+export const GRID_GUTTER_PX = 7;

@@ -1,4 +1,27 @@
 /**
+ * Keep Leaflet tile layers sized when the map container changes (grid resize, flex layout).
+ * @param {HTMLElement} mapEl
+ * @param {import('leaflet').Map} map
+ */
+export function attachLeafletResizeObserver(mapEl, map) {
+  const invalidate = () => map.invalidateSize({ animate: false });
+
+  map.whenReady(() => {
+    invalidate();
+    window.setTimeout(invalidate, 50);
+    window.setTimeout(invalidate, 300);
+  });
+
+  if (typeof ResizeObserver !== 'undefined') {
+    const ro = new ResizeObserver(() => invalidate());
+    ro.observe(mapEl);
+    mapEl._leafletResizeObserver = ro;
+  }
+
+  return invalidate;
+}
+
+/**
  * Mount a Leaflet map that fills a grid widget body and stays sized after layout changes.
  * @param {HTMLElement} body - widget body element (should use .widget-body-map)
  * @param {(mapEl: HTMLElement) => import('leaflet').Map} createMap
@@ -15,21 +38,14 @@ export function mountLeafletInWidget(body, createMap) {
 
   const map = createMap(mapEl);
 
-  const invalidate = () => {
-    map.invalidateSize({ animate: false });
-  };
-
-  map.whenReady(() => {
-    invalidate();
-    window.setTimeout(invalidate, 50);
-    window.setTimeout(invalidate, 300);
-  });
+  const invalidate = attachLeafletResizeObserver(mapEl, map);
 
   return {
     map,
     mapEl,
     resize: invalidate,
     destroy: () => {
+      mapEl._leafletResizeObserver?.disconnect();
       map.remove();
       body.classList.remove('widget-body-map');
     },

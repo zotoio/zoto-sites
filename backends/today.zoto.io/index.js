@@ -167,9 +167,10 @@ app.get('/api/transit', async (req, res) => {
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
     return res.status(400).json({ error: 'lat and lon required' });
   }
+  const radiusM = Math.min(5000, Math.max(400, Number(req.query.radiusM) || 900));
   try {
-    const data = await fetchNearbyTransit(lat, lon);
-    return res.json(data);
+    const data = await fetchNearbyTransit(lat, lon, radiusM);
+    return res.json({ ...data, radiusM });
   } catch {
     return res.json({ source: 'overpass', stops: [] });
   }

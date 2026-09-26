@@ -43,12 +43,14 @@ export function initWidgetCanvas(ctx, options = {}) {
   const libraryEl = document.getElementById('widget-library');
   const libraryList = document.getElementById('widget-library-list');
 
+  gridEl.style.setProperty('--widget-gutter', `${GRID_GUTTER_PX}px`);
+
   const grid = GridStack.init(
     {
       column: gridColumnsForViewport(ultrawideActive),
       cellHeight: ultrawideActive ? 64 : 72,
       margin: GRID_GUTTER_PX,
-      float: true,
+      float: false,
       animate: true,
       handle: '.widget-drag-handle',
       columnOpts: { breakpoints: [{ w: 768, c: 1, layout: 'list' }] },

@@ -8,6 +8,7 @@ import {
 import { weatherIcon, weatherLabel } from '../weather-utils.js';
 import { attachSettingsPopover } from '../widget-helpers.js';
 import { getSettingsFields } from '../widget-registry.js';
+import { setWidgetGridHeight } from '../widget-grid-resize.js';
 
 function fitCanvas(canvas, container) {
   const ratio = window.devicePixelRatio || 1;
@@ -77,24 +78,54 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
       return { resize: render, destroy() {} };
     }
     case 'transit': {
-      const hasStops = (transit.stops || []).length > 0;
-      body.classList.toggle('widget-body-transit-compact', !hasStops);
+      let payload = transit;
+      let searchRadius = payload.radiusM || 900;
+
+      const applyCompactLayout = (hasStops) => {
+        body.classList.toggle('widget-body-transit-compact', !hasStops);
+        if (!hasStops) {
+          setWidgetGridHeight(body, 4);
+        }
+      };
+
       body.innerHTML = '<div class="transit-map"></div><ol class="transit-list"></ol>';
       const mapEl = body.querySelector('.transit-map');
       const listEl = body.querySelector('.transit-list');
-      const render = () =>
-        renderTransit(mapEl, listEl, loc, transit, {
-          mapHeight: hasStops
-            ? Math.max(120, Math.floor(body.clientHeight * 0.45))
-            : Math.min(128, Math.max(96, Math.floor(body.clientHeight * 0.3))),
+
+      const render = () => {
+        const stops = payload.stops || [];
+        const hasStops = stops.length > 0;
+        applyCompactLayout(hasStops);
+        const mapHeight = hasStops
+          ? Math.max(120, Math.floor(body.clientHeight * 0.45))
+          : 92;
+        renderTransit(mapEl, listEl, loc, payload, {
+          mapHeight,
+          onWidenSearch: async () => {
+            searchRadius = 2500;
+            try {
+              payload = await ctx.fetch('/api/transit', {
+                lat: loc.lat,
+                lon: loc.lon,
+                radiusM: searchRadius,
+              });
+            } catch {
+              payload = { source: 'overpass', stops: [], radiusM: searchRadius };
+            }
+            render();
+          },
         });
+        mapEl._leaflet?.invalidateSize();
+      };
+
       render();
+
       return {
         resize: () => {
-          mapEl._leaflet?.invalidateSize();
           render();
         },
         destroy() {
+          mapEl._leafletResizeObserver?.disconnect();
           mapEl._leaflet?.remove();
         },
       };

@@ -452,8 +452,22 @@ html.ultrawide-mode #ultrawide-mode-btn[aria-pressed='true'] {
   min-height: 60vh;
 }
 
+.grid-stack {
+  --gs-item-margin-top: var(--widget-gutter, 7px);
+  --gs-item-margin-right: var(--widget-gutter, 7px);
+  --gs-item-margin-bottom: var(--widget-gutter, 7px);
+  --gs-item-margin-left: var(--widget-gutter, 7px);
+}
+
 .grid-stack-item-content.widget {
-  height: 100%;
+  /* Respect GridStack insets — avoid height:100% bleeding into adjacent cells. */
+  position: absolute;
+  top: var(--gs-item-margin-top);
+  right: var(--gs-item-margin-right);
+  bottom: var(--gs-item-margin-bottom);
+  left: var(--gs-item-margin-left);
+  width: auto;
+  height: auto;
   display: flex;
   flex-direction: column;
   background: var(--glass);
@@ -679,12 +693,26 @@ html.ultrawide-mode #ultrawide-mode-btn[aria-pressed='true'] {
   color: var(--muted);
 }
 
+.widget-body.widget-body-transit-compact {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  overflow: hidden;
+}
+
 .widget-body-transit-compact .transit-map {
+  flex: 0 0 auto;
   margin-bottom: 0.35rem;
 }
 
 .widget-body-transit-compact .transit-list {
+  flex: 0 0 auto;
   margin-top: 0;
+}
+
+.transit-widen-btn {
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
 }
 
 .pollen-bars {

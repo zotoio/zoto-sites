@@ -14,7 +14,7 @@ Environment (for remote deploy):
   DEPLOY_PATH   App directory on the remote host (default: /opt/zoto-sites)
   DEPLOY_BRANCH Git branch to deploy (default: main)
 
-Local / on-droplet deploy runs scripts/deploy-safe.sh (backup, guards, ff-only pull, compose).
+Local / on-droplet deploy runs scripts/deploy-safe.sh (guards, ff-only pull, compose).
 EOF
 }
 

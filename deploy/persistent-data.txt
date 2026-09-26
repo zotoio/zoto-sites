@@ -4,7 +4,7 @@
 # DATA — editorial archive (*.json + images/*.png). If non-empty before deploy, must stay non-empty.
 backends/botz.ai/cache
 
-# CONFIG — secrets and service configuration (back up with deploy-safe.sh; not file-count guarded).
+# CONFIG — secrets and service configuration (not file-count guarded by deploy-safe.sh).
 backends/botz.ai/.env
 backends/discord/.env
 

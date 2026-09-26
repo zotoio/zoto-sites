@@ -153,7 +153,7 @@ chmod 600 backends/botz.ai/.env backends/discord/.env
 
 ## Persistent data
 
-Host paths below are **relative to the git checkout** (usually `/opt/zoto-sites`). They are listed in `deploy/persistent-data.txt` and backed up by `scripts/deploy-safe.sh`.
+Host paths below are **relative to the git checkout** (usually `/opt/zoto-sites`). They are listed in `deploy/persistent-data.txt`. **Backups are handled outside this repository** (your own snapshot/backup process). `scripts/deploy-safe.sh` guarantees deploys will not overwrite, delete, or orphan these paths: it refuses mount regressions, dirty trees, and any drop in editorial cache file counts.
 
 | Host path | Container path | Writer | Criticality |
 | --- | --- | --- | --- |
@@ -163,17 +163,6 @@ Host paths below are **relative to the git checkout** (usually `/opt/zoto-sites`
 | `ssl/` | nginx: `/etc/nginx/certs` (read-only) | `scripts/sync-ssl.sh` from host LE | Derived — regenerable from `/etc/letsencrypt` |
 
 Compose bind-mount sources allowed by policy: `./backends/botz.ai/cache`, `${SSL_CERT_DIR:-./ssl}` → `/etc/nginx/certs`. There are **no** named Docker volumes.
-
-**Backups:** `scripts/deploy-safe.sh` writes `tar.gz` archives to `${BACKUP_DIR:-/var/backups/zoto-sites}/zoto-sites-<UTC>-<sha>.tar.gz`, verifies the archive, and retains the last `${BACKUP_KEEP:-7}`. A `.state` file records pre-deploy file counts for the cache.
-
-**Restore example** (from a failed deploy):
-
-```bash
-cd /opt/zoto-sites
-docker compose stop
-tar -xzf /var/backups/zoto-sites/zoto-sites-YYYYMMDDTHHMMSSZ-<sha>.tar.gz -C /opt/zoto-sites
-docker compose up -d
-```
 
 **Never run on the droplet checkout** (they can delete or orphan the archive and secrets):
 
@@ -211,11 +200,9 @@ Run on the droplet **before** the first deploy that uses `deploy-safe.sh`. The G
    ```
 3. Confirm checkout path matches `DEPLOY_PATH` (e.g. `/opt/zoto-sites`).
 4. `git status` clean; no untracked files that would collide with incoming tracked paths; note `git log -1`.
-5. Count cache files; optional manual backup:
+5. Count cache files; confirm your **external backup** is current:
    ```bash
    find backends/botz.ai/cache -maxdepth 1 -name '*.json' | wc -l
-   sudo mkdir -p /var/backups/zoto-sites
-   sudo tar -czf /var/backups/zoto-sites/manual-pre-migrate-$(date -u +%Y%m%d).tar.gz backends/botz.ai/cache backends/botz.ai/.env backends/discord/.env ssl
    ```
 6. Ensure `backends/botz.ai/node_modules` and `backends/discord/node_modules` exist (Dockerfiles `COPY` them).
 7. `docker compose version` (v2).
@@ -239,12 +226,11 @@ DEPLOY_PATH=/opt/zoto-sites ./scripts/deploy.sh deploy@YOUR_DROPLET_IP
 Each deploy runs `scripts/deploy-safe.sh`:
 
 1. Preflight (clean tree, untracked collision check, compose v2, bind-mount regression guard)
-2. Timestamped `tar` backup of manifest paths to `/var/backups/zoto-sites`
-3. Data guards on the editorial cache
-4. `git pull --ff-only origin main`
-5. `scripts/sync-ssl.sh`
-6. `node scripts/generate-nginx.js` only when `node` is on the host (skipped otherwise; image regenerates confs)
-7. `docker compose up -d --build` and post-checks
+2. Data guards on manifest data paths (file counts; abort if non-empty paths would be lost)
+3. `git pull --ff-only origin main`
+4. `scripts/sync-ssl.sh`
+5. `node scripts/generate-nginx.js` only when `node` is on the host (skipped otherwise; image regenerates confs)
+6. `docker compose up -d --build` and post-checks (counts and container health)
 
 GitHub Actions (`.github/workflows/deploy.yml`) runs `git fetch origin main` and `bash scripts/deploy-safe.sh` over SSH when `DEPLOY_*` secrets are set.
 

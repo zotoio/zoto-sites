@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Safe production deploy: preflight, backup, data guards, ff-only pull, compose up.
+# Safe production deploy: preflight, data guards, ff-only pull, compose up.
+# Does not write into manifest data paths (read-only checks and counts only).
 #
 # NEVER run from this script (or extend it to run):
 #   git clean, git reset --hard, git stash,
@@ -11,12 +12,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 MANIFEST="${ROOT}/deploy/persistent-data.txt"
-DATA_PATH="backends/botz.ai/cache"
-BACKUP_DIR="${BACKUP_DIR:-/var/backups/zoto-sites}"
-BACKUP_KEEP="${BACKUP_KEEP:-7}"
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
 STATE_FILE=""
-BACKUP_FILE=""
 
 usage() {
   cat <<'EOF'
@@ -24,10 +21,9 @@ Usage: ./scripts/deploy-safe.sh
 
 Environment:
   DEPLOY_BRANCH   Git branch to deploy (default: main)
-  BACKUP_DIR      Directory for tar backups (default: /var/backups/zoto-sites)
-  BACKUP_KEEP     Number of backups to retain (default: 7)
 
 Runs from the repository root. Refuses dirty trees, mount regressions, and data loss.
+Backups are handled outside this repository; this script only guards persistent paths.
 EOF
 }
 
@@ -42,6 +38,9 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 fi
 
 [[ -f "$MANIFEST" ]] || die "missing manifest at deploy/persistent-data.txt (run from checkout root)"
+
+STATE_FILE="$(mktemp)"
+trap 'rm -f "$STATE_FILE"' EXIT
 
 # --- (a) Preflight ---
 if ! git diff --quiet || ! git diff --cached --quiet; then
@@ -67,16 +66,9 @@ for u in "${UNTRACKED[@]}"; do
   done
 done
 
-REPO_REAL="$(realpath "$ROOT")"
-BACKUP_REAL="$(realpath -m "$BACKUP_DIR")"
-if [[ "$BACKUP_REAL" == "$REPO_REAL"/* || "$BACKUP_REAL" == "$REPO_REAL" ]]; then
-  die "BACKUP_DIR must not be inside the repository ($BACKUP_DIR)"
-fi
-
 read_manifest_paths() {
   local section=""
   DATA_PATHS=()
-  BACKUP_PATHS=()
   ALLOWED_BINDS=()
   while IFS= read -r line || [[ -n "$line" ]]; do
     if [[ "$line" =~ ^#[[:space:]]*DATA ]]; then
@@ -102,10 +94,6 @@ read_manifest_paths() {
     case "$section" in
       data)
         DATA_PATHS+=("$line")
-        BACKUP_PATHS+=("$line")
-        ;;
-      config|derived)
-        BACKUP_PATHS+=("$line")
         ;;
       binds)
         ALLOWED_BINDS+=("$line")
@@ -125,7 +113,36 @@ count_data_files() {
   echo "$n"
 }
 
-# Resolve compose bind sources from JSON config.
+pre_count_for() {
+  grep "^count:${1}=" "$STATE_FILE" 2>/dev/null | cut -d= -f2- || echo "0"
+}
+
+record_data_counts() {
+  {
+    for p in "${DATA_PATHS[@]}"; do
+      echo "count:${p}=$(count_data_files "$ROOT/$p")"
+    done
+  } > "$STATE_FILE"
+}
+
+assert_data_guards() {
+  local label="$1"
+  for p in "${DATA_PATHS[@]}"; do
+    local pre
+    pre="$(pre_count_for "$p")"
+    if [[ "$pre" -gt 0 ]]; then
+      local now
+      now="$(count_data_files "$ROOT/$p")"
+      if [[ ! -d "$ROOT/$p" ]] || [[ "$now" -eq 0 ]]; then
+        die "${label}: data path ${p} missing or empty (had ${pre} files)"
+      fi
+      if [[ "$now" -lt "$pre" ]]; then
+        die "${label}: data path ${p} file count dropped (${now} < ${pre})"
+      fi
+    fi
+  done
+}
+
 compose_bind_sources() {
   docker compose config --format json | node -e "
 const fs = require('fs');
@@ -181,7 +198,6 @@ compare_mounts_preflight() {
     done <<< "$old"
   done
 
-  # botz must have CACHE_DIR pointing at a mounted path
   local botz_cache_mount
   botz_cache_mount="$(docker compose config --format json | node -e "
 const j = JSON.parse(require('fs').readFileSync(0,'utf8'));
@@ -209,96 +225,31 @@ console.log(cacheDir);
 echo "Checking compose mounts against running containers..."
 compare_mounts_preflight
 
-# --- (b) Backup ---
-mkdir -p "$BACKUP_DIR"
-UTC_TS="$(date -u +%Y%m%dT%H%M%SZ)"
-SHORT_SHA="$(git rev-parse --short HEAD)"
-BACKUP_FILE="${BACKUP_DIR}/zoto-sites-${UTC_TS}-${SHORT_SHA}.tar.gz"
-STATE_FILE="${BACKUP_DIR}/zoto-sites-${UTC_TS}-${SHORT_SHA}.state"
-
-TAR_PATHS=()
-for p in "${BACKUP_PATHS[@]}"; do
-  if [[ -e "$ROOT/$p" ]]; then
-    TAR_PATHS+=("$p")
-  fi
-done
-
-if [[ ${#TAR_PATHS[@]} -gt 0 ]]; then
-  echo "Creating backup ${BACKUP_FILE}..."
-  tar -czf "$BACKUP_FILE" -C "$ROOT" "${TAR_PATHS[@]}"
-  tar -tzf "$BACKUP_FILE" >/dev/null
-
-  {
-    echo "timestamp=${UTC_TS}"
-    echo "sha=${SHORT_SHA}"
-    for p in "${DATA_PATHS[@]}"; do
-      echo "count:${p}=$(count_data_files "$ROOT/$p")"
-    done
-  } > "$STATE_FILE"
-else
-  echo "No manifest paths exist yet; skipping tar backup."
-fi
-
-if [[ -f "$BACKUP_FILE" ]]; then
-  mapfile -t ALL_BACKUPS < <(ls -1t "${BACKUP_DIR}"/zoto-sites-*.tar.gz 2>/dev/null || true)
-  if [[ ${#ALL_BACKUPS[@]} -gt "$BACKUP_KEEP" ]]; then
-    for ((i = BACKUP_KEEP; i < ${#ALL_BACKUPS[@]}; i++)); do
-      old="${ALL_BACKUPS[$i]}"
-      [[ "$old" == "$BACKUP_FILE" ]] && continue
-      rm -f "$old" "${old%.tar.gz}.state"
-    done
-  fi
-fi
-
-# --- (c) Data guards (before git pull / compose) ---
-PRE_COUNT="$(count_data_files "$ROOT/$DATA_PATH")"
+# --- (b) Record pre-deploy counts and data guards ---
+record_data_counts
 for p in "${DATA_PATHS[@]}"; do
-  full="$ROOT/$p"
-  if [[ -d "$full" ]]; then
-    c="$(count_data_files "$full")"
-    if [[ "$c" -gt 0 ]]; then
-      echo "Data guard: ${p} has ${c} files"
-    fi
+  c="$(pre_count_for "$p")"
+  if [[ "$c" -gt 0 ]]; then
+    echo "Data guard: ${p} has ${c} files"
+  elif [[ -d "$ROOT/$p" ]]; then
+    echo "Note: ${p} exists but has no json/image files yet."
   fi
 done
-if [[ -d "$ROOT/$DATA_PATH" ]] && [[ "$PRE_COUNT" -gt 0 ]]; then
-  echo "Pre-deploy data file count (${DATA_PATH}): ${PRE_COUNT}"
-elif [[ -d "$ROOT/$DATA_PATH" ]]; then
-  echo "Note: ${DATA_PATH} exists but has no json/image files yet."
-fi
 
-if [[ "$PRE_COUNT" -gt 0 ]]; then
-  now="$(count_data_files "$ROOT/$DATA_PATH")"
-  if [[ "$now" -eq 0 ]]; then
-    die "${DATA_PATH} was non-empty but is empty now; aborting before git pull"
-  fi
-fi
+assert_data_guards "pre-deploy"
 
-# --- (d) Update ---
+# --- (c) Update ---
 echo "Checking out ${DEPLOY_BRANCH} and pulling (ff-only)..."
 git checkout "${DEPLOY_BRANCH}"
 git pull --ff-only origin "${DEPLOY_BRANCH}"
 
-# Re-read pre counts from state if we had data before pull
-if [[ -f "$STATE_FILE" ]]; then
-  PRE_COUNT="$(grep "^count:${DATA_PATH}=" "$STATE_FILE" | cut -d= -f2- || echo "$PRE_COUNT")"
-fi
+assert_data_guards "post-pull"
 
-if [[ -d "$ROOT/$DATA_PATH" ]] && [[ "${PRE_COUNT:-0}" -gt 0 ]]; then
-  now="$(count_data_files "$ROOT/$DATA_PATH")"
-  if [[ ! -d "$ROOT/$DATA_PATH" ]] || [[ "$now" -eq 0 ]]; then
-    die "data path ${DATA_PATH} missing or empty after pull (had ${PRE_COUNT} files)"
-  fi
-fi
-
-# --- (e) Build and start ---
+# --- (d) Build and start ---
 echo "Syncing host Let's Encrypt certs (if present)..."
 bash scripts/sync-ssl.sh
 
 if command -v node >/dev/null 2>&1; then
-  if ! git diff --quiet -- nginx-conf/ 2>/dev/null; then
-    : # tracked changes already blocked
-  fi
   node scripts/generate-nginx.js
   if ! git diff --quiet -- nginx-conf/; then
     die "generate-nginx.js changed tracked nginx-conf/ files; aborting"
@@ -310,14 +261,15 @@ fi
 echo "Building and starting services..."
 docker compose up -d --build
 
-# --- (f) Post-check ---
-POST_COUNT="$(count_data_files "$ROOT/$DATA_PATH")"
-if [[ "${PRE_COUNT:-0}" -gt 0 ]]; then
-  if [[ "$POST_COUNT" -lt "$PRE_COUNT" ]]; then
-    die "post-deploy file count dropped (${POST_COUNT} < ${PRE_COUNT}) for ${DATA_PATH}"
+# --- (e) Post-check ---
+assert_data_guards "post-deploy"
+for p in "${DATA_PATHS[@]}"; do
+  pre="$(pre_count_for "$p")"
+  if [[ "$pre" -gt 0 ]]; then
+    now="$(count_data_files "$ROOT/$p")"
+    echo "Post-deploy ${p}: ${now} files (>= ${pre})"
   fi
-  echo "Post-deploy data file count (${DATA_PATH}): ${POST_COUNT} (>= ${PRE_COUNT})"
-fi
+done
 
 echo "Waiting ~20s for containers to settle..."
 sleep 20
@@ -331,10 +283,4 @@ done
 
 echo ""
 echo "Deploy complete."
-if [[ -f "$BACKUP_FILE" ]]; then
-  echo "Backup: ${BACKUP_FILE}"
-  echo "Restore: docker compose stop && tar -xzf ${BACKUP_FILE} -C ${ROOT} && docker compose up -d"
-else
-  echo "No backup archive was created (no manifest paths on disk)."
-fi
 docker compose ps

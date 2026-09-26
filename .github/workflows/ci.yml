@@ -35,8 +35,16 @@ jobs:
       - name: nginx configuration test (hardened image)
         run: |
           docker build -q -t zoto-sites-nginx-ci .
-          # Standalone container has no Compose DNS; stub botz so proxy_pass validates.
-          docker run --rm --add-host botz:127.0.0.1 --entrypoint nginx zoto-sites-nginx-ci -t
+          # No Compose network or mounted certs in CI — stub botz DNS and seed self-signed TLS like the entrypoint.
+          docker run --rm --add-host botz:127.0.0.1 --entrypoint /bin/sh zoto-sites-nginx-ci -ec '
+            CERT_DIR=/etc/nginx/ssl
+            mkdir -p "$CERT_DIR"
+            if [ ! -s "$CERT_DIR/default_cert.pem" ]; then
+              openssl req -subj "/CN=localhost" -x509 -newkey rsa:4096 -nodes \
+                -keyout "$CERT_DIR/default_key.pem" -out "$CERT_DIR/default_cert.pem" -days 365
+            fi
+            nginx -t
+          '
 
       - name: botz.ai OpenAI image API contract
         run: yarn --cwd backends/botz.ai test

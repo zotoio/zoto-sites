@@ -1,0 +1,5 @@
+# Example botz.ai subdomain project (disabled — enable after review).
+enabled: false
+type: static
+title: Hello example (botz.ai subdomain demo)
+spa_fallback: false

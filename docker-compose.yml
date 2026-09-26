@@ -8,7 +8,7 @@ services:
       - "443:443"
     volumes:
       - ./backends/botz.ai/cache:/usr/share/nginx/html/botz.ai/cache:ro
-      # LE copies for future vhost use; mount avoids /etc/nginx/ssl so the image can write its default self-signed cert at startup.
+      # Host TLS material (LE sync or migrated from the running container). Entrypoint copies into /etc/nginx/ssl.
       - ${SSL_CERT_DIR:-./ssl}:/etc/nginx/certs:ro
     depends_on:
       - botz

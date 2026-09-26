@@ -17,19 +17,30 @@ discord (Docker) ◄── Discord API (outbound only)
 | --- | --- |
 | **Cloudflare** | Public DNS, TLS to visitors, CDN caching for static assets |
 | **Droplet (host)** | Docker Compose, Let's Encrypt cert storage, `deploy` user |
-| **nginx container** | Terminates origin TLS using certs mounted from `./ssl/` |
+| **nginx container** | Terminates origin TLS; vhosts inherit `krewh/hardened-nginx` paths under `/etc/nginx/ssl/` (populated from `./ssl/` at start — see [Production TLS](#production-tls-existing-lets-encrypt-on-the-host)) |
 | **botz container** | Dynamic editorial API; optional Cloudflare cache purge via API |
 
 All services are managed with **Docker Compose** from the repository root.
 
 ## Production TLS (existing Let's Encrypt on the host)
 
-Certificates already live on the droplet under `/etc/letsencrypt/live/<name>/` (typical layout). The nginx container does **not** read `/etc/letsencrypt` directly — it mounts `./ssl/` from the repo:
+**Checkout path (live droplet):** `/home/andrewv/git/zoto-sites` — compose project `zoto-sites`, `com.docker.compose.project.working_dir` on all three containers. `DEPLOY_PATH` (GitHub Actions secret and `scripts/deploy.sh` default) must be exactly this path; `deploy-safe.sh` aborts if running containers were started from a different working directory.
 
-| File in `ssl/` | Source on host |
+**How nginx finds TLS material**
+
+| Stage | Behaviour |
 | --- | --- |
-| `fullchain.pem` | `/etc/letsencrypt/live/<name>/fullchain.pem` |
-| `privkey.pem` | `/etc/letsencrypt/live/<name>/privkey.pem` |
+| **Live today (pre-PR)** | No `ssl/` bind mount. Certs at `/etc/nginx/ssl/default_cert.pem` and `default_key.pem` live in the container writable layer (e.g. copied in via `docker cp` / exec). Recreating nginx would lose them. Site vhosts do not set `ssl_certificate`; they use the base image defaults under `/etc/nginx/ssl/`. |
+| **After this PR** | Host `./ssl/` → container `/etc/nginx/certs:ro`. `docker/nginx-entrypoint.sh` copies `fullchain.pem`+`privkey.pem` **or** `default_cert.pem`+`default_key.pem` into `/etc/nginx/ssl/` before `nginx` starts. Vhosts still use the same effective paths (`/etc/nginx/ssl/default_*`). Empty `ssl/` on a fresh laptop still gets a one-off self-signed generate inside the container. |
+| **sync-ssl.sh** | When host LE exists, writes `ssl/fullchain.pem` and `ssl/privkey.pem` (never committed). |
+
+Certificates also live on the droplet under `/etc/letsencrypt/live/<name>/`. The container does **not** read `/etc/letsencrypt` directly.
+
+| File in `ssl/` | Typical source |
+| --- | --- |
+| `fullchain.pem` | `/etc/letsencrypt/live/<name>/fullchain.pem` via `sync-ssl.sh` |
+| `privkey.pem` | `/etc/letsencrypt/live/<name>/privkey.pem` via `sync-ssl.sh` |
+| `default_cert.pem` / `default_key.pem` | `docker cp nginx:/etc/nginx/ssl/. ssl/` before first post-PR recreate (migration) |
 
 ### Sync certs into the repo before deploy
 
@@ -57,12 +68,12 @@ docker compose restart nginx
 A typical host cron hook (adjust paths to match your setup):
 
 ```bash
-0 3 * * * certbot renew --quiet && /opt/zoto-sites/scripts/sync-ssl.sh && cd /opt/zoto-sites && docker compose restart nginx
+0 3 * * * certbot renew --quiet && /home/andrewv/git/zoto-sites/scripts/sync-ssl.sh && cd /home/andrewv/git/zoto-sites && docker compose restart nginx
 ```
 
 ### Local development
 
-Leave `ssl/` empty. `krewh/hardened-nginx` generates a **self-signed** certificate — fine for `curl -k` testing only.
+Leave `ssl/` empty (only `ssl/.gitkeep`). The entrypoint generates a **self-signed** cert under `/etc/nginx/ssl/` — fine for `curl -k` testing only.
 
 ### Greenfield droplet only
 
@@ -153,14 +164,14 @@ chmod 600 backends/botz.ai/.env backends/discord/.env
 
 ## Persistent data
 
-Host paths below are **relative to the git checkout** (usually `/opt/zoto-sites`). They are listed in `deploy/persistent-data.txt`. **Backups are handled outside this repository** (your own snapshot/backup process). `scripts/deploy-safe.sh` guarantees deploys will not overwrite, delete, or orphan these paths: it refuses mount regressions, dirty trees, and any drop in editorial cache file counts.
+Host paths below are **relative to the git checkout** (`/home/andrewv/git/zoto-sites` on the live droplet). They are listed in `deploy/persistent-data.txt`. **Backups are handled outside this repository** (your own snapshot/backup process). `scripts/deploy-safe.sh` guarantees deploys will not overwrite, delete, or orphan these paths: it refuses mount regressions, dirty trees, and any drop in editorial cache file counts.
 
 | Host path | Container path | Writer | Criticality |
 | --- | --- | --- | --- |
 | `backends/botz.ai/cache/` | botz: `/home/root/cache`; nginx: `/usr/share/nginx/html/botz.ai/cache` (read-only) | botz API | **Critical** — ~21k+ editorial JSON + PNG archive |
 | `backends/botz.ai/.env` | (env_file) | operator | **Critical** — API keys, `SHARED_SECRET`, optional `CACHE_DIR` |
 | `backends/discord/.env` | (env_file) | operator | **Critical** — Discord token and shared secret |
-| `ssl/` | nginx: `/etc/nginx/certs` (read-only) | `scripts/sync-ssl.sh` from host LE | Derived — regenerable from `/etc/letsencrypt` |
+| `ssl/` | nginx: `/etc/nginx/certs` (read-only) → copied to `/etc/nginx/ssl` at start | `sync-ssl.sh`, or migration `docker cp` from nginx | **Critical for recreate** — also regenerable from LE or copied from old container layer |
 
 Compose bind-mount sources allowed by policy: `./backends/botz.ai/cache`, `${SSL_CERT_DIR:-./ssl}` → `/etc/nginx/certs`. There are **no** named Docker volumes.
 
@@ -173,11 +184,7 @@ Compose bind-mount sources allowed by policy: `./backends/botz.ai/cache`, `${SSL
 - `docker volume rm` / `docker volume prune`
 - `rm -rf backends/botz.ai/cache` (or other manifest paths)
 
-### Origin TLS note (main branch)
-
-`scripts/sync-ssl.sh` copies Let's Encrypt material into `ssl/fullchain.pem` and `ssl/privkey.pem`, and compose mounts `ssl/` at `/etc/nginx/certs`. **No generated vhost references those files yet** — nginx still serves the per-start self-signed cert from `/etc/nginx/ssl` inside `krewh/hardened-nginx`. Wiring LE certs into vhosts is a separate change.
-
-### FIRST-DEPLOY checklist (24a283e-era droplet → current `main`)
+### FIRST-DEPLOY checklist (live droplet → this PR)
 
 Run on the droplet **before** the first deploy that uses `deploy-safe.sh`. The GitHub Actions deploy job runs `git fetch` then `bash scripts/deploy-safe.sh` from the **current** checkout; the first time this lands, ensure `scripts/deploy-safe.sh` exists (merge this PR, or copy the script and manifest from `main` once manually).
 
@@ -198,29 +205,37 @@ Run on the droplet **before** the first deploy that uses `deploy-safe.sh`. The G
    ```bash
    docker cp botz:/var/lib/cache/. backends/botz.ai/cache/
    ```
-3. Confirm checkout path matches `DEPLOY_PATH` (e.g. `/opt/zoto-sites`).
-4. `git status` clean; no untracked files that would collide with incoming tracked paths; note `git log -1`.
-5. Count cache files; confirm your **external backup** is current:
+3. Confirm checkout path matches `DEPLOY_PATH`: **`/home/andrewv/git/zoto-sites`** (compose `working_dir` on nginx/botz/discord must match).
+4. **Migrate nginx TLS off the container layer** (required before the first recreate). Production certs today are only inside the running `nginx` container under `/etc/nginx/ssl/`. Copy them to the host mount source (gitignored), then fix permissions — `deploy-safe.sh` refuses to deploy while `nginx` is running if `ssl/` has no cert/key pair:
+   ```bash
+   cd /home/andrewv/git/zoto-sites
+   docker cp nginx:/etc/nginx/ssl/. ssl/
+   chmod 644 ssl/default_cert.pem
+   chmod 600 ssl/default_key.pem
+   ```
+   Alternatively, after `sudo ./scripts/sync-ssl.sh` if host LE paths exist (`fullchain.pem` + `privkey.pem`).
+5. Confirm your **external backup** is current; count cache files:
    ```bash
    find backends/botz.ai/cache -maxdepth 1 -name '*.json' | wc -l
    ```
-6. Ensure `backends/botz.ai/node_modules` and `backends/discord/node_modules` exist (Dockerfiles `COPY` them).
-7. `docker compose version` (v2).
-8. Deploy: `./scripts/deploy.sh` or GitHub Actions; verify cache file counts unchanged and https://botz.ai/archive loads.
+6. `git status` clean; no untracked files that would collide with incoming tracked paths; note `git log -1`.
+7. Ensure `backends/botz.ai/node_modules` and `backends/discord/node_modules` exist (Dockerfiles `COPY` them).
+8. `docker compose version` (v2).
+9. Deploy: `./scripts/deploy.sh` or GitHub Actions; verify cache file counts unchanged and https://botz.ai/archive loads.
 
 ## Deploy and update
 
 On the droplet as `deploy`:
 
 ```bash
-cd /opt/zoto-sites
+cd /home/andrewv/git/zoto-sites
 ./scripts/deploy.sh
 ```
 
 From your laptop (SSH to droplet IP — not the Cloudflare edge IP):
 
 ```bash
-DEPLOY_PATH=/opt/zoto-sites ./scripts/deploy.sh deploy@YOUR_DROPLET_IP
+DEPLOY_PATH=/home/andrewv/git/zoto-sites ./scripts/deploy.sh deploy@YOUR_DROPLET_IP
 ```
 
 Each deploy runs `scripts/deploy-safe.sh`:
@@ -263,7 +278,7 @@ Use bootstrap only for disaster recovery or a second environment. After bootstra
 | `DEPLOY_HOST` | Droplet **origin** IP or SSH hostname (not a Cloudflare edge IP) |
 | `DEPLOY_USER` | `deploy` |
 | `DEPLOY_SSH_KEY` | Private key matching `authorized_keys` on the droplet |
-| `DEPLOY_PATH` | `/opt/zoto-sites` |
+| `DEPLOY_PATH` | `/home/andrewv/git/zoto-sites` |
 
 ## Troubleshooting
 

@@ -11,7 +11,7 @@ Usage:
   ./scripts/deploy.sh <ssh-target> # deploy over SSH (e.g. deploy@203.0.113.10)
 
 Environment (for remote deploy):
-  DEPLOY_PATH   App directory on the remote host (default: /opt/zoto-sites)
+  DEPLOY_PATH   App directory on the remote host (default: /home/andrewv/git/zoto-sites)
   DEPLOY_BRANCH Git branch to deploy (default: main)
 
 Local / on-droplet deploy runs scripts/deploy-safe.sh (guards, ff-only pull, compose).
@@ -29,7 +29,7 @@ if [[ $# -eq 0 ]]; then
 fi
 
 TARGET="$1"
-REMOTE_PATH="${DEPLOY_PATH:-/opt/zoto-sites}"
+REMOTE_PATH="${DEPLOY_PATH:-/home/andrewv/git/zoto-sites}"
 REMOTE_BRANCH="${DEPLOY_BRANCH:-main}"
 
 echo "Deploying to ${TARGET}:${REMOTE_PATH} (branch ${REMOTE_BRANCH})..."

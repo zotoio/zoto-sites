@@ -225,6 +225,42 @@ console.log(cacheDir);
 echo "Checking compose mounts against running containers..."
 compare_mounts_preflight
 
+resolve_ssl_dir() {
+  local ssl="${SSL_CERT_DIR:-./ssl}"
+  if [[ "$ssl" != /* ]]; then
+    echo "${ROOT}/${ssl#./}"
+  else
+    echo "$ssl"
+  fi
+}
+
+host_ssl_material_present() {
+  local d="$1"
+  if [[ -s "${d}/fullchain.pem" && -s "${d}/privkey.pem" ]]; then
+    return 0
+  fi
+  if [[ -s "${d}/default_cert.pem" && -s "${d}/default_key.pem" ]]; then
+    return 0
+  fi
+  return 1
+}
+
+# If nginx is already running, the next deploy may recreate it; refuse without host TLS files.
+assert_nginx_host_tls_before_recreate() {
+  if ! docker inspect nginx >/dev/null 2>&1; then
+    return 0
+  fi
+  local d
+  d="$(resolve_ssl_dir)"
+  if host_ssl_material_present "$d"; then
+    echo "Host TLS material present in ${d}"
+    return 0
+  fi
+  die "nginx is running but ${d} has no non-empty cert/key pair (fullchain.pem+privkey.pem or default_cert.pem+default_key.pem). Copy from the running container before recreate — see docs/DEPLOYMENT.md (docker cp nginx:/etc/nginx/ssl/. …). deploy-safe does not write ssl/."
+}
+
+assert_nginx_host_tls_before_recreate
+
 # --- (b) Record pre-deploy counts and data guards ---
 record_data_counts
 for p in "${DATA_PATHS[@]}"; do
@@ -248,6 +284,8 @@ assert_data_guards "post-pull"
 # --- (d) Build and start ---
 echo "Syncing host Let's Encrypt certs (if present)..."
 bash scripts/sync-ssl.sh
+
+assert_nginx_host_tls_before_recreate
 
 if command -v node >/dev/null 2>&1; then
   node scripts/generate-nginx.js

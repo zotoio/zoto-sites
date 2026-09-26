@@ -8,7 +8,7 @@ backends/botz.ai/cache
 backends/botz.ai/.env
 backends/discord/.env
 
-# DERIVED — synced from host Let's Encrypt via scripts/sync-ssl.sh.
+# DERIVED — origin TLS for nginx recreate (sync-ssl.sh and/or docker cp from nginx:/etc/nginx/ssl/.). Never commit.
 ssl
 
 # ALLOWED_COMPOSE_BIND_SOURCES — host paths that may appear as bind-mount sources in docker-compose.yml.

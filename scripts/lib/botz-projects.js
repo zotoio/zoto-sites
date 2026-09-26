@@ -185,8 +185,32 @@ function validateProject(name, manifest) {
   return errors;
 }
 
+function discoverSiteProxyUpstreamHosts() {
+  const sitesDir = path.join(ROOT, 'sites');
+  const hosts = new Set();
+  if (!fs.existsSync(sitesDir)) {
+    return hosts;
+  }
+  for (const file of fs.readdirSync(sitesDir).filter((f) => f.endsWith('.json'))) {
+    const site = JSON.parse(fs.readFileSync(path.join(sitesDir, file), 'utf8'));
+    for (const proxy of site.proxies || []) {
+      const upstream = proxy?.upstream;
+      if (!upstream || typeof upstream !== 'string') continue;
+      try {
+        hosts.add(new URL(upstream).hostname);
+      } catch {
+        throw new Error(`${file}: invalid proxy.upstream URL: ${upstream}`);
+      }
+    }
+  }
+  return hosts;
+}
+
 function discoverProxyUpstreamHosts() {
   const hosts = new Set(['botz']);
+  for (const h of discoverSiteProxyUpstreamHosts()) {
+    hosts.add(h);
+  }
   for (const project of discoverBotzProjects()) {
     if (!project.enabled || project.manifest.type !== 'proxy') {
       continue;
@@ -255,6 +279,7 @@ module.exports = {
   HTTP_FIELD_NAME_RE,
   validateDnsLabel,
   discoverBotzProjects,
+  discoverSiteProxyUpstreamHosts,
   discoverProxyUpstreamHosts,
   loadManifest,
   validateProject,

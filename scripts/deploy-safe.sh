@@ -192,7 +192,7 @@ compare_mounts_preflight() {
   local cwd_real
   cwd_real="$(realpath "$ROOT")"
 
-  for c in nginx botz discord; do
+  for c in nginx botz discord today; do
     if ! docker inspect "$c" >/dev/null 2>&1; then
       continue
     fi
@@ -328,7 +328,7 @@ done
 
 echo "Waiting ~20s for containers to settle..."
 sleep 20
-for c in nginx botz discord; do
+for c in nginx botz discord today; do
   status="$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null || echo missing)"
   restarting="$(docker inspect -f '{{.State.Restarting}}' "$c" 2>/dev/null || echo true)"
   if [[ "$status" != "running" ]] || [[ "$restarting" == "true" ]]; then

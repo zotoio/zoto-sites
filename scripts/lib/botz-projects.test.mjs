@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseSimpleYaml, HTTP_FIELD_NAME_RE } from './botz-projects.js';
+import { parseSimpleYaml, HTTP_FIELD_NAME_RE, discoverProxyUpstreamHosts } from './botz-projects.js';
 
 test('parseSimpleYaml reads hyphenated HTTP header field names', () => {
   const doc = parseSimpleYaml(`
@@ -16,4 +16,10 @@ headers:
 test('HTTP_FIELD_NAME_RE accepts common header names', () => {
   assert.ok(HTTP_FIELD_NAME_RE.test('X-Frame-Options'));
   assert.ok(HTTP_FIELD_NAME_RE.test('Cache-Control'));
+});
+
+test('discoverProxyUpstreamHosts includes site manifest upstreams', () => {
+  const hosts = discoverProxyUpstreamHosts();
+  assert.ok(hosts.includes('botz'));
+  assert.ok(hosts.includes('today'));
 });

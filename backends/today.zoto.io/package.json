@@ -1,0 +1,19 @@
+{
+  "name": "today-zoto-io",
+  "type": "module",
+  "dependencies": {
+    "axios": "^1.8.4",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.0.0"
+  },
+  "devDependencies": {
+    "kill-port": "2.0.1",
+    "nodemon": "^3.1.9"
+  },
+  "scripts": {
+    "start:dev": "kill-port 3001 && nodemon index.js",
+    "test": "node --test test/*.test.mjs"
+  }
+}

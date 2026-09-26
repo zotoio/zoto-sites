@@ -15,6 +15,9 @@ jobs:
         with:
           node-version: "18"
 
+      - name: today.zoto.io API tests
+        run: yarn --cwd backends/today.zoto.io test
+
       - name: Verify nginx configs match sites manifest
         run: node scripts/generate-nginx.js --check
 

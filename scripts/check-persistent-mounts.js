@@ -29,14 +29,16 @@ function readManifest() {
 }
 
 function ensureDummyEnvFiles() {
-  for (const rel of ['backends/botz.ai/.env', 'backends/discord/.env']) {
+  const specs = [
+    ['backends/botz.ai/.env', 'OPENAI_API_KEY=x\nNEWS_API_KEY=x\nSHARED_SECRET=x\n'],
+    ['backends/discord/.env', 'DISCORD_TOKEN=x\nDISCORD_APPLICATION_ID=x\n'],
+    ['backends/today.zoto.io/.env', 'PORT=3001\n'],
+  ];
+  for (const [rel, content] of specs) {
     const p = path.join(root, rel);
     if (!fs.existsSync(p)) {
       fs.mkdirSync(path.dirname(p), { recursive: true });
-      fs.writeFileSync(
-        p,
-        'OPENAI_API_KEY=x\nNEWS_API_KEY=x\nSHARED_SECRET=x\nDISCORD_TOKEN=x\nDISCORD_APPLICATION_ID=x\n'
-      );
+      fs.writeFileSync(p, content);
     }
   }
 }

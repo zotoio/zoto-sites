@@ -37,6 +37,10 @@ If a project service bind-mounts host paths, add each path to `deploy/persistent
 
 The botz editorial archive at `backends/botz.ai/cache` is guarded separately — never remove or weaken that entry.
 
+## today.zoto.io
+
+`compose/projects/today.yml` runs the today API on port 3001 (internal). Copy `backends/today.zoto.io/.env.example` to `.env` if you need optional webcam/traffic keys; **news uses Hacker News (Algolia) and needs no API key.**
+
 ## Internal networking
 
 - Service name in `proxy.upstream` must match the Compose service name (e.g. `http://myapp:8080`).

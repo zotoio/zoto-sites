@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="96" viewBox="0 0 128 96" role="img" aria-label="Hacker News">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff6600"/>
+      <stop offset="55%" stop-color="#ea580c"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="96" rx="10" fill="url(#g)"/>
+  <text x="64" y="58" text-anchor="middle" fill="#fff7ed" font-family="system-ui,sans-serif" font-size="28" font-weight="700">Y</text>
+</svg>

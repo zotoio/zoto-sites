@@ -1,0 +1,12 @@
+services:
+  today:
+    build: ./backends/today.zoto.io
+    restart: unless-stopped
+    container_name: today
+    env_file:
+      - path: ./backends/today.zoto.io/.env
+        required: false
+    environment:
+      PORT: 3001
+    expose:
+      - "3001"

@@ -192,7 +192,7 @@ compare_mounts_preflight() {
   local cwd_real
   cwd_real="$(realpath "$ROOT")"
 
-  for c in nginx botz discord; do
+  for c in nginx botz discord today; do
     if ! docker inspect "$c" >/dev/null 2>&1; then
       continue
     fi
@@ -278,6 +278,11 @@ assert_host_ssl_dir_consistent() {
 
 assert_host_ssl_dir_consistent "$(resolve_ssl_dir)"
 
+TODAY_ENV="${ROOT}/backends/today.zoto.io/.env"
+if [[ ! -f "$TODAY_ENV" ]]; then
+  echo "Note: $TODAY_ENV missing — optional today keys unset; nginx and other sites are unaffected."
+fi
+
 # OpenAI usage logs (not editorial archive; not guarded as DATA).
 mkdir -p "${ROOT}/backends/botz.ai/usage"
 
@@ -329,6 +334,10 @@ for p in "${DATA_PATHS[@]}"; do
   fi
 done
 
+warn_container() {
+  echo "deploy-safe: warning: $*" >&2
+}
+
 echo "Waiting ~20s for containers to settle..."
 sleep 20
 for c in nginx botz discord; do
@@ -336,6 +345,14 @@ for c in nginx botz discord; do
   restarting="$(docker inspect -f '{{.State.Restarting}}' "$c" 2>/dev/null || echo true)"
   if [[ "$status" != "running" ]] || [[ "$restarting" == "true" ]]; then
     die "container $c not healthy (status=$status restarting=$restarting)"
+  fi
+done
+
+for c in today; do
+  status="$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null || echo missing)"
+  restarting="$(docker inspect -f '{{.State.Restarting}}' "$c" 2>/dev/null || echo true)"
+  if [[ "$status" != "running" ]] || [[ "$restarting" == "true" ]]; then
+    warn_container "optional container $c not healthy (status=$status restarting=$restarting) — other sites remain up"
   fi
 done
 

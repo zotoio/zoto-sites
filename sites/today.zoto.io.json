@@ -1,0 +1,7 @@
+{
+  "id": "today.zoto.io",
+  "domains": ["today.zoto.io"],
+  "proxies": [
+    { "path": "/api/", "upstream": "http://today:3001", "dynamic_dns": true }
+  ]
+}

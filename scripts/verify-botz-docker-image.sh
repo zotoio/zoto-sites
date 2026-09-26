@@ -4,7 +4,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-IMAGE="${BOTZ_DOCKER_VERIFY_IMAGE:-zoto-botz-docker-verify:ci}"
+IMAGE="${BOTZ_DOCKER_VERIFY_IMAGE:-zoto-botz-ci-verify:ci}"
+
+# Dockerfile COPYs host node_modules (same as production deploy on the droplet).
+yarn --cwd "$ROOT/backends/botz.ai" install --frozen-lockfile --production
 
 docker build -t "$IMAGE" "$ROOT/backends/botz.ai"
 

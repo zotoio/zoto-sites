@@ -1,4 +1,4 @@
-import { WIDGET_CATALOG, allWidgetTypes, createLayoutEntry } from './widget-registry.js';
+import { WIDGET_CATALOG, WIDGET_CATEGORIES, allWidgetTypes, createLayoutEntry, getSettingsFields } from './widget-registry.js';
 import {
   applyGridNodes,
   clearLayout,
@@ -14,8 +14,8 @@ const MOBILE_MQ = window.matchMedia('(max-width: 768px)');
  * @param {object} ctx
  * @param {(open: boolean) => void} [onLibraryToggle]
  */
-export function initWidgetCanvas(ctx, onLibraryToggle) {
-  let layout = loadLayout();
+export function initWidgetCanvas(ctx, options = {}) {
+  let layout = options.initialLayout || loadLayout();
   /** @type {Map<string, { resize: Function, destroy: Function }>} */
   const instances = new Map();
 
@@ -46,32 +46,60 @@ export function initWidgetCanvas(ctx, onLibraryToggle) {
     return new Set(layout.widgets.map((w) => w.type));
   }
 
+  const onLibraryToggle = options.onLibraryToggle;
+  const librarySearch = document.getElementById('widget-library-search');
+
   function refreshLibrary() {
     const active = activeTypes();
+    const q = (librarySearch?.value || '').trim().toLowerCase();
     libraryList.innerHTML = '';
-    for (const type of allWidgetTypes()) {
-      if (active.has(type)) continue;
-      const def = WIDGET_CATALOG[type];
-      const li = document.createElement('li');
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'library-add';
-      btn.textContent = def.title;
-      btn.title = def.description;
-      btn.addEventListener('click', () => {
-        addWidget(type);
-        refreshLibrary();
-        libraryEl.hidden = true;
-        onLibraryToggle?.(false);
+    for (const cat of WIDGET_CATEGORIES) {
+      const types = allWidgetTypes().filter((type) => {
+        if (active.has(type)) return false;
+        if (WIDGET_CATALOG[type].category !== cat.id) return false;
+        if (!q) return true;
+        const meta = WIDGET_CATALOG[type];
+        return `${meta.title} ${meta.description}`.toLowerCase().includes(q);
       });
-      li.appendChild(btn);
-      li.appendChild(document.createTextNode(` — ${def.description}`));
-      libraryList.appendChild(li);
+      if (!types.length) continue;
+      const section = document.createElement('li');
+      section.className = 'library-category';
+      section.innerHTML = `<h3 class="library-cat-title">${cat.title}</h3>`;
+      const ul = document.createElement('ul');
+      ul.className = 'library-category-list';
+      for (const type of types) {
+        const def = WIDGET_CATALOG[type];
+        const li = document.createElement('li');
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'library-add';
+        btn.textContent = def.title;
+        btn.title = def.description;
+        btn.addEventListener('click', () => {
+          addWidget(type);
+          refreshLibrary();
+          libraryEl.hidden = true;
+          document.getElementById('add-widget-btn').setAttribute('aria-expanded', 'false');
+          onLibraryToggle?.(false);
+        });
+        li.appendChild(btn);
+        li.appendChild(document.createTextNode(` — ${def.description}`));
+        ul.appendChild(li);
+      }
+      section.appendChild(ul);
+      libraryList.appendChild(section);
     }
   }
 
-  function mountInstance(type, body, settings) {
-    const api = mountWidget(type, body, ctx, settings);
+  async function mountInstance(type, body, settings) {
+    const onSettings = (next) => {
+      const entry = layout.widgets.find((w) => w.type === type);
+      if (entry) entry.settings = next;
+      persist();
+      mountInstance(type, body, next);
+    };
+    instances.get(type)?.destroy?.();
+    const api = await mountWidget(type, body, ctx, settings, onSettings);
     instances.set(type, api);
   }
 
@@ -89,6 +117,10 @@ export function initWidgetCanvas(ctx, onLibraryToggle) {
 
     const content = document.createElement('div');
     content.className = 'grid-stack-item-content widget';
+    const settingsBtn =
+      getSettingsFields(entry.type).length > 0
+        ? `<button type="button" class="widget-settings" aria-label="Settings for ${def.title}">⚙</button>`
+        : '';
     content.innerHTML = `
       <header class="widget-head">
         <button type="button" class="widget-drag-handle" aria-label="Move ${def.title} widget">
@@ -96,6 +128,7 @@ export function initWidgetCanvas(ctx, onLibraryToggle) {
           <span class="widget-title">${def.title}</span>
         </button>
         <div class="widget-actions">
+          ${settingsBtn}
           <button type="button" class="widget-remove" aria-label="Remove ${def.title} widget">×</button>
         </div>
       </header>
@@ -136,7 +169,7 @@ export function initWidgetCanvas(ctx, onLibraryToggle) {
       minW: def.minW,
       minH: def.minH,
     });
-    mountInstance(type, el.querySelector('.widget-body'), entry.settings || {});
+    void mountInstance(type, el.querySelector('.widget-body'), entry.settings || {});
     persist();
   }
 
@@ -149,7 +182,7 @@ export function initWidgetCanvas(ctx, onLibraryToggle) {
     persist();
   }
 
-  function loadFromLayout() {
+  async function loadFromLayout() {
     grid.removeAll(true);
     instances.forEach((api) => api.destroy?.());
     instances.clear();
@@ -168,7 +201,7 @@ export function initWidgetCanvas(ctx, onLibraryToggle) {
         minW: def.minW,
         minH: def.minH,
       });
-      mountInstance(entry.type, el.querySelector('.widget-body'), entry.settings || {});
+      await mountInstance(entry.type, el.querySelector('.widget-body'), entry.settings || {});
     }
   }
 
@@ -188,10 +221,11 @@ export function initWidgetCanvas(ctx, onLibraryToggle) {
     if (id) instances.get(id)?.resize?.();
   });
 
-  loadFromLayout();
+  void loadFromLayout();
   refreshLibrary();
   applyResponsive();
   MOBILE_MQ.addEventListener('change', applyResponsive);
+  librarySearch?.addEventListener('input', refreshLibrary);
 
   document.getElementById('add-widget-btn').addEventListener('click', () => {
     const btn = document.getElementById('add-widget-btn');
@@ -205,7 +239,7 @@ export function initWidgetCanvas(ctx, onLibraryToggle) {
   document.getElementById('reset-layout-btn').addEventListener('click', () => {
     clearLayout();
     layout = defaultLayout();
-    loadFromLayout();
+    void loadFromLayout();
     refreshLibrary();
   });
 

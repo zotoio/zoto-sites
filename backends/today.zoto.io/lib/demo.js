@@ -59,6 +59,7 @@ export function demoWeather() {
       weather_code: 2,
       precipitation: 0,
       wind_speed_10m: 14,
+      wind_direction_10m: 270,
       uv_index: 4.2,
     },
     hourly: {
@@ -80,7 +81,7 @@ export function demoWeather() {
   };
 }
 
-export function demoNews() {
+export function demoNews(topic = 'top') {
   const items = [
     {
       title: 'Demo: Regional outlook highlights calm conditions',
@@ -153,7 +154,7 @@ export function demoNews() {
       published_at: new Date(Date.now() - 32400000).toISOString(),
     },
   ];
-  return { source: 'demo', locale: 'us', articles: items };
+  return { source: 'demo', locale: 'us', topic, articles: items };
 }
 
 export function demoAirQuality() {
@@ -177,6 +178,106 @@ export function demoAirQuality() {
     },
     hourly: { time: hourlyTime, uv_index: uv },
     pollen: { grass: 2, tree: 1, weed: 0, label: 'Low (demo estimate)' },
+  };
+}
+
+export function demoHolidays(country = 'US') {
+  return {
+    source: 'demo',
+    country,
+    year: new Date().getFullYear(),
+    holidays: [
+      { date: `${new Date().getFullYear()}-01-01`, localName: 'New Year (demo)', name: 'New Year' },
+      { date: `${new Date().getFullYear()}-07-04`, localName: 'Independence Day (demo)', name: 'Independence Day' },
+      { date: `${new Date().getFullYear()}-12-25`, localName: 'Christmas (demo)', name: 'Christmas' },
+    ],
+  };
+}
+
+export function demoWikiNearby() {
+  return {
+    source: 'demo',
+    places: [
+      { title: 'Demo: Golden Gate Bridge', distanceM: 4200 },
+      { title: 'Demo: Ferry Building', distanceM: 1800 },
+    ],
+  };
+}
+
+export function demoOnThisDay() {
+  return {
+    source: 'demo',
+    events: [{ year: 1906, text: 'Demo: Great earthquake remembered in regional history' }],
+  };
+}
+
+export function demoCountry() {
+  return {
+    source: 'demo',
+    name: 'United States (demo)',
+    capital: 'Washington, D.C.',
+    population: 331000000,
+    region: 'Americas',
+    languages: 'English',
+    currencies: 'USD',
+    flag: '🇺🇸',
+  };
+}
+
+export function demoCurrency() {
+  return { source: 'demo', base: 'USD', target: 'EUR', rate: 0.91, date: new Date().toISOString().slice(0, 10) };
+}
+
+export function demoIss() {
+  return {
+    source: 'demo',
+    lat: 37.5,
+    lon: -122.2,
+    altitude: 420,
+    velocity: 27600,
+    visibility: 'daylight',
+  };
+}
+
+export function demoEarthquakes() {
+  return {
+    source: 'demo',
+    earthquakes: [{ mag: 2.8, place: 'Demo Bay Area', distKm: 42, time: Date.now() }],
+  };
+}
+
+export function demoMarine() {
+  return {
+    source: 'demo',
+    hourly: { wave_height: [1.2], sea_surface_temperature: [14.5] },
+  };
+}
+
+export function demoCommons() {
+  return {
+    source: 'demo',
+    photos: [
+      {
+        title: 'Demo: San Francisco skyline',
+        thumb: 'https://images.unsplash.com/photo-1501594907352-04cda38ebc29?w=400&q=60',
+        url: 'https://example.com/demo-photo',
+        artist: 'Demo',
+      },
+    ],
+  };
+}
+
+export function demoBikes() {
+  return {
+    source: 'demo',
+    stations: [{ name: 'Demo Station A', freeBikes: 4, network: 'Demo Bikes' }],
+  };
+}
+
+export function demoChargers() {
+  return {
+    source: 'demo',
+    stations: [{ name: 'Demo EV Hub', amenity: 'charging_station' }],
   };
 }
 

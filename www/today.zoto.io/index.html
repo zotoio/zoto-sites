@@ -25,7 +25,8 @@
       <aside id="widget-library" class="widget-library" hidden aria-label="Widget library">
         <header class="library-head">
           <h2>Add a widget</h2>
-          <p class="library-help">Removed widgets reappear here. Drag headers to move; resize from corners.</p>
+          <input type="search" id="widget-library-search" class="library-search" placeholder="Search widgets…" aria-label="Search widget library" />
+          <p class="library-help">Grouped by category. Removed widgets reappear here.</p>
         </header>
         <ul id="widget-library-list" class="library-list"></ul>
       </aside>
@@ -34,9 +35,13 @@
 
       <footer class="foot">
         <p>
-          Imagery © Esri, Maxar · Weather &amp; air quality via
+          Imagery © Esri, Maxar · Weather, marine &amp; air quality via
           <a href="https://open-meteo.com/" rel="noopener noreferrer">Open-Meteo</a>
-          · Radar © RainViewer · Map © OpenStreetMap
+          · Holidays via <a href="https://date.nager.at/" rel="noopener">Nager.Date</a>
+          · FX via <a href="https://www.frankfurter.app/" rel="noopener">Frankfurter</a>
+          · Quakes © <a href="https://www.usgs.gov/" rel="noopener">USGS</a>
+          · ISS via <a href="https://wheretheiss.at/" rel="noopener">WhereTheISS</a>
+          · Radar © RainViewer · Wiki/Commons © Wikimedia · Map © OpenStreetMap
         </p>
         <p class="demo-hint" id="demo-hint"></p>
       </footer>

@@ -1,23 +1,48 @@
 /** @typedef {{ id: string, type: string, x: number, y: number, w: number, h: number, settings?: Record<string, unknown> }} LayoutWidget */
 
+import { createLayoutEntry } from './widget-registry.js';
+
 export const LAYOUT_SCHEMA = 1;
 export const STORAGE_KEY = 'today.zoto.io.layout.v1';
 
-/** @returns {import('./widget-registry.js').WidgetType[]} */
-export function defaultWidgetTypes() {
-  return ['location', 'weather', 'news', 'transit'];
-}
-
-/** @returns {{ schema: number, widgets: LayoutWidget[] }} */
 export function defaultLayout() {
   return {
     schema: LAYOUT_SCHEMA,
     widgets: [
-      { id: 'location', type: 'location', x: 0, y: 0, w: 12, h: 2, settings: {} },
-      { id: 'weather', type: 'weather', x: 0, y: 2, w: 7, h: 9, settings: {} },
-      { id: 'news', type: 'news', x: 7, y: 2, w: 5, h: 9, settings: { maxItems: 10 } },
-      { id: 'transit', type: 'transit', x: 0, y: 11, w: 12, h: 6, settings: {} },
+      createLayoutEntry('location', 0, 0),
+      createLayoutEntry('weather', 0, 2),
+      createLayoutEntry('news', 7, 2),
+      createLayoutEntry('transit', 0, 11),
     ],
+  };
+}
+
+/** Busy layout for demo screenshots when no saved layout exists. */
+export function demoShowcaseLayout() {
+  const types = [
+    ['location', 0, 0, 12, 2],
+    ['weather', 0, 2, 5, 7],
+    ['news-topics', 5, 2, 4, 7],
+    ['clock', 9, 2, 3, 3],
+    ['day-progress', 9, 5, 3, 2],
+    ['air-quality', 0, 9, 3, 3],
+    ['radar', 3, 9, 4, 4],
+    ['iss', 7, 9, 3, 3],
+    ['wiki-nearby', 10, 7, 2, 5],
+    ['walk-rings', 0, 12, 4, 5],
+    ['bikes', 4, 12, 4, 4],
+    ['calculator', 8, 12, 2, 4],
+    ['daily-quote', 10, 12, 2, 2],
+    ['transit', 0, 17, 12, 5],
+  ];
+  return {
+    schema: LAYOUT_SCHEMA,
+    widgets: types.map(([type, x, y, w, h]) => {
+      const e = createLayoutEntry(type, x, y);
+      e.w = w;
+      e.h = h;
+      return e;
+    }),
   };
 }
 

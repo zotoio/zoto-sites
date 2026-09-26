@@ -18,6 +18,9 @@ jobs:
       - name: today.zoto.io layout storage tests
         run: node --test www/today.zoto.io/test/layout-storage.test.mjs
 
+      - name: today.zoto.io widget registry tests
+        run: node --test www/today.zoto.io/test/widget-registry.test.mjs
+
       - name: today.zoto.io API tests
         run: yarn --cwd backends/today.zoto.io test
 

@@ -1,4 +1,5 @@
 import { fetchJson, forceDemo, setBackdrop } from './lib-ui.js';
+import { demoShowcaseLayout, loadLayout, STORAGE_KEY } from './layout-storage.js';
 import { initWidgetCanvas } from './widget-canvas.js';
 
 async function resolveLocation() {
@@ -37,7 +38,7 @@ async function resolveLocation() {
 async function bootstrap() {
   const hint = document.getElementById('demo-hint');
   if (forceDemo) {
-    hint.textContent = 'Demo mode (?demo=1) — drag widgets by the header, + to add more.';
+    hint.textContent = 'Demo mode (?demo=1) — drag widgets, + to browse the library by category.';
   }
 
   let loc;
@@ -58,18 +59,37 @@ async function bootstrap() {
     fetchJson('/api/air-quality', geo).catch(() => fetchJson('/api/air-quality', { demo: 1 })),
   ]);
 
-  initWidgetCanvas({ loc, weather, news, transit, airQuality });
+  const initialLayout =
+    forceDemo && !localStorage.getItem(STORAGE_KEY) ? demoShowcaseLayout() : loadLayout();
+
+  initWidgetCanvas(
+    {
+      loc,
+      weather,
+      news,
+      transit,
+      airQuality,
+      forceDemo,
+      fetch: (path, extra = {}) => fetchJson(path, extra),
+    },
+    { initialLayout }
+  );
 }
 
 bootstrap().catch(async () => {
   document.getElementById('demo-hint').textContent = 'Offline — loading demo layout.';
   const loc = await fetchJson('/api/location');
   setBackdrop(loc.lat, loc.lon);
-  initWidgetCanvas({
-    loc,
-    weather: await fetchJson('/api/weather', { demo: 1 }),
-    news: await fetchJson('/api/news', { demo: 1 }),
-    transit: await fetchJson('/api/transit', { demo: 1 }),
-    airQuality: await fetchJson('/api/air-quality', { demo: 1 }),
-  });
+  initWidgetCanvas(
+    {
+      loc,
+      weather: await fetchJson('/api/weather', { demo: 1 }),
+      news: await fetchJson('/api/news', { demo: 1 }),
+      transit: await fetchJson('/api/transit', { demo: 1 }),
+      airQuality: await fetchJson('/api/air-quality', { demo: 1 }),
+      forceDemo: true,
+      fetch: (path, extra = {}) => fetchJson(path, extra),
+    },
+    { initialLayout: demoShowcaseLayout() }
+  );
 });

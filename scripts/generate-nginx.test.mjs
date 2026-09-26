@@ -8,6 +8,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 test('today.zoto.io nginx vhost uses dynamic DNS upstream', () => {
   const conf = fs.readFileSync(path.join(ROOT, 'nginx-conf/today.zoto.io.conf'), 'utf8');
+  assert.match(conf, /listen 80;/);
+  assert.match(conf, /return 301 https:\/\/\$host\$request_uri;/);
   assert.match(conf, /resolver 127\.0\.0\.11/);
   assert.match(conf, /\$dynamic_upstream/);
   assert.match(conf, /@today_zoto_io_api_unavailable/);

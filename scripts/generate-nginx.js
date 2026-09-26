@@ -112,6 +112,17 @@ function renderBotzEditorialCacheBlocks() {
     }`;
 }
 
+function renderHttpToHttpsRedirect(site) {
+  const serverNames = site.domains.join(' ');
+  return `server {
+    listen 80;
+    server_name  ${serverNames};
+    return 301 https://$host$request_uri;
+}
+
+`;
+}
+
 function renderSite(site) {
   const serverNames = site.domains.join(' ');
   const proxies = site.proxies || [];
@@ -125,7 +136,7 @@ function renderSite(site) {
   const proxySection = proxyBlocks ? `\n\n${proxyBlocks}${fallbackBlock}` : '';
   const cacheBlocks = site.id === 'botz.ai' ? renderBotzEditorialCacheBlocks() : '';
 
-  return `server {
+  return `${renderHttpToHttpsRedirect(site)}server {
     listen 443 ssl;
     http2 on;
     server_name  ${serverNames};

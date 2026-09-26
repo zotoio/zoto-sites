@@ -56,17 +56,19 @@ export function formatDay(iso) {
   }
 }
 
-export function formatSunTime(iso, timeZone) {
+/**
+ * Open-Meteo daily sunrise/sunset are local clock times without an offset (e.g. 2026-09-26T06:44).
+ * Do not pass them through Date + IANA timezone — that applies the browser zone first.
+ */
+export function formatSunTime(iso, _timeZone) {
   if (!iso) return '—';
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      hour: 'numeric',
-      minute: '2-digit',
-      timeZone: timeZone || undefined,
-    }).format(new Date(iso));
-  } catch {
-    return iso.slice(11, 16);
-  }
+  const match = String(iso).match(/T(\d{1,2}):(\d{2})/);
+  if (!match) return '—';
+  const hour24 = Number(match[1]);
+  const minute = match[2];
+  const hour12 = hour24 % 12 || 12;
+  const dayPeriod = hour24 < 12 ? 'AM' : 'PM';
+  return `${hour12}:${minute} ${dayPeriod}`;
 }
 
 export function moonPhaseInfo(date = new Date()) {

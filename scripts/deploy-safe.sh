@@ -278,6 +278,9 @@ assert_host_ssl_dir_consistent() {
 
 assert_host_ssl_dir_consistent "$(resolve_ssl_dir)"
 
+# OpenAI usage logs (not editorial archive; not guarded as DATA).
+mkdir -p "${ROOT}/backends/botz.ai/usage"
+
 # --- (b) Record pre-deploy counts and data guards ---
 record_data_counts
 for p in "${DATA_PATHS[@]}"; do

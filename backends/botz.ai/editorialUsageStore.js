@@ -5,7 +5,7 @@ export function resolveUsageStoreDir(cacheDir) {
     if (process.env.USAGE_LOG_DIR) {
         return process.env.USAGE_LOG_DIR;
     }
-    return path.join(path.dirname(cacheDir), 'botz-usage');
+    return path.join(path.dirname(cacheDir), 'usage');
 }
 
 export function usageRecordPath(cacheDir, cacheKey) {

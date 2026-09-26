@@ -1,8 +1,8 @@
 import fs from 'fs';
 import path from 'path';
+import { listPublicEditorialCacheFileNames } from './cacheListing.js';
 
 const DATE_ONLY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
-const CACHE_FILE_RE = /^(\d{4}-\d{2}-\d{2})-\d{2}(-\d{13})?\.json$/;
 
 export function parseDateOnly(dateStr) {
     const match = DATE_ONLY_RE.exec(dateStr);
@@ -57,12 +57,7 @@ export function editorialCacheKeyForDate(dateStr, hour) {
 }
 
 export function listEditorialCacheJsonFiles(cacheDir) {
-    if (!fs.existsSync(cacheDir)) {
-        return [];
-    }
-    return fs
-        .readdirSync(cacheDir)
-        .filter((name) => name.endsWith('.json') && CACHE_FILE_RE.test(name));
+    return listPublicEditorialCacheFileNames(cacheDir);
 }
 
 /** True if any editorial cache JSON exists for the calendar day (any hour suffix). */

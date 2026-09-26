@@ -23,24 +23,13 @@ Proxy-type subdomain projects (`projects/botz.ai/<name>/project.yml`) reverse-pr
          - "8080"
    ```
 
-3. Merge the fragment at deploy time (pick one approach):
+3. **Deploy:** `scripts/deploy-safe.sh` and `./scripts/deploy.sh` automatically merge every `compose/projects/*.yml` fragment with `docker-compose.yml` (compose project name stays `zoto-sites`). When there are no fragments, behaviour matches a plain `docker compose up`.
 
-   **A. Multiple compose files (recommended)**
+   Manual equivalent:
 
    ```bash
-   docker compose -f docker-compose.yml -f compose/projects/myapp.yml up -d --build
+   docker compose -p zoto-sites -f docker-compose.yml -f compose/projects/myapp.yml up -d --build
    ```
-
-   Document any project-specific files in your deploy runbook or wrap in a small script.
-
-   **B. `include` in `docker-compose.yml`** (Compose v2.24+)
-
-   ```yaml
-   include:
-     - path: compose/projects/*.yml
-   ```
-
-   Only add fragments for services you actually run in production.
 
 ## Persistent data
 

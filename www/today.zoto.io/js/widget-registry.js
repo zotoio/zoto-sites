@@ -50,7 +50,7 @@ export const WIDGET_CATALOG = {
     category: 'core',
     module: 'core',
     title: 'News',
-    description: 'Top headlines for your country',
+    description: 'Top Hacker News stories with link previews',
     minW: 3,
     minH: 4,
     defaultW: 5,
@@ -172,7 +172,7 @@ export const WIDGET_CATALOG = {
   'news-topics': def({
     category: 'fun',
     title: 'Topic news',
-    description: 'Sports, tech, or business headlines',
+    description: 'Hacker News search by topic (24h)',
     defaultSettings: { topic: 'tech' },
     settingsFields: [{ name: 'topic', label: 'Topic (sports|tech|business)', default: 'tech' }],
     defaultH: 6,

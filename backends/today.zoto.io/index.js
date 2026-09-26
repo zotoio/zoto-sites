@@ -39,7 +39,7 @@ import {
 import { fetchHolidays } from './lib/holidays.js';
 import { fetchIssNow } from './lib/iss.js';
 import { fetchMarine } from './lib/marine.js';
-import { fetchTopNews } from './lib/news.js';
+import { fetchHackerNewsTop } from './lib/news.js';
 import { fetchNearbyTransit } from './lib/overpass.js';
 import { fetchNearbyTrafficCameras } from './lib/traffic-cams.js';
 import { fetchWeather } from './lib/weather.js';
@@ -48,11 +48,7 @@ import { fetchNearbyWebcams } from './lib/webcams.js';
 
 dotenv.config();
 
-const { NEWS_API_KEY, PORT = 3001 } = process.env;
-
-if (!NEWS_API_KEY) {
-  console.warn('NEWS_API_KEY is not set — /api/news will use demo data only until configured.');
-}
+const { PORT = 3001 } = process.env;
 if (!process.env.WINDY_WEBCAMS_KEY) {
   console.warn('WINDY_WEBCAMS_KEY is not set — /api/webcams uses Wikimedia/demo unless configured.');
 }
@@ -139,12 +135,11 @@ app.get('/api/news', async (req, res) => {
   if (isDemoRequest(req)) {
     return res.json(demoNews(topic));
   }
-  const locale = (req.query.locale || req.query.country || 'us').toString().toLowerCase().slice(0, 2);
-  if (!NEWS_API_KEY) {
-    return res.json(demoNews(topic));
-  }
   try {
-    const data = await fetchTopNews(NEWS_API_KEY, locale, { topic });
+    const data = await fetchHackerNewsTop({ topic });
+    if (!data.articles?.length) {
+      return res.json(demoNews(topic));
+    }
     return res.json(data);
   } catch {
     return res.json(demoNews(topic));

@@ -91,7 +91,7 @@ async function bootstrap() {
 
   const [weather, news, transit, airQuality] = await Promise.all([
     fetchJson('/api/weather', geo).catch(() => fetchJson('/api/weather', { demo: 1 })),
-    fetchJson('/api/news', { locale }).catch(() => fetchJson('/api/news', { demo: 1 })),
+    fetchJson('/api/news', { topic: 'top' }).catch(() => fetchJson('/api/news', { demo: 1, topic: 'top' })),
     fetchJson('/api/transit', geo).catch(() => fetchJson('/api/transit', { demo: 1 })),
     fetchJson('/api/air-quality', geo).catch(() => fetchJson('/api/air-quality', { demo: 1 })),
   ]);

@@ -110,6 +110,14 @@ export function drawHourlyChart(canvas, hourly) {
 
 export function renderNews(listEl, payload, maxItems = 10) {
   listEl.innerHTML = '';
+  const isDemo = payload.source === 'demo';
+  if (isDemo) {
+    const note = document.createElement('p');
+    note.className = 'demo-badge';
+    note.setAttribute('role', 'note');
+    note.textContent = payload.attribution || 'Demo sample — not live Hacker News';
+    listEl.appendChild(note);
+  }
   (payload.articles || []).slice(0, maxItems).forEach((a) => {
     const li = document.createElement('li');
     li.className = 'news-item';
@@ -123,14 +131,14 @@ export function renderNews(listEl, payload, maxItems = 10) {
       thumb.src = a.image_url;
       thumb.onerror = () => {
         const ph = document.createElement('div');
-        ph.className = 'news-thumb placeholder';
-        ph.textContent = a.source || 'News';
+        ph.className = 'news-thumb placeholder hn-placeholder';
+        ph.textContent = isDemo ? 'Demo' : 'HN';
         thumb.replaceWith(ph);
       };
     } else {
       thumb = document.createElement('div');
-      thumb.className = 'news-thumb placeholder';
-      thumb.textContent = (a.source || 'News').slice(0, 12);
+      thumb.className = 'news-thumb placeholder hn-placeholder';
+      thumb.textContent = isDemo ? 'Demo' : 'HN';
     }
 
     const body = document.createElement('div');
@@ -139,10 +147,24 @@ export function renderNews(listEl, payload, maxItems = 10) {
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
     link.textContent = a.title;
+    body.appendChild(link);
+    if (a.description) {
+      const desc = document.createElement('p');
+      desc.className = 'news-desc';
+      desc.textContent = a.description;
+      body.appendChild(desc);
+    }
     const meta = document.createElement('p');
     meta.className = 'news-meta';
-    meta.textContent = `${a.source || 'Source'} · ${new Date(a.published_at).toLocaleString()}`;
-    body.appendChild(link);
+    const parts = [];
+    if (a.points != null) parts.push(`${a.points} pts`);
+    if (a.num_comments != null) parts.push(`${a.num_comments} comments`);
+    if (a.hn_url) {
+      const prefix = parts.length ? `${parts.join(' · ')} · ` : '';
+      meta.innerHTML = `${prefix}<a href="${a.hn_url}" target="_blank" rel="noopener noreferrer">HN discussion</a>`;
+    } else {
+      meta.textContent = parts.join(' · ');
+    }
     body.appendChild(meta);
 
     li.appendChild(thumb);

@@ -49,4 +49,5 @@ Fresh `/editorials` generation calls NewsAPI and OpenAI. For UI/API wiring tests
 ### Other sites
 
 - `yarn start:zoto:dev` — zoto frontend works; backend entrypoint is missing.
+- `yarn start:today:dev` — today.zoto.io UI + API; news via Hacker News Algolia (no `NEWS_API_KEY`). Copy `backends/today.zoto.io/.env.example` to `.env` for optional camera keys only.
 - Static demos: serve `www/halt.sh`, `www/k8s.com.au`, etc. with any static file server.

@@ -453,7 +453,7 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
     }
     case 'news-topics': {
       const topic = settings.topic || 'tech';
-      const data = await fetch('/api/news', { locale: loc.countryCode, topic });
+      const data = await fetch('/api/news', { topic });
       body.innerHTML = demoBadge(data.source) + '<ul class="news-list"></ul>';
       renderNews(body.querySelector('.news-list'), data, 8);
       return { resize() {}, destroy() {} };

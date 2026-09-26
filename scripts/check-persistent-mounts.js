@@ -32,7 +32,7 @@ function ensureDummyEnvFiles() {
   const specs = [
     ['backends/botz.ai/.env', 'OPENAI_API_KEY=x\nNEWS_API_KEY=x\nSHARED_SECRET=x\n'],
     ['backends/discord/.env', 'DISCORD_TOKEN=x\nDISCORD_APPLICATION_ID=x\n'],
-    ['backends/today.zoto.io/.env', 'NEWS_API_KEY=x\nPORT=3001\n'],
+    ['backends/today.zoto.io/.env', 'PORT=3001\n'],
   ];
   for (const [rel, content] of specs) {
     const p = path.join(root, rel);

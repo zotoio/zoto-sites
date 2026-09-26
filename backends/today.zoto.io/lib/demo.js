@@ -82,79 +82,74 @@ export function demoWeather() {
 }
 
 export function demoNews(topic = 'top') {
-  const items = [
+  const baseItems = [
     {
       title: 'Demo: Regional outlook highlights calm conditions',
       url: 'https://example.com/demo/1',
       image_url: '',
-      source: 'Demo Wire',
-      published_at: new Date().toISOString(),
     },
     {
       title: 'Demo: Transit agency previews weekend service',
       url: 'https://example.com/demo/2',
       image_url: 'https://images.unsplash.com/photo-1449824913935-59a10b8d2000?w=400&q=60',
-      source: 'Demo Herald',
-      published_at: new Date(Date.now() - 3600000).toISOString(),
     },
     {
       title: 'Demo: City council approves waterfront upgrades',
       url: 'https://example.com/demo/3',
       image_url: 'https://images.unsplash.com/photo-1501594907352-04cda38ebc29?w=400&q=60',
-      source: 'Demo Post',
-      published_at: new Date(Date.now() - 7200000).toISOString(),
     },
     {
       title: 'Demo: Tech campus expansion moves ahead',
       url: 'https://example.com/demo/4',
       image_url: '',
-      source: 'Demo Journal',
-      published_at: new Date(Date.now() - 10800000).toISOString(),
     },
     {
       title: 'Demo: Farmers market returns to the plaza',
       url: 'https://example.com/demo/5',
       image_url: 'https://images.unsplash.com/photo-1488459716781-31db52582fe9?w=400&q=60',
-      source: 'Demo Times',
-      published_at: new Date(Date.now() - 14400000).toISOString(),
     },
     {
       title: 'Demo: Coastal fog gives way to afternoon sun',
       url: 'https://example.com/demo/6',
       image_url: '',
-      source: 'Demo Chronicle',
-      published_at: new Date(Date.now() - 18000000).toISOString(),
     },
     {
       title: 'Demo: Museum opens night gallery hours',
       url: 'https://example.com/demo/7',
       image_url: 'https://images.unsplash.com/photo-1460661414731-2287630e45e0?w=400&q=60',
-      source: 'Demo Arts',
-      published_at: new Date(Date.now() - 21600000).toISOString(),
     },
     {
       title: 'Demo: Bike share stations expand downtown',
       url: 'https://example.com/demo/8',
       image_url: '',
-      source: 'Demo Metro',
-      published_at: new Date(Date.now() - 25200000).toISOString(),
     },
     {
       title: 'Demo: Startup hub reports hiring uptick',
       url: 'https://example.com/demo/9',
       image_url: 'https://images.unsplash.com/photo-1497366216548-37526070297c?w=400&q=60',
-      source: 'Demo Business',
-      published_at: new Date(Date.now() - 28800000).toISOString(),
     },
     {
       title: 'Demo: Evening ferry schedule adds departures',
       url: 'https://example.com/demo/10',
       image_url: '',
-      source: 'Demo Bay',
-      published_at: new Date(Date.now() - 32400000).toISOString(),
     },
   ];
-  return { source: 'demo', locale: 'us', topic, articles: items };
+  const items = baseItems.map((row, i) => ({
+    ...row,
+    description: 'Demo preview — not a live Hacker News story or article fetch.',
+    source: 'Demo (not Hacker News)',
+    points: 100 - i * 7,
+    num_comments: 40 - i * 3,
+    hn_url: `https://news.ycombinator.com/item?id=demo${i + 1}`,
+    hn_id: `demo${i + 1}`,
+    published_at: new Date(Date.now() - i * 3600000).toISOString(),
+  }));
+  return {
+    source: 'demo',
+    topic,
+    attribution: 'Demo headlines — not live Hacker News',
+    articles: items,
+  };
 }
 
 export function demoAirQuality() {

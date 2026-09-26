@@ -9,8 +9,13 @@ import {
     dateHasAnyEditorialCache,
     editorialCacheKeyForDate,
     enumerateDatesInclusive,
+    nextCalendarDay,
 } from './backfillDates.js';
 import { buildTopNewsParams, describeTopNewsRequest } from './newsApi.js';
+
+test('nextCalendarDay advances UTC calendar date', () => {
+    assert.equal(nextCalendarDay('2026-05-31'), '2026-06-01');
+});
 
 test('enumerateDatesInclusive includes both endpoints', () => {
     const dates = enumerateDatesInclusive('2026-05-13', '2026-05-15');

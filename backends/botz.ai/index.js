@@ -18,11 +18,8 @@ import {
     formatRealGenerationTimestamp,
     hourFromCacheKey,
 } from './backfillDates.js';
-import {
-    assertHistoricalNewsResults,
-    buildTopNewsParams,
-    formatHistoricalNewsApiFailure,
-} from './newsApi.js';
+import { NewsQuotaExhaustedError } from './newsApiErrors.js';
+import { fetchQualifyingStoryForEditorial } from './newsEditorialFetch.js';
 import { purgeCloudflareCacheByUrl } from './cloudflarePurge.js';
 import {
     buildUsagePayload,
@@ -35,13 +32,7 @@ import {
     listPublicEditorialCacheFileNames,
 } from './cacheListing.js';
 import { stripPrivateEditorialFields, writeEditorialUsageRecord } from './editorialUsageStore.js';
-import {
-    buildGenAiNewsSearchQuery,
-    buildRelevanceScoringPrompt,
-    GENAI_NEWS_CATEGORIES,
-    NoQualifyingStoryError,
-    selectBestQualifyingStory,
-} from './storySelection.js';
+import { buildRelevanceScoringPrompt } from './storySelection.js';
 
 dotenv.config();
 
@@ -127,9 +118,6 @@ const buildChatCompletionRequest = ({ model, messages, jsonMode = false }) => {
     return body;
 };
 
-const NEWS_CANDIDATE_LIMIT = 10;
-const NEWS_CANDIDATE_PAGES_HISTORICAL = 3;
-
 const isWeekend = () => {
     const currentDate = new Date();
     return currentDate.getDay() === 6 || currentDate.getDay() === 0;
@@ -166,60 +154,31 @@ const fetchAiNews = async (req) => {
         return [result];
     }
 
-    let pageCount = asOfDate ? NEWS_CANDIDATE_PAGES_HISTORICAL : PAGE_COUNT;
-    if (!asOfDate && isWeekend()) {
-        pageCount = pageCount * 2; // double the number of pages on weekends
-    }
+    const maxNewsRequestsParam = Number(req.query.maxNewsRequests);
+    const maxNewsRequests =
+        authorisedAdminRequest(req) && Number.isFinite(maxNewsRequestsParam) && maxNewsRequestsParam > 0
+            ? maxNewsRequestsParam
+            : Infinity;
 
-    const pool = [];
-    for (let i = 1; i <= pageCount; i++) {
-        const randomPage = asOfDate ? i : getRandomInt(1, 5);
-        const startTime = Date.now();
-        const params = buildTopNewsParams({
-            apiToken: NEWS_API_KEY,
-            search: buildGenAiNewsSearchQuery(),
-            language: 'en',
-            limit: NEWS_CANDIDATE_LIMIT,
-            page: randomPage,
-            asOfDate,
-            categories: GENAI_NEWS_CATEGORIES,
-        });
-        let response;
-        try {
-            response = await axios.get('https://api.thenewsapi.com/v1/news/top', { params });
-        } catch (error) {
-            if (asOfDate) {
-                throw formatHistoricalNewsApiFailure(asOfDate, error);
-            }
-            throw error;
-        }
-        const endTime = Date.now();
-        console.log(`API call ${i} took ${endTime - startTime} ms`);
-        if (asOfDate && i === 1) {
-            assertHistoricalNewsResults(asOfDate, response.data?.data);
-        }
-        pool.push(...(response.data?.data || []));
-    }
-
-    const selected = await selectBestQualifyingStory(pool, {
+    const { article, newsRequestCount } = await fetchQualifyingStoryForEditorial({
+        asOfDate,
+        isWeekend: isWeekend(),
+        newsApiKey: NEWS_API_KEY,
+        httpGet: async ({ url, params }) => {
+            const startTime = Date.now();
+            const response = await axios.get(url, { params });
+            console.log(`The News API call took ${Date.now() - startTime} ms`);
+            return response;
+        },
         scoreArticle: async (article) =>
             aiJSONResponse(buildRelevanceScoringPrompt(article), OPENAI_MODEL_WEAK),
         log: (message) => console.log(message),
+        maxNewsRequests,
     });
 
-    if (!selected) {
-        console.log(
-            JSON.stringify({
-                event: 'no_qualifying_story',
-                as_of: asOfDate,
-                candidate_count: pool.length,
-            })
-        );
-        throw new NoQualifyingStoryError();
-    }
-
-    console.log(`selected story: ${selected.title}`);
-    return [selected];
+    req.theNewsApiRequestCount = newsRequestCount;
+    console.log(`selected story: ${article.title}`);
+    return [article];
 };
 
 // function to return a true random between 2 integers - made more random by using crypto
@@ -440,6 +399,9 @@ app.get('/editorials', async (req, res) => {
         }
         const publicEditorials = stripPrivateEditorialFields(editorials);
         publicEditorials[0].navigation = getNextAndPreviousFilenames(cacheKey);
+        if (isAdmin && req.theNewsApiRequestCount != null) {
+            res.setHeader('X-TheNewsApi-Requests', String(req.theNewsApiRequestCount));
+        }
         res.json(publicEditorials);
 
         const shouldPurgeCloudflare =
@@ -461,6 +423,19 @@ app.get('/editorials', async (req, res) => {
     } catch (error) {
         editorialUsageCollector = null;
         logEditorialRouteError(error);
+        if (error instanceof NewsQuotaExhaustedError || error.code === 'NEWS_QUOTA_EXHAUSTED') {
+            console.error(
+                JSON.stringify({
+                    event: 'news_quota_exhausted',
+                    message: error.message,
+                })
+            );
+            return res.status(503).json({ error: 'news_quota_exhausted' });
+        }
+        if (error.code === 'NEWS_REQUEST_BUDGET_EXHAUSTED') {
+            return res.status(503).json({ error: 'news_request_budget_exhausted' });
+        }
+
         const status = error?.statusCode || 500;
         let message = 'An internal server error occurred.';
         if (status === 409) {

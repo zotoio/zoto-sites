@@ -35,7 +35,7 @@ The script:
 - Execute mode appends progress to `/tmp/backfill-editorials.log.jsonl` by default (override with `--log`).
 - Stops on the first error with a clear message (including News API plan/historical query failures).
 
-Historical generation uses The News API `published_on` for that UTC date only, with `categories=tech` and a strict GenAI search query. A `gpt-6-luna` relevance pass rejects off-topic and sensitive stories; days with no qualifying article are skipped (HTTP 422, logged as `no_qualifying_story`). Each saved editorial includes `as_of`, `backfilled: true`, display `generated_at` for the target day, and `backfilled_at` for the real run time.
+Historical generation uses The News API `published_on` for that UTC date only, with `categories=tech` and a strict GenAI search query. Typical **1** News API HTTP request per editorial (limit 25, page 2 only if none qualify); live hourly is also **1** in the common case (was up to **3** historical / **2** weekend live requests before 2026-09). A `gpt-6-luna` relevance pass rejects off-topic and sensitive stories; days with no qualifying article are skipped (HTTP 422, logged as `no_qualifying_story`). Each saved editorial includes `as_of`, `backfilled: true`, display `generated_at` for the target day, and `backfilled_at` for the real run time.
 
 OpenAI usage totals are stored under `backends/botz.ai/usage` on the host (`USAGE_LOG_DIR=/home/root/usage` in compose), not in public editorial JSON. Nginx denies `/cache/.*` dot-paths (e.g. `.replaced` archives). Legacy `_openai_usage` keys in cache files: `node scripts/strip-usage-from-cache.mjs` (dry-run; pass `--execute`). Use `--replace <cacheKey> --execute` to regenerate a single backfilled day (archives the prior file under `cache/.replaced/`).
 

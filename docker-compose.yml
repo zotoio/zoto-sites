@@ -21,6 +21,8 @@ services:
     container_name: botz
     env_file:
       - ./backends/botz.ai/.env
+    environment:
+      CACHE_DIR: /home/root/cache
     ports:
       - "3000:3000"
     volumes:

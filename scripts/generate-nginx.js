@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Generate nginx virtual host configs from sites/*.json manifests.
+ * Generate nginx virtual host configs from sites/*.json manifests
+ * and projects/botz.ai/<name>/ subdomain manifests.
  *
  * Usage: node scripts/generate-nginx.js [--check]
  *   --check  Exit 1 if nginx-conf/ would change (for CI).
@@ -8,6 +9,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { discoverBotzProjects } = require('./lib/botz-projects');
 
 const ROOT = path.resolve(__dirname, '..');
 const SITES_DIR = path.join(ROOT, 'sites');
@@ -15,6 +17,16 @@ const OUTPUT_DIR = path.join(ROOT, 'nginx-conf');
 
 const ERROR_PAGE_CODES =
   '400 401 402 403 404 405 406 407 408 409 410 411 412 413 414 415 416 417 418 421 422 423 424 425';
+
+const ERROR_PAGE_BLOCK = `
+    error_page ${ERROR_PAGE_CODES} /error.html;
+
+    location /error.html {
+      ssi on;
+      internal;
+      auth_basic off;
+      root /usr/share/nginx/html;
+    }`;
 
 function loadSites() {
   const files = fs
@@ -32,14 +44,31 @@ function loadSites() {
 }
 
 function renderProxyBlock(proxy) {
-  const { path: locationPath, upstream } = proxy;
+  const { path: locationPath, upstream, websocket } = proxy;
+  const wsHeaders = websocket
+    ? `
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";`
+    : '';
+
   return `    location ${locationPath} {
         proxy_set_header Host $host;
         proxy_read_timeout 900s;
         proxy_connect_timeout 75s;
-        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Real-IP $remote_addr;${wsHeaders}
         proxy_pass ${upstream};
     }`;
+}
+
+function renderExtraHeaders(headers) {
+  if (!headers || typeof headers !== 'object') {
+    return '';
+  }
+  const lines = Object.entries(headers).map(
+    ([key, value]) => `        add_header ${key} ${value} always;`
+  );
+  return lines.length ? `\n${lines.join('\n')}` : '';
 }
 
 function renderSite(site) {
@@ -56,15 +85,82 @@ function renderSite(site) {
         root   /usr/share/nginx/html/${site.id};
         index  index.html index.htm;
     }${proxySection}
+${ERROR_PAGE_BLOCK}
+}
+`;
+}
 
-    error_page ${ERROR_PAGE_CODES} /error.html;
+function renderBotzSubdomainProject(project) {
+  const { name, hostname, manifest } = project;
+  const extraHeaders = renderExtraHeaders(manifest.headers);
+  const titleComment = manifest.title ? ` # ${manifest.title}` : '';
 
-    location /error.html {
-      ssi on;
-      internal;
-      auth_basic off;
-      root /usr/share/nginx/html;
+  if (manifest.type === 'proxy') {
+    const upstream = manifest.proxy.upstream;
+    const websocket = manifest.proxy.websocket === true;
+    const proxyBlock = renderProxyBlock({
+      path: '/',
+      upstream,
+      websocket,
+    });
+
+    return `server {
+    listen 80;
+    listen 443 ssl;
+    http2 on;
+    server_name  ${hostname};${titleComment}
+${extraHeaders}
+
+${proxyBlock}
+${ERROR_PAGE_BLOCK}
+}
+`;
+  }
+
+  const spaFallback = manifest.spa_fallback === true;
+  const staticRoot = `/usr/share/nginx/html/projects/botz.ai/${name}/public`;
+  const locationBlock = spaFallback
+    ? `    location / {
+        root   ${staticRoot};
+        index  index.html index.htm;
+        try_files $uri $uri/ /index.html;
+    }`
+    : `    location / {
+        root   ${staticRoot};
+        index  index.html index.htm;
+    }`;
+
+  return `server {
+    listen 80;
+    listen 443 ssl;
+    http2 on;
+    server_name  ${hostname};${titleComment}
+${extraHeaders}
+
+${locationBlock}
+${ERROR_PAGE_BLOCK}
+}
+`;
+}
+
+function renderBotzSubdomainCatchAll() {
+  return `server {
+    listen 80;
+    listen 443 ssl;
+    http2 on;
+    server_name  *.botz.ai;
+
+    error_page 404 /subdomain-not-found.html;
+
+    location / {
+        return 404;
     }
+
+    location = /subdomain-not-found.html {
+        root /usr/share/nginx/html/botz.ai;
+        internal;
+    }
+${ERROR_PAGE_BLOCK}
 }
 `;
 }
@@ -76,6 +172,16 @@ function generate() {
   for (const site of sites) {
     output[`${site.id}.conf`] = renderSite(site);
   }
+
+  const projects = discoverBotzProjects();
+  for (const project of projects) {
+    if (!project.enabled) {
+      continue;
+    }
+    output[`botz.ai-sub-${project.name}.conf`] = renderBotzSubdomainProject(project);
+  }
+
+  output['botz.ai-subdomain-catchall.conf'] = renderBotzSubdomainCatchAll();
 
   return output;
 }
@@ -124,5 +230,8 @@ if (checkOnly) {
   checkOutput(files);
 } else {
   writeOutput(files);
-  console.log(`Generated ${Object.keys(files).length} nginx config(s) in nginx-conf/`);
+  const projectCount = Object.keys(files).filter((k) => k.startsWith('botz.ai-sub-')).length;
+  console.log(
+    `Generated ${Object.keys(files).length} nginx config(s) in nginx-conf/ (${projectCount} botz.ai subdomain vhost(s))`
+  );
 }

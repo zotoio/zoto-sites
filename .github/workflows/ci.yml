@@ -24,11 +24,17 @@ jobs:
       - name: today.zoto.io display mode tests
         run: node --test www/today.zoto.io/test/display-mode.test.mjs
 
+      - name: today.zoto.io weather utils tests
+        run: node --test www/today.zoto.io/test/weather-utils.test.mjs
+
       - name: Install today.zoto.io API dependencies
         run: yarn --cwd backends/today.zoto.io install --frozen-lockfile
 
       - name: today.zoto.io API tests
         run: yarn --cwd backends/today.zoto.io test
+
+      - name: Verify today Docker image build and smoke test
+        run: bash scripts/verify-today-docker-image.sh
 
       - name: nginx generator tests
         run: node --test scripts/generate-nginx.test.mjs

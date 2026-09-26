@@ -40,6 +40,9 @@ const RESERVED_SUBDOMAINS = new Set(
 
 const DNS_LABEL_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
+/** RFC 7230 field-name (token). */
+const HTTP_FIELD_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
 function parseSimpleYaml(text) {
   const out = {};
   let section = null;
@@ -62,10 +65,17 @@ function parseSimpleYaml(text) {
       continue;
     }
 
-    const kv = trimmed.match(/^([a-z_]+):\s*(.*)$/);
-    if (!kv) continue;
+    const keyPattern =
+      section === 'headers' ? /^([^:]+):\s*(.*)$/ : /^([a-z_]+):\s*(.*)$/;
+    const kv = trimmed.match(keyPattern);
+    if (!kv) {
+      if (section === 'headers') {
+        throw new Error(`invalid headers line (expected Field-Name: value): ${trimmed}`);
+      }
+      continue;
+    }
 
-    const key = kv[1];
+    const key = kv[1].trim();
     let value = kv[2].trim();
     if (
       (value.startsWith('"') && value.endsWith('"')) ||
@@ -160,7 +170,42 @@ function validateProject(name, manifest) {
     }
   }
 
+  if (manifest.headers != null) {
+    if (typeof manifest.headers !== 'object' || Array.isArray(manifest.headers)) {
+      errors.push('headers must be a map of field-name: value');
+    } else {
+      for (const fieldName of Object.keys(manifest.headers)) {
+        if (!HTTP_FIELD_NAME_RE.test(fieldName)) {
+          errors.push(`invalid HTTP header field name: ${fieldName}`);
+        }
+      }
+    }
+  }
+
   return errors;
+}
+
+function discoverProxyUpstreamHosts() {
+  const hosts = new Set(['botz']);
+  for (const project of discoverBotzProjects()) {
+    if (!project.enabled || project.manifest.type !== 'proxy') {
+      continue;
+    }
+    const upstream = project.manifest.proxy?.upstream;
+    if (!upstream || typeof upstream !== 'string') {
+      continue;
+    }
+    let hostname;
+    try {
+      hostname = new URL(upstream).hostname;
+    } catch {
+      throw new Error(`projects/botz.ai/${project.name}: invalid proxy.upstream URL: ${upstream}`);
+    }
+    if (hostname) {
+      hosts.add(hostname);
+    }
+  }
+  return [...hosts].sort();
 }
 
 function discoverBotzProjects() {
@@ -207,8 +252,11 @@ module.exports = {
   PROJECTS_ROOT,
   RESERVED_SUBDOMAINS,
   DNS_LABEL_RE,
+  HTTP_FIELD_NAME_RE,
   validateDnsLabel,
   discoverBotzProjects,
+  discoverProxyUpstreamHosts,
   loadManifest,
   validateProject,
+  parseSimpleYaml,
 };

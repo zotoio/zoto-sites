@@ -50,14 +50,14 @@ CI validates manifests, regenerates nginx checks, and runs `nginx -t` in the har
 
 ### 3. Deploy
 
-On the droplet (safe deploy with data guards):
+On the droplet as **`andrewv`** (Docker via the `docker` group — see [DEPLOYMENT.md](./DEPLOYMENT.md)):
 
 ```bash
-cd /opt/zoto-sites
-./scripts/deploy-safe.sh
+cd /home/andrewv/git/zoto-sites
+setpriv --reuid=andrewv --regid=docker --init-groups -- ./scripts/deploy-safe.sh
 ```
 
-Or the legacy `./scripts/deploy.sh` if you are not on the safe-deploy branch yet.
+Or `./scripts/deploy.sh` from the same directory (it invokes `deploy-safe.sh`).
 
 Rebuild picks up new static files under `projects/botz.ai/` and new generated vhosts under `nginx-conf/`.
 

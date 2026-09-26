@@ -8,6 +8,7 @@ const path = require('path');
 
 const root = path.join(__dirname, '..');
 const manifestPath = path.join(root, 'deploy', 'persistent-data.txt');
+const { listComposeFiles, dockerComposeConfigJson } = require('./lib/compose-stack');
 
 function readManifest() {
   const text = fs.readFileSync(manifestPath, 'utf8');
@@ -40,28 +41,42 @@ function ensureDummyEnvFiles() {
   }
 }
 
+function parseComposeFallbackServiceBlock(body) {
+  const svc = { volumes: [], environment: {} };
+  const volSection = body.match(/volumes:\s*\n((?:\s+- .+\n)+)/);
+  if (volSection) {
+    for (const line of volSection[1].match(/^\s+- .+$/gm) || []) {
+      const v = line.replace(/^\s+-\s+/, '').trim();
+      svc.volumes.push(v);
+    }
+  }
+  const envBlock = body.match(/environment:\s*\n((?:\s+.+\n)+)/);
+  if (envBlock) {
+    for (const line of envBlock[1].match(/^\s+[^:]+:\s*.+$/gm) || []) {
+      const [k, ...rest] = line.trim().split(':');
+      svc.environment[k.trim()] = rest.join(':').trim();
+    }
+  }
+  return svc;
+}
+
 function parseComposeFallback(yaml) {
   const services = {};
-  const blocks = yaml.split(/^  ([a-z]+):\s*$/m);
+  const blocks = yaml.split(/^  ([a-z0-9_-]+):\s*$/m);
   for (let i = 1; i < blocks.length; i += 2) {
     const name = blocks[i];
     const body = blocks[i + 1] || '';
-    const svc = { volumes: [], environment: {} };
-    const volSection = body.match(/volumes:\s*\n((?:\s+- .+\n)+)/);
-    if (volSection) {
-      for (const line of volSection[1].match(/^\s+- .+$/gm) || []) {
-        const v = line.replace(/^\s+-\s+/, '').trim();
-        svc.volumes.push(v);
-      }
-    }
-    const envBlock = body.match(/environment:\s*\n((?:\s+.+\n)+)/);
-    if (envBlock) {
-      for (const line of envBlock[1].match(/^\s+[^:]+:\s*.+$/gm) || []) {
-        const [k, ...rest] = line.trim().split(':');
-        svc.environment[k.trim()] = rest.join(':').trim();
-      }
-    }
-    services[name] = svc;
+    services[name] = parseComposeFallbackServiceBlock(body);
+  }
+  return { services };
+}
+
+function parseComposeFallbackMerged() {
+  const services = {};
+  for (const file of listComposeFiles(root)) {
+    const yaml = fs.readFileSync(file, 'utf8');
+    const parsed = parseComposeFallback(yaml);
+    Object.assign(services, parsed.services);
   }
   return { services };
 }
@@ -92,15 +107,10 @@ function main() {
   let configJson;
   try {
     execSync('docker compose version', { cwd: root, stdio: 'ignore' });
-    const out = execSync('docker compose config --format json', {
-      cwd: root,
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    configJson = JSON.parse(out);
+    configJson = dockerComposeConfigJson(root);
   } catch (e) {
-    console.warn('docker compose unavailable; using docker-compose.yml fallback parser');
-    configJson = parseComposeFallback(fs.readFileSync(path.join(root, 'docker-compose.yml'), 'utf8'));
+    console.warn('docker compose unavailable; using merged compose file fallback parser');
+    configJson = parseComposeFallbackMerged();
   }
 
   for (const [name, svc] of Object.entries(configJson.services || {})) {

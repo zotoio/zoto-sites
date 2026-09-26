@@ -11,15 +11,33 @@ import helmet from 'helmet';
 import crypto from 'crypto';
 import cheerio from 'cheerio';
 import sanitizeHtml from 'sanitize-html';
-import { requestGeneratedImage } from './openaiImages.js';
+import { buildImageGenerateParams, requestGeneratedImage } from './openaiImages.js';
+import {
+    assertCacheFileWritable,
+    formatGeneratedAtFromAsOf,
+    formatRealGenerationTimestamp,
+    hourFromCacheKey,
+} from './backfillDates.js';
+import {
+    assertHistoricalNewsResults,
+    buildTopNewsParams,
+    formatHistoricalNewsApiFailure,
+} from './newsApi.js';
 import { purgeCloudflareCacheByUrl } from './cloudflarePurge.js';
+import {
+    attachUsageToEditorial,
+    logOpenAiUsage,
+    usageFromChatCompletion,
+    usageFromImageGenerateParams,
+} from './openaiUsageLog.js';
 
 dotenv.config();
 
 const {
     OPENAI_API_KEY,
-    OPENAI_MODEL_STRONG = 'gpt-4o',
-    OPENAI_MODEL_WEAK = 'gpt-4o-mini',
+    OPENAI_MODEL_STRONG = 'gpt-6-sol',
+    OPENAI_MODEL_WEAK = 'gpt-6-luna',
+    OPENAI_REASONING_EFFORT,
     NEWS_API_KEY,
     PORT = 3000,
     FREQUENCY = 'daily',
@@ -59,6 +77,44 @@ const limiter = rateLimit({
 app.use(limiter);
 
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+
+/** Per-request OpenAI usage records for the active editorial generation. */
+let editorialUsageCollector = null;
+
+const recordChatUsage = (model, completion) => {
+    const record = usageFromChatCompletion(model, completion);
+    if (!record) {
+        return;
+    }
+    logOpenAiUsage(record);
+    editorialUsageCollector?.push(record);
+};
+
+const logEditorialRouteError = (error) => {
+    const payload = {
+        event: 'editorial_generation_error',
+        statusCode: error?.statusCode || 500,
+        name: error?.name,
+        message: error?.message,
+    };
+    if (error?.response?.status) {
+        payload.upstreamStatus = error.response.status;
+    }
+    console.error(JSON.stringify(payload));
+};
+
+/** Chat completion body for reasoning models (no temperature / max_tokens). */
+const buildChatCompletionRequest = ({ model, messages, jsonMode = false }) => {
+    const body = { model, messages };
+    if (jsonMode) {
+        body.response_format = { type: 'json_object' };
+    }
+    if (OPENAI_REASONING_EFFORT) {
+        body.reasoning_effort = OPENAI_REASONING_EFFORT;
+    }
+    return body;
+};
+
 const keywords = ['claude 3.5', 'anthropic', 'runwayml', 'slm', 'llm', 'large%2language%20model', 'ollama', 'sora', 'chatgpt', 'chatgpt%20pro', 'midjourney', 'dall-e', 'openai', 'genai', 'generative%20ai', 'copilot', 'google%20gemini', 'gemini%201.5', 'gemini%20pro', 'google%20gemma', 'bard', 'gpt-3', 'gpt-4', 'gpt', 'gpt-4o', 'hugging%20face', 'meta%20llama'];
 
 const isWeekend = () => {
@@ -67,6 +123,13 @@ const isWeekend = () => {
 };
 
 const fetchAiNews = async (req) => {
+    const asOfDate =
+        authorisedAdminRequest(req) &&
+        req.query.asOf &&
+        /^\d{4}-\d{2}-\d{2}$/.test(req.query.asOf)
+            ? req.query.asOf
+            : null;
+
     let articleUrl = req.query.articleUrl;
     let result = [];
     if (authorisedAdminRequest(req) && articleUrl) {
@@ -91,26 +154,36 @@ const fetchAiNews = async (req) => {
     }
 
     let pageCount = PAGE_COUNT;
-    if (isWeekend()) {
+    if (!asOfDate && isWeekend()) {
         pageCount = pageCount * 2; // double the number of pages on weekends
     }
 
     for (let i = 1; i <= pageCount; i++) {
         let keywordsShuffled = keywords.sort(() => Math.random() - 0.5); // Shuffle the keywords
-        let randomPage = getRandomInt(1, 5);
+        let randomPage = asOfDate ? 1 : getRandomInt(1, 5);
         const startTime = Date.now();
-        const response = await axios.get('https://api.thenewsapi.com/v1/news/top', {
-            params: {
-                search: keywordsShuffled.join('|'),
-                sort: 'published_at',
-                api_token: NEWS_API_KEY,
-                language: 'en',
-                limit: PAGE_SIZE,
-                page: randomPage,
-            },
+        const params = buildTopNewsParams({
+            apiToken: NEWS_API_KEY,
+            search: keywordsShuffled.join('|'),
+            language: 'en',
+            limit: PAGE_SIZE,
+            page: randomPage,
+            asOfDate,
         });
+        let response;
+        try {
+            response = await axios.get('https://api.thenewsapi.com/v1/news/top', { params });
+        } catch (error) {
+            if (asOfDate) {
+                throw formatHistoricalNewsApiFailure(asOfDate, error);
+            }
+            throw error;
+        }
         const endTime = Date.now();
         console.log(`API call ${i} took ${endTime - startTime} ms`);
+        if (asOfDate) {
+            assertHistoricalNewsResults(asOfDate, response.data?.data);
+        }
         result.push(...response.data.data);
         //console.log(result);
     }
@@ -174,13 +247,15 @@ const aiJSONResponse = async (prompt, model) => {
         const modelName = model ? model : OPENAI_MODEL_WEAK;
         const startTime = Date.now();
         console.log(`${startTime} - sending: ${prompt}`);
-        const chatCompletion = await openai.chat.completions.create({
-            model: modelName,
-            response_format: { type: 'json_object' },
-            messages: [{ role: 'user', content: prompt }]
-        });
+        const chatCompletion = await openai.chat.completions.create(
+            buildChatCompletionRequest({
+                model: modelName,
+                messages: [{ role: 'user', content: prompt }],
+                jsonMode: true,
+            })
+        );
         const endTime = Date.now();
-        console.log(chatCompletion.choices);
+        recordChatUsage(modelName, chatCompletion);
         console.log(`aiJSONResponse API call took ${endTime - startTime} ms`);
         return chatCompletion.choices[0].message.content;
     } catch (error) {
@@ -194,12 +269,14 @@ const aiResponse = async (prompt, model) => {
         const modelName = model ? model : OPENAI_MODEL_STRONG;
         const startTime = Date.now();
         console.log(`${startTime} - sending: ${prompt}`);
-        const chatCompletion = await openai.chat.completions.create({
-            model: modelName,
-            messages: [{ role: 'user', content: prompt }]
-        });
+        const chatCompletion = await openai.chat.completions.create(
+            buildChatCompletionRequest({
+                model: modelName,
+                messages: [{ role: 'user', content: prompt }],
+            })
+        );
         const endTime = Date.now();
-        console.log(chatCompletion.choices);
+        recordChatUsage(modelName, chatCompletion);
         console.log(`aiResponse API call took ${endTime - startTime} ms`);
         return chatCompletion.choices[0].message.content;
     } catch (error) {
@@ -211,6 +288,11 @@ const aiResponse = async (prompt, model) => {
 app.get('/editorials', async (req, res) => {
     try {
         const currentDate = new Date();
+        const isAdmin = authorisedAdminRequest(req);
+        const asOfDate =
+            isAdmin && req.query.asOf && /^\d{4}-\d{2}-\d{2}$/.test(req.query.asOf)
+                ? req.query.asOf
+                : null;
 
         let defaultCacheKey;
         let cacheKey;
@@ -253,7 +335,7 @@ app.get('/editorials', async (req, res) => {
         console.log('cacheKey:', cacheKey);
         console.log('cacheFilePath', cacheFilePath);
 
-        if (!authorisedAdminRequest(req) && CACHE === 'true' && fs.existsSync(cacheFilePath)) {
+        if (!isAdmin && CACHE === 'true' && fs.existsSync(cacheFilePath)) {
             // Cache file exists, read and return the cached data
             const cachedData = fs.readFileSync(cacheFilePath, 'utf8');
             console.log('content loaded from cache');
@@ -264,20 +346,32 @@ app.get('/editorials', async (req, res) => {
             }
         }
 
+        if (asOfDate && fs.existsSync(cacheFilePath)) {
+            return res.status(409).json({
+                message: 'Requested editorial cache already exists.',
+            });
+        }
+
         console.log('no cached content');
+        const generationContext = {
+            asOfDate,
+            cacheKey,
+            cacheKeyHour: hourFromCacheKey(cacheKey),
+        };
+        editorialUsageCollector = [];
         const articles = await fetchAiNews(req);
         const editorials = [];
 
         for (const article of articles) {
 
-            const { prompt, author } = await getArticlePrompt(article);
+            const { prompt, author } = await getArticlePrompt(article, generationContext);
 
             let editorial = await aiResponse(prompt);
             editorial = sanitizeHtml(editorial);
             editorial += sanitizeHtml(`<span style='display:none'>${author.name}</span>`);
 
-            let imagePrompt = await getImagePrompt(editorial);
-            const imageResponse = await generateImage(imagePrompt, article.title);
+            let imagePrompt = await getImagePrompt(editorial, generationContext);
+            const imageResponse = await generateImage(imagePrompt, article.title, generationContext);
 
             if (imageResponse?.data?.[0]?.localUrl) {
                 article.image_url = imageResponse.data[0].localUrl;
@@ -288,17 +382,35 @@ app.get('/editorials', async (req, res) => {
             }
             article.authorAlias = author.alias;
             const now = new Date();
-            article.generated_at = `${now.getFullYear()}-${padNumber(now.getMonth() + 1)}-${padNumber(now.getDate())}-${padNumber(now.getHours())}-${padNumber(now.getMinutes())}-${padNumber(now.getSeconds())}`;
+            if (asOfDate) {
+                const hour = generationContext.cacheKeyHour ?? '12';
+                article.as_of = asOfDate;
+                article.backfilled = true;
+                article.backfilled_at = formatRealGenerationTimestamp(now);
+                article.generated_at = formatGeneratedAtFromAsOf(asOfDate, hour);
+                if (!article.published_at) {
+                    article.published_at = article.generated_at;
+                }
+            } else {
+                article.generated_at = `${now.getFullYear()}-${padNumber(now.getMonth() + 1)}-${padNumber(now.getDate())}-${padNumber(now.getHours())}-${padNumber(now.getMinutes())}-${padNumber(now.getSeconds())}`;
+            }
             editorials.push({ article, editorial });
 
         }
+        attachUsageToEditorial(editorials, editorialUsageCollector);
+        editorialUsageCollector = null;
         if (CACHE === 'true' && editorials.length > 0) {
+            if (asOfDate) {
+                assertCacheFileWritable(cacheFilePath);
+            }
             fs.writeFileSync(cacheFilePath, JSON.stringify(editorials));
         }
         editorials[0].navigation = getNextAndPreviousFilenames(cacheKey)
         res.json(editorials);
 
-        if (authorisedAdminRequest(req)) {
+        const shouldPurgeCloudflare =
+            isAdmin && req.query.purgeCache !== 'false' && !asOfDate;
+        if (shouldPurgeCloudflare) {
             // if configured, clear the cloudflare cache for the editorial api latest article
             const latestArticleUrl = `${EDITORIAL_API_URL_PREFIX}/editorials`;
             clearCloudflareCache(latestArticleUrl);
@@ -313,8 +425,14 @@ app.get('/editorials', async (req, res) => {
         }
 
     } catch (error) {
-        console.error('Error generating editorials:', error);
-        res.status(500).json({ message: 'An internal server error occurred.' });
+        editorialUsageCollector = null;
+        logEditorialRouteError(error);
+        const status = error?.statusCode || 500;
+        const message =
+            status === 409
+                ? 'Requested editorial cache already exists.'
+                : 'An internal server error occurred.';
+        res.status(status).json({ message });
     }
 });
 
@@ -353,7 +471,11 @@ const getImageStyle = async () => {
     return imageStyle;
 };
 
-const getArticlePrompt = async (article) => {
+const historicalWritingRules = (asOfDate) =>
+    ` You are writing this editorial as of ${asOfDate} (UTC). Use only knowledge that would have been available on or before that date. ` +
+    `Do not mention or allude to events, product releases, regulations, or news that occurred after ${asOfDate}.`;
+
+const getArticlePrompt = async (article, generationContext = {}) => {
     const recurrentPhrases = await getRecurrentPhrases();
     let prompt;
     let variations = ['commentary', 'opinion', 'review', 'analysis', 'critique', 'editorial', 'summary', 'rebuttal', 'response', 'take', 'view', 'perspective', 'reaction', 'appraisal', 'assessment', 'examination', 'study', 'criticism', 'dissection', 'dissertation', 'essay', 'exposition', 'celebration'];
@@ -416,6 +538,10 @@ const getArticlePrompt = async (article) => {
     // always add the caveat
     prompt += ` ${caveat}`;
 
+    if (generationContext.asOfDate) {
+        prompt += historicalWritingRules(generationContext.asOfDate);
+    }
+
     return { prompt, author };
 };
 
@@ -443,7 +569,7 @@ async function extractSummary(article) {
     return summary;
 }
 
-async function getImagePrompt(article) {
+async function getImagePrompt(article, generationContext = {}) {
     const imageStyle = await getImageStyle();
     let imagePrompt = `create an image generation prompt that creates and image for the following article with a style "${imageStyle}". This is the article: \n\n ${article}`;
 
@@ -455,11 +581,14 @@ async function getImagePrompt(article) {
     }
 
     let generatedPrompt = await aiResponse(imagePrompt, OPENAI_MODEL_WEAK);
-    generatedPrompt += 'IMPORTANT: The image MUST be relevant to the article.'
+    generatedPrompt += 'IMPORTANT: The image MUST be relevant to the article.';
+    if (generationContext.asOfDate) {
+        generatedPrompt += historicalWritingRules(generationContext.asOfDate);
+    }
     return generatedPrompt;
 }
 
-const generateImage = async (prompt, supaSafeFallbackPrompt) => {
+const generateImage = async (prompt, supaSafeFallbackPrompt, generationContext = {}) => {
     const attemptPrompts = [
         { label: 'primary', text: prompt },
         { label: 'fallback', text: `Anonymous hackers in a scene related to ${prompt}` },
@@ -470,10 +599,14 @@ const generateImage = async (prompt, supaSafeFallbackPrompt) => {
         try {
             const startTime = Date.now();
             console.log(`${startTime} - imageGen ${attempt.label}: sending prompt`);
+            const imageParams = buildImageGenerateParams(attempt.text);
             const response = await requestGeneratedImage(openai, attempt.text);
+            const imageUsage = usageFromImageGenerateParams(imageParams);
+            logOpenAiUsage(imageUsage);
+            editorialUsageCollector?.push(imageUsage);
             const endTime = Date.now();
             console.log(`generateImage ${attempt.label} API call took ${endTime - startTime} ms`);
-            return await saveImageToFile(response);
+            return await saveImageToFile(response, generationContext);
         } catch (error) {
             console.error(`imageGen ${attempt.label} failed (non-fatal):`, error?.message || error);
         }
@@ -483,7 +616,7 @@ const generateImage = async (prompt, supaSafeFallbackPrompt) => {
     return null;
 };
 
-const saveImageToFile = async (response) => {
+const saveImageToFile = async (response, generationContext = {}) => {
     if (!response?.data?.[0]) {
         throw new Error('saveImageToFile: empty image response');
     }
@@ -504,8 +637,14 @@ const saveImageToFile = async (response) => {
     }
 
     const urlHash = crypto.createHash('sha256').update(hashInput).digest('hex');
-    const currentDate = new Date();
-    const cacheKey = `${currentDate.getFullYear()}-${padNumber(currentDate.getMonth() + 1)}-${padNumber(currentDate.getDate())}-${padNumber(currentDate.getHours())}-${urlHash}`;
+    let datePrefix;
+    if (generationContext.asOfDate && generationContext.cacheKeyHour) {
+        datePrefix = `${generationContext.asOfDate}-${generationContext.cacheKeyHour}`;
+    } else {
+        const currentDate = new Date();
+        datePrefix = `${currentDate.getFullYear()}-${padNumber(currentDate.getMonth() + 1)}-${padNumber(currentDate.getDate())}-${padNumber(currentDate.getHours())}`;
+    }
+    const cacheKey = `${datePrefix}-${urlHash}`;
     const cacheFilePath = `${path.join(cacheDir, 'images', cacheKey)}.png`;
     console.log(cacheFilePath);
     fs.writeFileSync(cacheFilePath, buffer);

@@ -34,6 +34,7 @@ export function mapImageQuality(qualityEnv) {
  * @param {{ model?: string, quality?: string, size?: string }} [overrides]
  */
 export function buildImageGenerateParams(prompt, overrides = {}) {
+    // OPENAI_IMAGE_MODEL is passed through verbatim (e.g. gpt-image-2, gpt-image-2.5-flare).
     const model =
         overrides.model ||
         process.env.OPENAI_IMAGE_MODEL ||

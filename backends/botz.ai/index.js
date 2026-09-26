@@ -25,11 +25,19 @@ import {
 } from './newsApi.js';
 import { purgeCloudflareCacheByUrl } from './cloudflarePurge.js';
 import {
-    attachUsageToEditorial,
+    buildUsagePayload,
     logOpenAiUsage,
     usageFromChatCompletion,
-    usageFromImageGenerateParams,
+    usageFromImageGenerateResponse,
 } from './openaiUsageLog.js';
+import { stripPrivateEditorialFields, writeEditorialUsageRecord } from './editorialUsageStore.js';
+import {
+    buildGenAiNewsSearchQuery,
+    buildRelevanceScoringPrompt,
+    GENAI_NEWS_CATEGORIES,
+    NoQualifyingStoryError,
+    selectBestQualifyingStory,
+} from './storySelection.js';
 
 dotenv.config();
 
@@ -115,7 +123,8 @@ const buildChatCompletionRequest = ({ model, messages, jsonMode = false }) => {
     return body;
 };
 
-const keywords = ['claude 3.5', 'anthropic', 'runwayml', 'slm', 'llm', 'large%2language%20model', 'ollama', 'sora', 'chatgpt', 'chatgpt%20pro', 'midjourney', 'dall-e', 'openai', 'genai', 'generative%20ai', 'copilot', 'google%20gemini', 'gemini%201.5', 'gemini%20pro', 'google%20gemma', 'bard', 'gpt-3', 'gpt-4', 'gpt', 'gpt-4o', 'hugging%20face', 'meta%20llama'];
+const NEWS_CANDIDATE_LIMIT = 10;
+const NEWS_CANDIDATE_PAGES_HISTORICAL = 3;
 
 const isWeekend = () => {
     const currentDate = new Date();
@@ -153,22 +162,23 @@ const fetchAiNews = async (req) => {
         return [result];
     }
 
-    let pageCount = PAGE_COUNT;
+    let pageCount = asOfDate ? NEWS_CANDIDATE_PAGES_HISTORICAL : PAGE_COUNT;
     if (!asOfDate && isWeekend()) {
         pageCount = pageCount * 2; // double the number of pages on weekends
     }
 
+    const pool = [];
     for (let i = 1; i <= pageCount; i++) {
-        let keywordsShuffled = keywords.sort(() => Math.random() - 0.5); // Shuffle the keywords
-        let randomPage = asOfDate ? 1 : getRandomInt(1, 5);
+        const randomPage = asOfDate ? i : getRandomInt(1, 5);
         const startTime = Date.now();
         const params = buildTopNewsParams({
             apiToken: NEWS_API_KEY,
-            search: keywordsShuffled.join('|'),
+            search: buildGenAiNewsSearchQuery(),
             language: 'en',
-            limit: PAGE_SIZE,
+            limit: NEWS_CANDIDATE_LIMIT,
             page: randomPage,
             asOfDate,
+            categories: GENAI_NEWS_CATEGORIES,
         });
         let response;
         try {
@@ -181,15 +191,31 @@ const fetchAiNews = async (req) => {
         }
         const endTime = Date.now();
         console.log(`API call ${i} took ${endTime - startTime} ms`);
-        if (asOfDate) {
+        if (asOfDate && i === 1) {
             assertHistoricalNewsResults(asOfDate, response.data?.data);
         }
-        result.push(...response.data.data);
-        //console.log(result);
+        pool.push(...(response.data?.data || []));
     }
-    if (SINGLE_RANDOM === 'true') result = result[getRandomInt(0, result.length - 1)];
-    console.log(result);
-    return [result];
+
+    const selected = await selectBestQualifyingStory(pool, {
+        scoreArticle: async (article) =>
+            aiJSONResponse(buildRelevanceScoringPrompt(article), OPENAI_MODEL_WEAK),
+        log: (message) => console.log(message),
+    });
+
+    if (!selected) {
+        console.log(
+            JSON.stringify({
+                event: 'no_qualifying_story',
+                as_of: asOfDate,
+                candidate_count: pool.length,
+            })
+        );
+        throw new NoQualifyingStoryError();
+    }
+
+    console.log(`selected story: ${selected.title}`);
+    return [selected];
 };
 
 // function to return a true random between 2 integers - made more random by using crypto
@@ -340,7 +366,7 @@ app.get('/editorials', async (req, res) => {
             const cachedData = fs.readFileSync(cacheFilePath, 'utf8');
             console.log('content loaded from cache');
             if (cachedData != null) {
-                let data = JSON.parse(cachedData);
+                let data = stripPrivateEditorialFields(JSON.parse(cachedData));
                 data[0].navigation = getNextAndPreviousFilenames(cacheKey);
                 return res.json(data);
             }
@@ -397,16 +423,20 @@ app.get('/editorials', async (req, res) => {
             editorials.push({ article, editorial });
 
         }
-        attachUsageToEditorial(editorials, editorialUsageCollector);
+        const usagePayload = buildUsagePayload(editorialUsageCollector);
         editorialUsageCollector = null;
         if (CACHE === 'true' && editorials.length > 0) {
             if (asOfDate) {
                 assertCacheFileWritable(cacheFilePath);
             }
             fs.writeFileSync(cacheFilePath, JSON.stringify(editorials));
+            if (usagePayload) {
+                writeEditorialUsageRecord(cacheDir, cacheKey, usagePayload);
+            }
         }
-        editorials[0].navigation = getNextAndPreviousFilenames(cacheKey)
-        res.json(editorials);
+        const publicEditorials = stripPrivateEditorialFields(editorials);
+        publicEditorials[0].navigation = getNextAndPreviousFilenames(cacheKey);
+        res.json(publicEditorials);
 
         const shouldPurgeCloudflare =
             isAdmin && req.query.purgeCache !== 'false' && !asOfDate;
@@ -428,10 +458,12 @@ app.get('/editorials', async (req, res) => {
         editorialUsageCollector = null;
         logEditorialRouteError(error);
         const status = error?.statusCode || 500;
-        const message =
-            status === 409
-                ? 'Requested editorial cache already exists.'
-                : 'An internal server error occurred.';
+        let message = 'An internal server error occurred.';
+        if (status === 409) {
+            message = 'Requested editorial cache already exists.';
+        } else if (status === 422 && error.code === 'NO_QUALIFYING_STORY') {
+            message = 'Unable to produce an editorial for the requested period.';
+        }
         res.status(status).json({ message });
     }
 });
@@ -601,7 +633,7 @@ const generateImage = async (prompt, supaSafeFallbackPrompt, generationContext =
             console.log(`${startTime} - imageGen ${attempt.label}: sending prompt`);
             const imageParams = buildImageGenerateParams(attempt.text);
             const response = await requestGeneratedImage(openai, attempt.text);
-            const imageUsage = usageFromImageGenerateParams(imageParams);
+            const imageUsage = usageFromImageGenerateResponse(response, imageParams);
             logOpenAiUsage(imageUsage);
             editorialUsageCollector?.push(imageUsage);
             const endTime = Date.now();

@@ -31,10 +31,20 @@ const { sumUsageCalls } = await import(
     pathToFileURL(path.join(botzPackageRoot, 'openaiUsageLog.js')).href
 );
 
-const DEFAULT_KEYWORDS =
-    'claude|anthropic|runwayml|llm|ollama|sora|chatgpt|midjourney|dall-e|openai|genai|generative ai|copilot|gemini|bard|gpt-4|hugging face|meta llama';
+const { buildGenAiNewsSearchQuery, GENAI_NEWS_CATEGORIES } = await import(
+    pathToFileURL(path.join(botzPackageRoot, 'storySelection.js')).href
+);
+
+const { readEditorialUsage } = await import(
+    pathToFileURL(path.join(botzPackageRoot, 'editorialUsageStore.js')).href
+);
+
+const { archiveBackfilledEditorial } = await import(
+    pathToFileURL(path.join(botzPackageRoot, 'editorialReplace.js')).href
+);
 
 const DEFAULT_EXECUTE_LOG = '/tmp/backfill-editorials.log.jsonl';
+const CACHE_KEY_RE = /^(\d{4}-\d{2}-\d{2})-\d{2}(-\d{13})?$/;
 
 function printUsage() {
     console.log(`Usage: node scripts/backfill-editorials.mjs --from YYYY-MM-DD --to YYYY-MM-DD [options]
@@ -42,6 +52,7 @@ function printUsage() {
 Options:
   --hour <0-99>       Cache key hour suffix (default: 12 → YYYY-MM-DD-12.json)
   --execute           Perform OpenAI generation and cache writes (default: dry-run only)
+  --replace <cacheKey>  Regenerate one backfilled editorial (requires --execute); archives prior JSON/image to cache/.replaced/
   --limit <N>         Process at most N pending days after skips
   --delay-ms <ms>     Pause between successful days (default: 5000)
   --log <path>        Append-only JSONL progress log (execute mode default: ${DEFAULT_EXECUTE_LOG}; dry-run writes no log unless this is set)
@@ -62,6 +73,8 @@ function parseArgs(argv) {
         logPath: undefined,
         baseUrl: process.env.BACKFILL_BASE_URL || 'http://127.0.0.1:3000',
         purgeCf: false,
+        replace: null,
+        help: false,
     };
 
     for (let i = 2; i < argv.length; i++) {
@@ -96,12 +109,10 @@ function parseArgs(argv) {
         else if (arg === '--delay-ms') options.delayMs = Number(readValue());
         else if (arg === '--log') options.logPath = readValue();
         else if (arg === '--base-url') options.baseUrl = readValue();
+        else if (arg === '--replace') options.replace = readValue();
         else throw new Error(`Unknown argument: ${arg}`);
     }
 
-    if (!options.from || !options.to) {
-        throw new Error('--from and --to are required (YYYY-MM-DD)');
-    }
     return options;
 }
 
@@ -130,8 +141,14 @@ function formatUsageSummary(totals) {
     return (
         `tokens prompt=${totals.prompt_tokens} completion=${totals.completion_tokens} ` +
         `reasoning=${totals.reasoning_tokens} total=${totals.total_tokens} ` +
+        `image_in=${totals.input_tokens} image_out=${totals.output_tokens} ` +
         `chat_calls=${totals.chat_calls} image_calls=${totals.image_calls}`
     );
+}
+
+function dateFromCacheKey(cacheKey) {
+    const match = CACHE_KEY_RE.exec(cacheKey);
+    return match ? match[1] : null;
 }
 
 async function requestEditorial({ baseUrl, sharedSecret, cacheKey, asOfDate }) {
@@ -146,6 +163,13 @@ async function requestEditorial({ baseUrl, sharedSecret, cacheKey, asOfDate }) {
     });
 
     const body = await response.json().catch(() => ({}));
+    if (response.status === 422) {
+        const err = new Error(
+            `SKIP ${asOfDate} (${cacheKey}): no qualifying GenAI news story (HTTP 422). See botz logs for no_qualifying_story.`
+        );
+        err.isNoQualifyingStory = true;
+        throw err;
+    }
     if (response.status >= 400) {
         const err = new Error(
             `Editorial generation failed for ${asOfDate} (${cacheKey}): HTTP ${response.status}. ` +
@@ -157,11 +181,64 @@ async function requestEditorial({ baseUrl, sharedSecret, cacheKey, asOfDate }) {
     return body;
 }
 
+function recordDayUsage(cacheDir, cacheKey, date, usageCalls) {
+    const usageRecord = readEditorialUsage(cacheDir, cacheKey);
+    if (usageRecord?.totals) {
+        console.log(`Usage ${date}: ${formatUsageSummary(usageRecord.totals)}`);
+        if (usageRecord.calls?.length) {
+            usageCalls.push(...usageRecord.calls);
+        }
+        return usageRecord.totals;
+    }
+    return null;
+}
+
+async function runReplaceMode(options, cacheDir, sharedSecret, logPath) {
+    const cacheKey = options.replace;
+    if (!CACHE_KEY_RE.test(cacheKey)) {
+        throw new Error(`Invalid --replace cacheKey: ${cacheKey}`);
+    }
+    const asOfDate = dateFromCacheKey(cacheKey);
+    console.log(`Replace mode: archiving and regenerating ${cacheKey} (as-of ${asOfDate})`);
+    archiveBackfilledEditorial(cacheDir, cacheKey);
+
+    const cacheFilePath = cacheFilePathForKey(cacheDir, cacheKey);
+    assertCacheFileWritable(cacheFilePath);
+
+    await requestEditorial({
+        baseUrl: options.baseUrl,
+        sharedSecret,
+        cacheKey,
+        asOfDate,
+    });
+
+    const usageCalls = [];
+    const totals = recordDayUsage(cacheDir, cacheKey, asOfDate, usageCalls);
+    appendLog(logPath, {
+        at: new Date().toISOString(),
+        date: asOfDate,
+        cacheKey,
+        status: 'replaced',
+        usage: totals,
+    });
+    if (usageCalls.length > 0) {
+        console.log(`Replace usage: ${formatUsageSummary(sumUsageCalls(usageCalls))}`);
+    }
+}
+
 async function main() {
     const options = parseArgs(process.argv);
     if (options.help) {
         printUsage();
         return;
+    }
+
+    if (options.replace) {
+        if (options.dryRun) {
+            throw new Error('--replace requires --execute');
+        }
+    } else if (!options.from || !options.to) {
+        throw new Error('--from and --to are required (YYYY-MM-DD) unless using --replace');
     }
 
     const cacheDir = process.env.CACHE_DIR || '/home/root/cache';
@@ -171,6 +248,12 @@ async function main() {
 
     if (!options.dryRun && !sharedSecret) {
         throw new Error('SHARED_SECRET is required when using --execute');
+    }
+
+    if (options.replace) {
+        await runReplaceMode(options, cacheDir, sharedSecret, logPath);
+        console.log('Backfill finished.');
+        return;
     }
 
     const allDates = enumerateDatesInclusive(options.from, options.to);
@@ -194,11 +277,12 @@ async function main() {
 
         const newsParams = buildTopNewsParams({
             apiToken: newsApiKey,
-            search: DEFAULT_KEYWORDS,
+            search: buildGenAiNewsSearchQuery(),
             language: 'en',
-            limit: 1,
+            limit: 10,
             page: 1,
             asOfDate: date,
+            categories: GENAI_NEWS_CATEGORIES,
         });
         const newsRequest = describeTopNewsRequest(newsParams, { redactToken: true });
 
@@ -227,33 +311,39 @@ async function main() {
             }
 
             console.log(`Generating ${date} → ${cacheKey} ...`);
-            const editorialPayload = await requestEditorial({
+            await requestEditorial({
                 baseUrl: options.baseUrl,
                 sharedSecret,
                 cacheKey,
                 asOfDate: date,
             });
 
-            const dayUsage = editorialPayload?.[0]?._openai_usage;
-            if (dayUsage?.totals) {
-                console.log(`Usage ${date}: ${formatUsageSummary(dayUsage.totals)}`);
-                if (dayUsage.calls?.length) {
-                    usageCalls.push(...dayUsage.calls);
-                }
-            }
+            const totals = recordDayUsage(cacheDir, cacheKey, date, usageCalls);
 
             appendLog(logPath, {
                 at: new Date().toISOString(),
                 date,
                 cacheKey,
                 status: 'ok',
-                usage: dayUsage?.totals,
+                usage: totals,
             });
             processed += 1;
             if (options.delayMs > 0) {
                 await sleep(options.delayMs);
             }
         } catch (error) {
+            if (error.isNoQualifyingStory) {
+                console.log(error.message);
+                appendLog(logPath, {
+                    at: new Date().toISOString(),
+                    date,
+                    cacheKey,
+                    status: 'skipped_no_qualifying_story',
+                    message: error.message,
+                });
+                processed += 1;
+                continue;
+            }
             appendLog(logPath, {
                 at: new Date().toISOString(),
                 date,

@@ -33,6 +33,31 @@ export function usageFromImageGenerateParams(params) {
     };
 }
 
+export function usageFromImageGenerateResponse(response, params) {
+    const record = usageFromImageGenerateParams(params);
+    const usage = response?.usage;
+    if (usage && typeof usage === 'object') {
+        if (usage.total_tokens !== undefined) {
+            record.total_tokens = usage.total_tokens;
+        }
+        if (usage.input_tokens !== undefined) {
+            record.input_tokens = usage.input_tokens;
+        }
+        if (usage.output_tokens !== undefined) {
+            record.output_tokens = usage.output_tokens;
+        }
+        if (usage.prompt_tokens !== undefined) {
+            record.prompt_tokens = usage.prompt_tokens;
+        }
+        if (usage.completion_tokens !== undefined) {
+            record.completion_tokens = usage.completion_tokens;
+        }
+    } else {
+        record.usage_note = 'images_api_usage_not_returned';
+    }
+    return record;
+}
+
 export function logOpenAiUsage(record) {
     console.log(JSON.stringify({ event: 'openai_usage', ...record }));
 }
@@ -43,6 +68,8 @@ export function sumUsageCalls(calls) {
         completion_tokens: 0,
         reasoning_tokens: 0,
         total_tokens: 0,
+        input_tokens: 0,
+        output_tokens: 0,
         chat_calls: 0,
         image_calls: 0,
     };
@@ -55,16 +82,21 @@ export function sumUsageCalls(calls) {
             totals.reasoning_tokens += call.reasoning_tokens || 0;
         } else if (call.kind === 'images.generate') {
             totals.image_calls += 1;
+            totals.prompt_tokens += call.prompt_tokens || call.input_tokens || 0;
+            totals.completion_tokens += call.completion_tokens || call.output_tokens || 0;
+            totals.input_tokens += call.input_tokens || 0;
+            totals.output_tokens += call.output_tokens || 0;
+            totals.total_tokens += call.total_tokens || 0;
         }
     }
     return totals;
 }
 
-export function attachUsageToEditorial(editorials, calls) {
-    if (!calls?.length || !editorials?.length) {
-        return;
+export function buildUsagePayload(calls) {
+    if (!calls?.length) {
+        return null;
     }
-    editorials[0]._openai_usage = {
+    return {
         calls,
         totals: sumUsageCalls(calls),
     };

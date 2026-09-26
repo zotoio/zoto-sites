@@ -19,3 +19,22 @@ export async function fetchIssNow() {
     30000
   );
 }
+
+export async function fetchIssTrack(seconds = 360) {
+  return cached(
+    `iss:track:${seconds}`,
+    async () => {
+      const { data } = await axios.get('https://api.wheretheiss.at/v1/satellites/25544/positions', {
+        params: { seconds },
+        timeout: 10000,
+      });
+      const positions = (data || []).map((p) => ({
+        lat: p.latitude,
+        lon: p.longitude,
+        timestamp: p.timestamp * 1000,
+      }));
+      return { source: 'wheretheiss.at', positions };
+    },
+    60000
+  );
+}

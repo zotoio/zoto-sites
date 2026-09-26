@@ -12,6 +12,7 @@ import {
   demoEarthquakes,
   demoHolidays,
   demoIss,
+  demoIssTrack,
   demoLocation,
   demoMarine,
   demoNews,
@@ -37,7 +38,7 @@ import {
   locationFromIp,
 } from './lib/geocode.js';
 import { fetchHolidays } from './lib/holidays.js';
-import { fetchIssNow } from './lib/iss.js';
+import { fetchIssNow, fetchIssTrack } from './lib/iss.js';
 import { fetchMarine } from './lib/marine.js';
 import { fetchHackerNewsTop } from './lib/news.js';
 import { fetchNearbyTransit } from './lib/overpass.js';
@@ -257,6 +258,16 @@ app.get('/api/iss', async (req, res) => {
     return res.json(await fetchIssNow());
   } catch {
     return res.json(demoIss());
+  }
+});
+
+app.get('/api/iss/track', async (req, res) => {
+  const seconds = Math.min(5400, Math.max(60, Number(req.query.seconds) || 360));
+  if (isDemoRequest(req)) return res.json(demoIssTrack());
+  try {
+    return res.json(await fetchIssTrack(seconds));
+  } catch {
+    return res.json(demoIssTrack());
   }
 });
 

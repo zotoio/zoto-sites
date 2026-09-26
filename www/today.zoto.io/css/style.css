@@ -612,6 +612,63 @@ html.ultrawide-mode #ultrawide-mode-btn[aria-pressed='true'] {
   font-size: 1rem;
 }
 
+.viz-row {
+  margin: 0 0 0.5rem;
+}
+
+.viz-row svg {
+  width: 100%;
+  max-height: 120px;
+  display: block;
+}
+
+.iss-map-wrap {
+  margin: 0;
+}
+
+.iss-map {
+  width: 100%;
+  height: auto;
+  min-height: 88px;
+  border-radius: 8px;
+  border: 1px solid rgba(110, 231, 255, 0.12);
+}
+
+.iss-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  margin: 0.35rem 0 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.iss-widget-mount {
+  min-height: 100px;
+}
+
+.pollen-bars {
+  list-style: none;
+  margin: 0 0 0.35rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.pollen-bars li {
+  display: grid;
+  grid-template-columns: 3.5rem 1fr;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+}
+
+.pollen-bars meter {
+  width: 100%;
+  height: 0.45rem;
+}
+
 .weather-stats,
 .aq-grid {
   display: grid;

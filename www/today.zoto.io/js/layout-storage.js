@@ -1,6 +1,8 @@
 /** @typedef {{ id: string, type: string, x: number, y: number, w: number, h: number, settings?: Record<string, unknown> }} LayoutWidget */
 
 import { createLayoutEntry } from './widget-registry.js';
+import { GRID_COLUMNS_ULTRAWIDE } from './display-mode.js';
+import { normalizeWidgetLayout } from './layout-normalize.js';
 
 export const LAYOUT_SCHEMA = 1;
 export const STORAGE_KEY = 'today.zoto.io.layout.v1';
@@ -99,7 +101,10 @@ export function migrateLayout(raw) {
       };
     });
   if (widgets.length === 0) return null;
-  return { schema: LAYOUT_SCHEMA, widgets };
+  return {
+    schema: LAYOUT_SCHEMA,
+    widgets: normalizeWidgetLayout(widgets, GRID_COLUMNS_ULTRAWIDE),
+  };
 }
 
 /**

@@ -6,6 +6,19 @@ import {
 import { demoBadge, attachSettingsPopover, PRODUCTIVITY_STORE } from '../widget-helpers.js';
 import { formatSunTime, moonPhaseInfo, weatherIcon, weatherLabel } from '../weather-utils.js';
 import { getSettingsFields } from '../widget-registry.js';
+import { mountIssMapWidget } from '../iss-map.js';
+import {
+  aqiGaugeSvg,
+  bestOutsideStripSvg,
+  bikeBarsSvg,
+  chargerDotsSvg,
+  planetsSkySvg,
+  pollenBarsSvg,
+  quakeMiniMapSvg,
+  sunArcSvg,
+  tideCurveSvg,
+  waveSparklineSvg,
+} from '../widget-visuals.js';
 
 function fitCanvas(canvas, container) {
   const ratio = window.devicePixelRatio || 1;
@@ -205,7 +218,8 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
       const c = airQuality.current || {};
       body.innerHTML =
         demoBadge(airQuality.source) +
-        `<dl class="aq-grid">
+        `<div class="viz-row">${aqiGaugeSvg(c.us_aqi)}</div>
+        <dl class="aq-grid">
         <div><dt>US AQI</dt><dd>${c.us_aqi ?? '—'}</dd></div>
         <div><dt>PM2.5</dt><dd>${c.pm2_5 ?? '—'}</dd></div>
         <div><dt>PM10</dt><dd>${c.pm10 ?? '—'}</dd></div>
@@ -213,12 +227,15 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
       return { resize() {}, destroy() {} };
     }
     case 'pollen': {
-      body.innerHTML = demoBadge('demo') + `<p>${airQuality.pollen?.label || 'Pollen data unavailable'}</p>`;
+      body.innerHTML =
+        demoBadge('demo') +
+        pollenBarsSvg(airQuality.pollen) +
+        `<p class="muted-note">${airQuality.pollen?.label || 'Pollen data unavailable'}</p>`;
       return { resize() {}, destroy() {} };
     }
     case 'sun-hours': {
       const tz = loc.timezone || weather.timezone;
-      body.innerHTML = `<ul class="compact-list">
+      body.innerHTML = `${sunArcSvg()}<ul class="compact-list">
         <li>Sunrise ${formatSunTime(weather.daily?.sunrise?.[0], tz)}</li>
         <li>Sunset ${formatSunTime(weather.daily?.sunset?.[0], tz)}</li>
         <li>Golden hour: ~1h after sunrise / before sunset</li>
@@ -227,26 +244,26 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
       return { resize() {}, destroy() {} };
     }
     case 'iss': {
-      body.innerHTML = '<p>Loading ISS…</p>';
-      const data = await fetch('/api/iss');
-      body.innerHTML =
-        demoBadge(data.source) +
-        `<ul class="compact-list">
-          <li>Lat ${Number(data.lat).toFixed(2)}, Lon ${Number(data.lon).toFixed(2)}</li>
-          <li>Alt ${Math.round(data.altitude)} km · ${Math.round(data.velocity)} km/h</li>
-          <li>Visibility: ${data.visibility || '—'}</li>
-        </ul>`;
-      return { resize() {}, destroy() {} };
+      body.innerHTML = '<div class="iss-widget-mount"></div>';
+      const mapHost = body.querySelector('.iss-widget-mount');
+      const first = await fetch('/api/iss').catch(() => ({ source: 'demo' }));
+      mapHost.before(document.createRange().createContextualFragment(demoBadge(first.source)));
+      return mountIssMapWidget(
+        mapHost,
+        () => fetch('/api/iss'),
+        () => fetch('/api/iss/track', { seconds: 360 })
+      );
     }
     case 'planets': {
       body.innerHTML = `<p class="demo-badge" role="note">Approximate evening guide (demo model)</p>
+        ${planetsSkySvg()}
         <ul class="compact-list"><li>Venus — often visible at dusk</li><li>Jupiter — evening sky when up</li><li>Mars — reddish object after dark</li><li>Saturn — faint yellowish point</li></ul>`;
       return { resize() {}, destroy() {} };
     }
     case 'tides': {
       body.innerHTML =
         demoBadge('demo') +
-        `<ul class="compact-list"><li>06:12 High 1.8m</li><li>12:04 Low 0.4m</li><li>18:30 High 1.6m</li></ul><p class="muted-note">Demo tide table — not live for all coasts</p>`;
+        `${tideCurveSvg()}<ul class="compact-list"><li>06:12 High 1.8m</li><li>12:04 Low 0.4m</li><li>18:30 High 1.6m</li></ul><p class="muted-note">Demo tide table — not live for all coasts</p>`;
       return { resize() {}, destroy() {} };
     }
     case 'earthquakes': {
@@ -254,7 +271,8 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
       const data = await fetch('/api/earthquakes', { lat: loc.lat, lon: loc.lon });
       body.innerHTML =
         demoBadge(data.source) +
-        `<ul class="compact-list">${(data.earthquakes || [])
+        `<div class="viz-row">${quakeMiniMapSvg({ lat: loc.lat, lon: loc.lon }, data.earthquakes)}</div>
+        <ul class="compact-list">${(data.earthquakes || [])
           .map((e) => `<li>M${e.mag?.toFixed(1)} · ${e.place} (${e.distKm} km)</li>`)
           .join('')}</ul>`;
       return { resize() {}, destroy() {} };
@@ -316,7 +334,8 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
           best = i;
         }
       });
-      body.innerHTML = `<p>Best window: ${hours[best]?.slice(11, 16) || '—'}</p><p>~${Math.round(temps[best] ?? 0)}° · ${Math.round(precip[best] ?? 0)}% precip chance</p>`;
+      body.innerHTML = `${bestOutsideStripSvg(hours, temps, precip, best)}
+        <p>Best window: ${hours[best]?.slice(11, 16) || '—'}</p><p>~${Math.round(temps[best] ?? 0)}° · ${Math.round(precip[best] ?? 0)}% precip chance</p>`;
       return { resize() {}, destroy() {} };
     }
     case 'marine': {
@@ -325,7 +344,8 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
       const i = 0;
       body.innerHTML =
         demoBadge(data.source) +
-        `<p>Wave ${data.hourly?.wave_height?.[i] ?? '—'} m</p><p>Sea ${data.hourly?.sea_surface_temperature?.[i] ?? '—'} °C</p>`;
+        `<div class="viz-row">${waveSparklineSvg(data.hourly?.wave_height)}</div>
+        <p>Wave ${data.hourly?.wave_height?.[i] ?? '—'} m</p><p>Sea ${data.hourly?.sea_surface_temperature?.[i] ?? '—'} °C</p>`;
       return { resize() {}, destroy() {} };
     }
     case 'currency': {
@@ -462,7 +482,8 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
       const data = await fetch('/api/bikes', { lat: loc.lat, lon: loc.lon });
       body.innerHTML =
         demoBadge(data.source) +
-        `<ul class="compact-list">${(data.stations || [])
+        `<div class="viz-row">${bikeBarsSvg(data.stations)}</div>
+        <ul class="compact-list">${(data.stations || [])
           .map((s) => `<li>${s.name}: ${s.freeBikes ?? '?'} bikes (${s.network})</li>`)
           .join('')}</ul>`;
       return { resize() {}, destroy() {} };
@@ -490,7 +511,8 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
       const data = await fetch('/api/chargers', { lat: loc.lat, lon: loc.lon });
       body.innerHTML =
         demoBadge(data.source) +
-        `<ul class="compact-list">${(data.stations || [])
+        `<div class="viz-row">${chargerDotsSvg({ lat: loc.lat, lon: loc.lon }, data.stations)}</div>
+        <ul class="compact-list">${(data.stations || [])
           .slice(0, 10)
           .map((s) => `<li>${s.name} (${s.amenity})</li>`)
           .join('')}</ul>`;

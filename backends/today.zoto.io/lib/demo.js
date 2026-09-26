@@ -281,6 +281,67 @@ export function demoChargers() {
   };
 }
 
+export function demoWebcams() {
+  return {
+    source: 'demo',
+    configured: { windy: false },
+    message: 'Demo webcams — not live feeds. Set WINDY_WEBCAMS_KEY for Windy Webcams.',
+    cameras: [
+      {
+        id: 'demo-wc-1',
+        name: 'Demo harbour view',
+        distKm: 2,
+        imageKey: 'demo-wc-1',
+        updatedAt: new Date().toISOString(),
+        attribution: 'Demo placeholder',
+        provider: 'demo',
+        live: false,
+      },
+      {
+        id: 'demo-wc-2',
+        name: 'Demo city skyline',
+        distKm: 5,
+        imageKey: 'demo-wc-2',
+        updatedAt: new Date().toISOString(),
+        attribution: 'Demo placeholder',
+        provider: 'demo',
+        live: false,
+      },
+    ],
+  };
+}
+
+export function demoTrafficCameras() {
+  return {
+    source: 'demo',
+    configured: { nsw: false, qldtrafficApi: false },
+    messages: ['Demo traffic cameras — not live. Set TRANSPORT_NSW_API_KEY for Sydney/NSW feeds.'],
+    providers: [],
+    cameras: [
+      {
+        id: 'demo-tc-1',
+        provider: 'demo',
+        name: 'Demo motorway camera',
+        view: 'Sample northbound view',
+        distKm: 3,
+        imageKey: 'demo-traffic-1',
+        updatedAt: new Date().toISOString(),
+        attribution: 'Demo placeholder',
+      },
+      {
+        id: 'demo-tc-2',
+        provider: 'demo',
+        name: 'Demo bridge camera',
+        view: 'Sample eastbound view',
+        distKm: 8,
+        imageKey: 'demo-traffic-2',
+        updatedAt: new Date().toISOString(),
+        attribution: 'Demo placeholder',
+      },
+    ],
+  };
+}
+
 export function demoTransit() {
   return {
     source: 'demo',

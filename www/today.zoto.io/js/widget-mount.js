@@ -10,6 +10,10 @@ export async function mountWidget(type, body, ctx, settings = {}, onSettings) {
     const api = await coreMod.mount(type, body, ctx, settings, onSettings);
     if (api) return api;
   }
+  if (mod === 'cameras') {
+    const camerasMod = await import('./widgets/cameras.js');
+    return camerasMod.mount(type, body, ctx, settings, onSettings);
+  }
   extraMod ??= await import('./widgets/extra.js');
   return extraMod.mount(type, body, ctx, settings, onSettings);
 }

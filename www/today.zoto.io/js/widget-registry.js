@@ -9,6 +9,7 @@ export const WIDGET_CATEGORIES = [
   { id: 'productivity', title: 'Productivity' },
   { id: 'fun', title: 'Fun' },
   { id: 'transport', title: 'Transport' },
+  { id: 'cameras', title: 'Local cameras' },
 ];
 
 function def(partial) {
@@ -186,6 +187,26 @@ export const WIDGET_CATALOG = {
     defaultH: 6,
   }),
   'ev-chargers': def({ category: 'transport', title: 'EV & fuel', description: 'Chargers and fuel from OSM', defaultH: 5 }),
+  'nearby-webcams': def({
+    category: 'cameras',
+    module: 'cameras',
+    title: 'Nearby webcams',
+    description: 'Public webcams near you (Windy + Wikimedia)',
+    defaultW: 6,
+    defaultH: 6,
+    defaultSettings: { favoritesOnly: false },
+    settingsFields: [{ name: 'favoritesOnly', label: 'Show favourites only (true/false)', default: false }],
+  }),
+  'traffic-cams': def({
+    category: 'cameras',
+    module: 'cameras',
+    title: 'Traffic cams',
+    description: 'Road authority cameras near you',
+    defaultW: 6,
+    defaultH: 6,
+    defaultSettings: { favoritesOnly: false },
+    settingsFields: [{ name: 'favoritesOnly', label: 'Show favourites only (true/false)', default: false }],
+  }),
 };
 
 export function allWidgetTypes() {

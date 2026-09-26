@@ -17,7 +17,7 @@ test('every catalog widget has valid category and sizing', () => {
     assert.ok(meta.description, `${type} missing description`);
     assert.ok(catIds.has(meta.category), `${type} bad category ${meta.category}`);
     assert.ok(meta.minW >= 2 && meta.minH >= 2, `${type} min size`);
-    assert.ok(['core', 'extra'].includes(meta.module), `${type} module`);
+    assert.ok(['core', 'extra', 'cameras'].includes(meta.module), `${type} module`);
   }
 });
 
@@ -57,5 +57,5 @@ test('settings fields align with defaults for configured widgets', () => {
 });
 
 test('expected widget count for library expansion', () => {
-  assert.equal(allWidgetTypes().length, 44);
+  assert.equal(allWidgetTypes().length, 46);
 });

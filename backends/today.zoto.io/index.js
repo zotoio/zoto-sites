@@ -16,13 +16,16 @@ import {
   demoMarine,
   demoNews,
   demoOnThisDay,
+  demoTrafficCameras,
   demoTransit,
   demoWeather,
+  demoWebcams,
   demoWikiNearby,
   isDemoRequest,
 } from './lib/demo.js';
 import { fetchAirQuality } from './lib/air-quality.js';
 import { fetchNearbyBikes } from './lib/bikes.js';
+import { fetchProxiedCameraImage } from './lib/camera-images.js';
 import { fetchEvChargers } from './lib/chargers.js';
 import { fetchCommonsNearby } from './lib/commons.js';
 import { fetchCountryFacts } from './lib/country.js';
@@ -38,8 +41,10 @@ import { fetchIssNow } from './lib/iss.js';
 import { fetchMarine } from './lib/marine.js';
 import { fetchTopNews } from './lib/news.js';
 import { fetchNearbyTransit } from './lib/overpass.js';
+import { fetchNearbyTrafficCameras } from './lib/traffic-cams.js';
 import { fetchWeather } from './lib/weather.js';
 import { fetchOnThisDay, fetchWikiNearby } from './lib/wiki.js';
+import { fetchNearbyWebcams } from './lib/webcams.js';
 
 dotenv.config();
 
@@ -47,6 +52,12 @@ const { NEWS_API_KEY, PORT = 3001 } = process.env;
 
 if (!NEWS_API_KEY) {
   console.warn('NEWS_API_KEY is not set — /api/news will use demo data only until configured.');
+}
+if (!process.env.WINDY_WEBCAMS_KEY) {
+  console.warn('WINDY_WEBCAMS_KEY is not set — /api/webcams uses Wikimedia/demo unless configured.');
+}
+if (!process.env.TRANSPORT_NSW_API_KEY) {
+  console.warn('TRANSPORT_NSW_API_KEY is not set — NSW traffic cameras unavailable (demo for traffic widget).');
 }
 
 const app = express();
@@ -299,6 +310,61 @@ app.get('/api/chargers', async (req, res) => {
     return res.json(await fetchEvChargers(pos.lat, pos.lon));
   } catch {
     return res.json(demoChargers());
+  }
+});
+
+app.get('/api/webcams', async (req, res) => {
+  const pos = latLonRequired(req, res);
+  if (!pos) return;
+  if (isDemoRequest(req)) return res.json(demoWebcams());
+  try {
+    const data = await fetchNearbyWebcams(pos.lat, pos.lon);
+    if (!data.cameras?.length) {
+      return res.json({
+        ...demoWebcams(),
+        configured: data.configured,
+        message: data.message || demoWebcams().message,
+      });
+    }
+    return res.json(data);
+  } catch {
+    return res.json(demoWebcams());
+  }
+});
+
+app.get('/api/traffic-cams', async (req, res) => {
+  const pos = latLonRequired(req, res);
+  if (!pos) return;
+  const country = (req.query.country || '').toString();
+  if (isDemoRequest(req)) return res.json(demoTrafficCameras());
+  try {
+    const data = await fetchNearbyTrafficCameras(pos.lat, pos.lon, country);
+    if (!data.cameras?.length) {
+      return res.json({
+        ...demoTrafficCameras(),
+        configured: data.configured,
+        messages: data.messages?.length ? data.messages : demoTrafficCameras().messages,
+      });
+    }
+    return res.json(data);
+  } catch {
+    return res.json(demoTrafficCameras());
+  }
+});
+
+app.get('/api/camera-image', async (req, res) => {
+  const key = (req.query.key || '').toString();
+  if (!key || key.length > 120) {
+    return res.status(400).send('key required');
+  }
+  try {
+    const img = await fetchProxiedCameraImage(key);
+    if (!img) return res.status(404).send('not found or expired');
+    res.set('Cache-Control', 'public, max-age=60');
+    if (img.attribution) res.set('X-Camera-Attribution', img.attribution.slice(0, 200));
+    res.type(img.contentType).send(img.buffer);
+  } catch {
+    return res.status(502).send('upstream error');
   }
 });
 

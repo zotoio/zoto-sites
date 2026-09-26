@@ -56,6 +56,33 @@ export function passesLocalAiTermGate(article) {
     return AI_TERM_PATTERN.test(text);
 }
 
+const ASK_SHOW_HN = /^(ask hn|show hn)\s*:/i;
+
+/** Skip Ask HN / Show HN unless the title clearly mentions AI (local gate). */
+export function passesHnStoryTypeGate(article) {
+    const title = (article?.title || '').trim();
+    if (!title) {
+        return false;
+    }
+    if (ASK_SHOW_HN.test(title)) {
+        return passesLocalAiTermGate({ title, description: article?.description || '' });
+    }
+    return true;
+}
+
+export function hnEngagementScore(article) {
+    const points = Number(article?.points) || 0;
+    const comments = Number(article?.num_comments) || 0;
+    return points * 2 + comments;
+}
+
+/** Sort by HN points/comments and cap how many we send to Luna scoring. */
+export function prepareHnCandidatesForScoring(candidates, { maxToScore = 25 } = {}) {
+    return [...candidates]
+        .sort((a, b) => hnEngagementScore(b) - hnEngagementScore(a))
+        .slice(0, maxToScore);
+}
+
 export function buildRelevanceScoringPrompt(article) {
     const payload = {
         title: article?.title || '',
@@ -99,7 +126,10 @@ export function isVerdictAcceptable(verdict) {
  * @param {object[]} candidates
  * @param {{ scoreArticle: (article: object) => Promise<object>, log?: (msg: string) => void }} deps
  */
-export async function selectBestQualifyingStory(candidates, { scoreArticle, log = () => {} }) {
+export async function selectBestQualifyingStory(
+    candidates,
+    { scoreArticle, log = () => {}, preferEngagement = false } = {}
+) {
     if (!candidates?.length) {
         return null;
     }
@@ -126,7 +156,15 @@ export async function selectBestQualifyingStory(candidates, { scoreArticle, log 
         return null;
     }
 
-    ranked.sort((a, b) => b.score - a.score);
+    ranked.sort((a, b) => {
+        if (b.score !== a.score) {
+            return b.score - a.score;
+        }
+        if (preferEngagement) {
+            return hnEngagementScore(b.article) - hnEngagementScore(a.article);
+        }
+        return 0;
+    });
     return ranked[0].article;
 }
 

@@ -6,6 +6,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
+import { fetchWithRetries } from './lib/backfillHttp.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const botzPackageRoot =
@@ -21,6 +22,18 @@ const {
 
 const { buildTopNewsParams, describeTopNewsRequest } = await import(
     pathToFileURL(path.join(botzPackageRoot, 'newsApi.js')).href
+);
+
+const { buildHnAlgoliaParams, describeHnAlgoliaRequest } = await import(
+    pathToFileURL(path.join(botzPackageRoot, 'hnAlgolia.js')).href
+);
+
+const { NEWS_CANDIDATE_LIMIT_PER_REQUEST } = await import(
+    pathToFileURL(path.join(botzPackageRoot, 'newsFetchPlan.js')).href
+);
+
+const { parseNewsSource } = await import(
+    pathToFileURL(path.join(botzPackageRoot, 'newsSourceConfig.js')).href
 );
 
 const { purgeCloudflareCacheByUrl } = await import(
@@ -54,6 +67,7 @@ Options:
   --execute           Perform OpenAI generation and cache writes (default: dry-run only)
   --replace <cacheKey>  Regenerate one backfilled editorial (requires --execute); archives prior JSON/image to cache/.replaced/
   --limit <N>         Process at most N pending days after skips
+  --max-news-requests <N>  Stop after N upstream news fetch requests per editorial (HN Algolia or The News API)
   --delay-ms <ms>     Pause between successful days (default: 5000)
   --log <path>        Append-only JSONL progress log (execute mode default: ${DEFAULT_EXECUTE_LOG}; dry-run writes no log unless this is set)
   --base-url <url>    botz API base URL (default: http://127.0.0.1:3000)
@@ -69,6 +83,7 @@ function parseArgs(argv) {
         hour: 12,
         dryRun: true,
         limit: Infinity,
+        maxNewsRequests: null,
         delayMs: 5000,
         logPath: undefined,
         baseUrl: process.env.BACKFILL_BASE_URL || 'http://127.0.0.1:3000',
@@ -106,6 +121,7 @@ function parseArgs(argv) {
         else if (arg === '--to') options.to = readValue();
         else if (arg === '--hour') options.hour = Number(readValue());
         else if (arg === '--limit') options.limit = Number(readValue());
+        else if (arg === '--max-news-requests') options.maxNewsRequests = Number(readValue());
         else if (arg === '--delay-ms') options.delayMs = Number(readValue());
         else if (arg === '--log') options.logPath = readValue();
         else if (arg === '--base-url') options.baseUrl = readValue();
@@ -151,23 +167,60 @@ function dateFromCacheKey(cacheKey) {
     return match ? match[1] : null;
 }
 
-async function requestEditorial({ baseUrl, sharedSecret, cacheKey, asOfDate }) {
+function buildResumeCommand(options, fromDate) {
+    const parts = [
+        'node scripts/backfill-editorials.mjs',
+        `--from ${fromDate}`,
+        `--to ${options.to}`,
+        `--hour ${options.hour}`,
+        '--execute',
+    ];
+    if (options.maxNewsRequests != null) {
+        parts.push(`--max-news-requests ${options.maxNewsRequests}`);
+    }
+    return parts.join(' ');
+}
+
+async function requestEditorial({ baseUrl, sharedSecret, cacheKey, asOfDate, maxNewsRequests }) {
     const url = new URL('/editorials', baseUrl);
     url.searchParams.set('cacheKey', cacheKey);
     url.searchParams.set('asOf', asOfDate);
     url.searchParams.set('purgeCache', 'false');
+    if (maxNewsRequests != null && Number.isFinite(maxNewsRequests)) {
+        url.searchParams.set('maxNewsRequests', String(maxNewsRequests));
+    }
 
-    const response = await fetch(url, {
-        headers: { 'x-shared-secret': sharedSecret },
-        signal: AbortSignal.timeout(600000),
-    });
+    const response = await fetchWithRetries(
+        url.toString(),
+        { headers: { 'x-shared-secret': sharedSecret } },
+        { timeoutMs: 600_000, maxRetries: 2 }
+    );
 
     const body = await response.json().catch(() => ({}));
+    const headerNewsRequests = Number.parseInt(
+        response.headers.get('x-news-fetch-requests') ||
+            response.headers.get('x-thenewsapi-requests') ||
+            '',
+        10
+    );
+    const bodyNewsRequests = Number(body?.news_fetch_requests);
+    const newsRequestsFromResponse = Number.isFinite(headerNewsRequests)
+        ? headerNewsRequests
+        : Number.isFinite(bodyNewsRequests)
+          ? bodyNewsRequests
+          : 0;
+    if (response.status === 503 && body?.error === 'news_quota_exhausted') {
+        const err = new Error('The News API quota is exhausted (news_quota_exhausted).');
+        err.isNewsQuotaExhausted = true;
+        err.resumeFromDate = asOfDate;
+        throw err;
+    }
     if (response.status === 422) {
         const err = new Error(
-            `SKIP ${asOfDate} (${cacheKey}): no qualifying GenAI news story (HTTP 422). See botz logs for no_qualifying_story.`
+            `SKIP ${asOfDate} (${cacheKey}): no qualifying GenAI news story (HTTP 422). See botz logs (no_articles / no_match).`
         );
         err.isNoQualifyingStory = true;
+        err.newsRequestsUsed = newsRequestsFromResponse;
         throw err;
     }
     if (response.status >= 400) {
@@ -178,7 +231,11 @@ async function requestEditorial({ baseUrl, sharedSecret, cacheKey, asOfDate }) {
         err.status = response.status;
         throw err;
     }
-    return body;
+
+    return {
+        body,
+        newsRequests: Number.isFinite(newsRequestsFromResponse) ? newsRequestsFromResponse : 0,
+    };
 }
 
 function recordDayUsage(cacheDir, cacheKey, date, usageCalls) {
@@ -210,6 +267,7 @@ async function runReplaceMode(options, cacheDir, sharedSecret, logPath) {
         sharedSecret,
         cacheKey,
         asOfDate,
+        maxNewsRequests: options.maxNewsRequests,
     });
 
     const usageCalls = [];
@@ -244,6 +302,7 @@ async function main() {
     const cacheDir = process.env.CACHE_DIR || '/home/root/cache';
     const sharedSecret = process.env.SHARED_SECRET;
     const newsApiKey = process.env.NEWS_API_KEY || 'REDACTED';
+    const newsSource = parseNewsSource(process.env.NEWS_SOURCE);
     const logPath = resolveLogPath(options);
 
     if (!options.dryRun && !sharedSecret) {
@@ -266,36 +325,57 @@ async function main() {
 
     const usageCalls = [];
     let processed = 0;
+    let newsRequestsUsed = 0;
+
     for (const date of pending) {
         if (processed >= options.limit) {
             console.log(`Reached --limit ${options.limit}; stopping.`);
             break;
         }
 
+        if (
+            options.maxNewsRequests != null &&
+            Number.isFinite(options.maxNewsRequests) &&
+            newsRequestsUsed >= options.maxNewsRequests
+        ) {
+            console.log(
+                `News fetch request budget (${options.maxNewsRequests}) exhausted after ${newsRequestsUsed} request(s). Stopping.`
+            );
+            console.log(`Resume with: ${buildResumeCommand(options, date)}`);
+            break;
+        }
+
         const cacheKey = editorialCacheKeyForDate(date, options.hour);
         const cacheFilePath = cacheFilePathForKey(cacheDir, cacheKey);
 
-        const newsParams = buildTopNewsParams({
-            apiToken: newsApiKey,
-            search: buildGenAiNewsSearchQuery(),
-            language: 'en',
-            limit: 10,
-            page: 1,
-            asOfDate: date,
-            categories: GENAI_NEWS_CATEGORIES,
-        });
-        const newsRequest = describeTopNewsRequest(newsParams, { redactToken: true });
+        let newsRequest;
+        if (newsSource === 'hn') {
+            const hnParams = buildHnAlgoliaParams({ asOfDate: date, page: 0 });
+            newsRequest = describeHnAlgoliaRequest(hnParams, { asOfDate: date });
+        } else {
+            const newsParams = buildTopNewsParams({
+                apiToken: newsApiKey,
+                search: buildGenAiNewsSearchQuery(),
+                language: 'en',
+                limit: NEWS_CANDIDATE_LIMIT_PER_REQUEST,
+                page: 1,
+                asOfDate: date,
+                categories: GENAI_NEWS_CATEGORIES,
+            });
+            newsRequest = describeTopNewsRequest(newsParams, { redactToken: true });
+        }
 
         if (options.dryRun) {
-            console.log(`[dry-run] ${date} cacheKey=${cacheKey}`);
+            console.log(`[dry-run] ${date} cacheKey=${cacheKey} news_source=${newsSource}`);
             console.log(
-                `[dry-run] News API: ${newsRequest.method} ${newsRequest.url}?${newsRequest.query}`
+                `[dry-run] news fetch (typical 1 req/editorial): ${newsRequest.method} ${newsRequest.url}?${newsRequest.query}`
             );
             appendLog(logPath, {
                 at: new Date().toISOString(),
                 date,
                 cacheKey,
                 status: 'dry-run',
+                news_source: newsSource,
                 newsRequest: { method: newsRequest.method, url: newsRequest.url, query: newsRequest.query },
             });
             processed += 1;
@@ -310,13 +390,20 @@ async function main() {
                 continue;
             }
 
+            const remainingBudget =
+                options.maxNewsRequests != null
+                    ? Math.max(0, options.maxNewsRequests - newsRequestsUsed)
+                    : null;
+
             console.log(`Generating ${date} → ${cacheKey} ...`);
-            await requestEditorial({
+            const { newsRequests } = await requestEditorial({
                 baseUrl: options.baseUrl,
                 sharedSecret,
                 cacheKey,
                 asOfDate: date,
+                maxNewsRequests: remainingBudget,
             });
+            newsRequestsUsed += newsRequests || 0;
 
             const totals = recordDayUsage(cacheDir, cacheKey, date, usageCalls);
 
@@ -326,20 +413,38 @@ async function main() {
                 cacheKey,
                 status: 'ok',
                 usage: totals,
+                news_api_requests: newsRequests,
             });
             processed += 1;
             if (options.delayMs > 0) {
                 await sleep(options.delayMs);
             }
         } catch (error) {
+            if (error.isNewsQuotaExhausted) {
+                const resumeFrom = error.resumeFromDate || date;
+                const resumeCmd = buildResumeCommand(options, resumeFrom);
+                console.error(`${error.message} Resume with: ${resumeCmd}`);
+                appendLog(logPath, {
+                    at: new Date().toISOString(),
+                    date,
+                    cacheKey,
+                    status: 'news_quota_exhausted',
+                    resume_command: resumeCmd,
+                });
+                process.exit(1);
+            }
             if (error.isNoQualifyingStory) {
                 console.log(error.message);
+                if (Number.isFinite(error.newsRequestsUsed)) {
+                    newsRequestsUsed += error.newsRequestsUsed;
+                }
                 appendLog(logPath, {
                     at: new Date().toISOString(),
                     date,
                     cacheKey,
                     status: 'skipped_no_qualifying_story',
                     message: error.message,
+                    news_api_requests: error.newsRequestsUsed ?? 0,
                 });
                 processed += 1;
                 continue;
@@ -354,6 +459,10 @@ async function main() {
             console.error(error.message);
             process.exit(1);
         }
+    }
+
+    if (!options.dryRun) {
+        console.log(`The News API requests this run: ${newsRequestsUsed}`);
     }
 
     if (!options.dryRun && usageCalls.length > 0) {

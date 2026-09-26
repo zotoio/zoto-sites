@@ -20,7 +20,8 @@ There is **no** ESLint, test runner, or `lint`/`test` npm scripts in this repo. 
 
 Copy `backends/botz.ai/example.env` to `backends/botz.ai/.env` and set:
 
-- `OPENAI_API_KEY`, `NEWS_API_KEY`, `SHARED_SECRET` (required at startup; process exits if missing)
+- `OPENAI_API_KEY`, `SHARED_SECRET` (required at startup; process exits if missing)
+- `NEWS_SOURCE` — `hn` (default, keyless HN Algolia) or `thenewsapi` (requires `NEWS_API_KEY`)
 - `CACHE_DIR` — use a writable path under the repo for local dev, e.g. `/workspace/backends/botz.ai/cache` (not `/var/lib/cache` unless that directory exists)
 
 Optional: `backends/discord/.env` from `example.env` for the Discord bot (needs `DISCORD_TOKEN`, `DISCORD_APPLICATION_ID`).

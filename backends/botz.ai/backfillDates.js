@@ -31,6 +31,13 @@ export function formatDateOnly(utcDate) {
 }
 
 /** Inclusive UTC date range from --from through --to. */
+export function nextCalendarDay(dateStr) {
+    const from = parseDateOnly(dateStr);
+    const next = new Date(from.getTime());
+    next.setUTCDate(next.getUTCDate() + 1);
+    return formatDateOnly(next);
+}
+
 export function enumerateDatesInclusive(fromStr, toStr) {
     const from = parseDateOnly(fromStr);
     const to = parseDateOnly(toStr);

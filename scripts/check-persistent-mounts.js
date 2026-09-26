@@ -2,12 +2,10 @@
 /**
  * CI guard: docker-compose bind mounts and botz CACHE_DIR must match deploy/persistent-data.txt.
  */
-import { execSync } from 'child_process';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+const { execSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
 const manifestPath = path.join(root, 'deploy', 'persistent-data.txt');
 

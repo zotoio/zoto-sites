@@ -13,7 +13,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: "20"
 
       - name: today.zoto.io layout storage tests
         run: node --test www/today.zoto.io/test/layout-storage.test.mjs

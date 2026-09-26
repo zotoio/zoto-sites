@@ -32,8 +32,9 @@ dotenv.config();
 
 const {
     OPENAI_API_KEY,
-    OPENAI_MODEL_STRONG = 'gpt-4o',
-    OPENAI_MODEL_WEAK = 'gpt-4o-mini',
+    OPENAI_MODEL_STRONG = 'gpt-6-sol',
+    OPENAI_MODEL_WEAK = 'gpt-6-luna',
+    OPENAI_REASONING_EFFORT,
     NEWS_API_KEY,
     PORT = 3000,
     FREQUENCY = 'daily',
@@ -73,6 +74,19 @@ const limiter = rateLimit({
 app.use(limiter);
 
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+
+/** Chat completion body for reasoning models (no temperature / max_tokens). */
+const buildChatCompletionRequest = ({ model, messages, jsonMode = false }) => {
+    const body = { model, messages };
+    if (jsonMode) {
+        body.response_format = { type: 'json_object' };
+    }
+    if (OPENAI_REASONING_EFFORT) {
+        body.reasoning_effort = OPENAI_REASONING_EFFORT;
+    }
+    return body;
+};
+
 const keywords = ['claude 3.5', 'anthropic', 'runwayml', 'slm', 'llm', 'large%2language%20model', 'ollama', 'sora', 'chatgpt', 'chatgpt%20pro', 'midjourney', 'dall-e', 'openai', 'genai', 'generative%20ai', 'copilot', 'google%20gemini', 'gemini%201.5', 'gemini%20pro', 'google%20gemma', 'bard', 'gpt-3', 'gpt-4', 'gpt', 'gpt-4o', 'hugging%20face', 'meta%20llama'];
 
 const isWeekend = () => {
@@ -205,11 +219,13 @@ const aiJSONResponse = async (prompt, model) => {
         const modelName = model ? model : OPENAI_MODEL_WEAK;
         const startTime = Date.now();
         console.log(`${startTime} - sending: ${prompt}`);
-        const chatCompletion = await openai.chat.completions.create({
-            model: modelName,
-            response_format: { type: 'json_object' },
-            messages: [{ role: 'user', content: prompt }]
-        });
+        const chatCompletion = await openai.chat.completions.create(
+            buildChatCompletionRequest({
+                model: modelName,
+                messages: [{ role: 'user', content: prompt }],
+                jsonMode: true,
+            })
+        );
         const endTime = Date.now();
         console.log(chatCompletion.choices);
         console.log(`aiJSONResponse API call took ${endTime - startTime} ms`);
@@ -225,10 +241,12 @@ const aiResponse = async (prompt, model) => {
         const modelName = model ? model : OPENAI_MODEL_STRONG;
         const startTime = Date.now();
         console.log(`${startTime} - sending: ${prompt}`);
-        const chatCompletion = await openai.chat.completions.create({
-            model: modelName,
-            messages: [{ role: 'user', content: prompt }]
-        });
+        const chatCompletion = await openai.chat.completions.create(
+            buildChatCompletionRequest({
+                model: modelName,
+                messages: [{ role: 'user', content: prompt }],
+            })
+        );
         const endTime = Date.now();
         console.log(chatCompletion.choices);
         console.log(`aiResponse API call took ${endTime - startTime} ms`);

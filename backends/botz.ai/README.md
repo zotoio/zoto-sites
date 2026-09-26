@@ -42,8 +42,8 @@ Per day (one article):
 
 | Step | Model (typical) |
 | --- | --- |
-| Editorial HTML | `gpt-4o` |
-| Categories, author, phrases, image style, summary, image prompt | several `gpt-4o-mini` calls |
+| Editorial HTML | `gpt-6-sol` (override via `OPENAI_MODEL_STRONG`) |
+| Categories, author, phrases, image style, summary, image prompt | several `gpt-6-luna` calls (`OPENAI_MODEL_WEAK`) |
 | Hero image | `gpt-image-2` (via `openaiImages.js`) |
 
 Multiply by **136** days for the May–September 2026 gap. Exact spend depends on prompt length and image retries.

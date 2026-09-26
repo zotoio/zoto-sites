@@ -9,12 +9,10 @@ import path from 'path';
 import sanitize from 'sanitize-filename';
 import helmet from 'helmet';
 import crypto from 'crypto';
-import curlirize from 'axios-curlirize';
 import cheerio from 'cheerio';
 import sanitizeHtml from 'sanitize-html';
 import { requestGeneratedImage } from './openaiImages.js';
-
-curlirize(axios);
+import { purgeCloudflareCacheByUrl } from './cloudflarePurge.js';
 
 dotenv.config();
 
@@ -695,34 +693,12 @@ app.get('/archive', async (req, res) => {
     }
 });
 
-const clearCloudflareCache = async url => {
-
-    if (!CF_ZONE_ID || !CF_API_TOKEN) return
-
-    const apiUrl = `https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/purge_cache`;
-
-    try {
-        const response = await axios.post(
-            apiUrl,
-            {
-                files: [url]
-            },
-            {
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${CF_API_TOKEN}`
-                }
-            }
-        );
-
-        if (response.data.success) {
-            console.log('Cloudflare: cache cleared successfully:', response.data);
-        } else {
-            console.error('Cloudflare: Failed to clear cache:', response.data);
-        }
-    } catch (error) {
-        console.error('Cloudflare: Error clearing cache:', error.response ? error.response.data : error.message);
-    }
+const clearCloudflareCache = async (url) => {
+    await purgeCloudflareCacheByUrl({
+        zoneId: CF_ZONE_ID,
+        apiToken: CF_API_TOKEN,
+        url,
+    });
 };
 
 app.listen(PORT, () => {

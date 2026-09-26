@@ -24,8 +24,16 @@ const { buildTopNewsParams, describeTopNewsRequest } = await import(
     pathToFileURL(path.join(botzPackageRoot, 'newsApi.js')).href
 );
 
+const { buildHnAlgoliaParams, describeHnAlgoliaRequest } = await import(
+    pathToFileURL(path.join(botzPackageRoot, 'hnAlgolia.js')).href
+);
+
 const { NEWS_CANDIDATE_LIMIT_PER_REQUEST } = await import(
     pathToFileURL(path.join(botzPackageRoot, 'newsFetchPlan.js')).href
+);
+
+const { parseNewsSource } = await import(
+    pathToFileURL(path.join(botzPackageRoot, 'newsSourceConfig.js')).href
 );
 
 const { purgeCloudflareCacheByUrl } = await import(
@@ -59,7 +67,7 @@ Options:
   --execute           Perform OpenAI generation and cache writes (default: dry-run only)
   --replace <cacheKey>  Regenerate one backfilled editorial (requires --execute); archives prior JSON/image to cache/.replaced/
   --limit <N>         Process at most N pending days after skips
-  --max-news-requests <N>  Stop the run after N The News API requests (server-reported per editorial)
+  --max-news-requests <N>  Stop after N upstream news fetch requests per editorial (HN Algolia or The News API)
   --delay-ms <ms>     Pause between successful days (default: 5000)
   --log <path>        Append-only JSONL progress log (execute mode default: ${DEFAULT_EXECUTE_LOG}; dry-run writes no log unless this is set)
   --base-url <url>    botz API base URL (default: http://127.0.0.1:3000)
@@ -210,7 +218,12 @@ async function requestEditorial({ baseUrl, sharedSecret, cacheKey, asOfDate, max
         throw err;
     }
 
-    const newsRequests = Number.parseInt(response.headers.get('x-thenewsapi-requests') || '0', 10);
+    const newsRequests = Number.parseInt(
+        response.headers.get('x-news-fetch-requests') ||
+            response.headers.get('x-thenewsapi-requests') ||
+            '0',
+        10
+    );
     return { body, newsRequests: Number.isFinite(newsRequests) ? newsRequests : 0 };
 }
 
@@ -278,6 +291,7 @@ async function main() {
     const cacheDir = process.env.CACHE_DIR || '/home/root/cache';
     const sharedSecret = process.env.SHARED_SECRET;
     const newsApiKey = process.env.NEWS_API_KEY || 'REDACTED';
+    const newsSource = parseNewsSource(process.env.NEWS_SOURCE);
     const logPath = resolveLogPath(options);
 
     if (!options.dryRun && !sharedSecret) {
@@ -314,7 +328,7 @@ async function main() {
             newsRequestsUsed >= options.maxNewsRequests
         ) {
             console.log(
-                `The News API request budget (${options.maxNewsRequests}) is exhausted after ${newsRequestsUsed} request(s). Stopping.`
+                `News fetch request budget (${options.maxNewsRequests}) exhausted after ${newsRequestsUsed} request(s). Stopping.`
             );
             console.log(`Resume with: ${buildResumeCommand(options, date)}`);
             break;
@@ -323,27 +337,34 @@ async function main() {
         const cacheKey = editorialCacheKeyForDate(date, options.hour);
         const cacheFilePath = cacheFilePathForKey(cacheDir, cacheKey);
 
-        const newsParams = buildTopNewsParams({
-            apiToken: newsApiKey,
-            search: buildGenAiNewsSearchQuery(),
-            language: 'en',
-            limit: NEWS_CANDIDATE_LIMIT_PER_REQUEST,
-            page: 1,
-            asOfDate: date,
-            categories: GENAI_NEWS_CATEGORIES,
-        });
-        const newsRequest = describeTopNewsRequest(newsParams, { redactToken: true });
+        let newsRequest;
+        if (newsSource === 'hn') {
+            const hnParams = buildHnAlgoliaParams({ asOfDate: date, page: 0 });
+            newsRequest = describeHnAlgoliaRequest(hnParams, { asOfDate: date });
+        } else {
+            const newsParams = buildTopNewsParams({
+                apiToken: newsApiKey,
+                search: buildGenAiNewsSearchQuery(),
+                language: 'en',
+                limit: NEWS_CANDIDATE_LIMIT_PER_REQUEST,
+                page: 1,
+                asOfDate: date,
+                categories: GENAI_NEWS_CATEGORIES,
+            });
+            newsRequest = describeTopNewsRequest(newsParams, { redactToken: true });
+        }
 
         if (options.dryRun) {
-            console.log(`[dry-run] ${date} cacheKey=${cacheKey}`);
+            console.log(`[dry-run] ${date} cacheKey=${cacheKey} news_source=${newsSource}`);
             console.log(
-                `[dry-run] News API (typical 1 req/editorial): ${newsRequest.method} ${newsRequest.url}?${newsRequest.query}`
+                `[dry-run] news fetch (typical 1 req/editorial): ${newsRequest.method} ${newsRequest.url}?${newsRequest.query}`
             );
             appendLog(logPath, {
                 at: new Date().toISOString(),
                 date,
                 cacheKey,
                 status: 'dry-run',
+                news_source: newsSource,
                 newsRequest: { method: newsRequest.method, url: newsRequest.url, query: newsRequest.query },
             });
             processed += 1;

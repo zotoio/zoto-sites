@@ -1,0 +1,21 @@
+{
+  "nbHits": 2,
+  "hits": [
+    {
+      "objectID": "1001",
+      "title": "OpenAI releases new ChatGPT coding features",
+      "url": "https://example.com/openai-chatgpt",
+      "points": 420,
+      "num_comments": 88,
+      "created_at_i": 1781049600
+    },
+    {
+      "objectID": "1002",
+      "title": "Show HN: My weekend gardening project",
+      "url": "https://example.com/garden",
+      "points": 50,
+      "num_comments": 12,
+      "created_at_i": 1781050000
+    }
+  ]
+}

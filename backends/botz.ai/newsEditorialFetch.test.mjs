@@ -9,6 +9,7 @@ test('fetchQualifyingStoryForEditorial throws no_articles when API returns empty
     await assert.rejects(
         () =>
             fetchQualifyingStoryForEditorial({
+                newsSource: 'thenewsapi',
                 asOfDate: '2026-06-01',
                 isWeekend: false,
                 newsApiKey: 'x',
@@ -31,6 +32,7 @@ test('fetchQualifyingStoryForEditorial uses one request when story qualifies', a
         description: 'generative AI large language model release',
     };
     const result = await fetchQualifyingStoryForEditorial({
+        newsSource: 'thenewsapi',
         asOfDate: '2026-06-02',
         isWeekend: false,
         newsApiKey: 'x',
@@ -61,6 +63,7 @@ test('fetchQualifyingStoryForEditorial reuses cached candidates without extra HT
         JSON.stringify({ qualifies: true, score: 80, sensitive_harm: false, reason: 'ok' });
 
     await fetchQualifyingStoryForEditorial({
+        newsSource: 'thenewsapi',
         asOfDate: '2026-06-03',
         isWeekend: false,
         newsApiKey: 'x',
@@ -68,6 +71,7 @@ test('fetchQualifyingStoryForEditorial reuses cached candidates without extra HT
         scoreArticle,
     });
     await fetchQualifyingStoryForEditorial({
+        newsSource: 'thenewsapi',
         asOfDate: '2026-06-03',
         isWeekend: false,
         newsApiKey: 'x',

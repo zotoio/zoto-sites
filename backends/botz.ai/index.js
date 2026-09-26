@@ -33,8 +33,11 @@ import {
 } from './cacheListing.js';
 import { stripPrivateEditorialFields, writeEditorialUsageRecord } from './editorialUsageStore.js';
 import { buildRelevanceScoringPrompt } from './storySelection.js';
+import { assertNewsSourceEnv, parseNewsSource } from './newsSourceConfig.js';
 
 dotenv.config();
+
+const NEWS_SOURCE = parseNewsSource();
 
 const {
     OPENAI_API_KEY,
@@ -56,8 +59,14 @@ const {
     EDITORIAL_API_URL_PREFIX
 } = process.env;
 
-if (!OPENAI_API_KEY || !NEWS_API_KEY || !SHARED_SECRET) {
-    console.error("Required environment variables are missing.");
+if (!OPENAI_API_KEY || !SHARED_SECRET) {
+    console.error('Required environment variables are missing (OPENAI_API_KEY, SHARED_SECRET).');
+    process.exit(1);
+}
+try {
+    assertNewsSourceEnv({ newsSource: NEWS_SOURCE, newsApiKey: NEWS_API_KEY });
+} catch (error) {
+    console.error(error.message);
     process.exit(1);
 }
 
@@ -161,13 +170,16 @@ const fetchAiNews = async (req) => {
             : Infinity;
 
     const { article, newsRequestCount } = await fetchQualifyingStoryForEditorial({
+        newsSource: NEWS_SOURCE,
         asOfDate,
         isWeekend: isWeekend(),
         newsApiKey: NEWS_API_KEY,
         httpGet: async ({ url, params }) => {
             const startTime = Date.now();
             const response = await axios.get(url, { params });
-            console.log(`The News API call took ${Date.now() - startTime} ms`);
+            console.log(
+                `${NEWS_SOURCE} news fetch took ${Date.now() - startTime} ms (${url.split('/').slice(-2).join('/')})`
+            );
             return response;
         },
         scoreArticle: async (article) =>
@@ -176,7 +188,10 @@ const fetchAiNews = async (req) => {
         maxNewsRequests,
     });
 
-    req.theNewsApiRequestCount = newsRequestCount;
+    req.newsFetchRequestCount = newsRequestCount;
+    if (NEWS_SOURCE === 'thenewsapi') {
+        req.theNewsApiRequestCount = newsRequestCount;
+    }
     console.log(`selected story: ${article.title}`);
     return [article];
 };
@@ -399,8 +414,11 @@ app.get('/editorials', async (req, res) => {
         }
         const publicEditorials = stripPrivateEditorialFields(editorials);
         publicEditorials[0].navigation = getNextAndPreviousFilenames(cacheKey);
-        if (isAdmin && req.theNewsApiRequestCount != null) {
-            res.setHeader('X-TheNewsApi-Requests', String(req.theNewsApiRequestCount));
+        if (isAdmin && req.newsFetchRequestCount != null) {
+            res.setHeader('X-News-Fetch-Requests', String(req.newsFetchRequestCount));
+            if (req.theNewsApiRequestCount != null) {
+                res.setHeader('X-TheNewsApi-Requests', String(req.theNewsApiRequestCount));
+            }
         }
         res.json(publicEditorials);
 

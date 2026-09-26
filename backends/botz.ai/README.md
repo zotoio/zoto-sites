@@ -35,7 +35,18 @@ The script:
 - Execute mode appends progress to `/tmp/backfill-editorials.log.jsonl` by default (override with `--log`).
 - Stops on the first error with a clear message (including News API plan/historical query failures).
 
-Historical generation uses The News API `published_on` for that UTC date only, with `categories=tech` and a strict GenAI search query. Typical **1** News API HTTP request per editorial (limit 25, page 2 only if none qualify); live hourly is also **1** in the common case (was up to **3** historical / **2** weekend live requests before 2026-09). A `gpt-6-luna` relevance pass rejects off-topic and sensitive stories; days with no qualifying article are skipped (HTTP 422, logged as `no_qualifying_story`). Each saved editorial includes `as_of`, `backfilled: true`, display `generated_at` for the target day, and `backfilled_at` for the real run time.
+### News sources (`NEWS_SOURCE`)
+
+| Source | Env | Typical upstream fetches / editorial |
+| --- | --- | --- |
+| **hn** (default) | No API key; optional `HN_MIN_POINTS` (default 20) | **1** HN Algolia request (page 2 only if none qualify) |
+| **thenewsapi** (legacy) | `NEWS_API_KEY` required | **1** typical (limit 25), **2** worst case |
+
+**Hacker News path:** Algolia `search_by_date` (backfill) or `search` (live ~24h), `tags=story`, UTC `created_at_i` window, points threshold. Candidates pass a local AI-term gate, skip Ask/Show HN unless clearly AI, then `gpt-6-luna` relevance scoring; ties break toward higher points/comments. Linked articles are fetched server-side (timeout, size cap, robots-aware UA) for `og:title` / `og:description` / excerpt; fallback uses HN comment context. Editorials store `hn_url`, `source` (domain), and `url`.
+
+Days with no qualifying story return HTTP **422** (`no_qualifying_story`, logged `no_articles` / `no_match`). Each backfilled editorial includes `as_of`, `backfilled: true`, display `generated_at`, and `backfilled_at`.
+
+Preview HN picks without OpenAI: `node scripts/hn-sample-candidates.mjs 2026-06-10 2026-07-15`.
 
 OpenAI usage totals are stored under `backends/botz.ai/usage` on the host (`USAGE_LOG_DIR=/home/root/usage` in compose), not in public editorial JSON. Nginx denies `/cache/.*` dot-paths (e.g. `.replaced` archives). Legacy `_openai_usage` keys in cache files: `node scripts/strip-usage-from-cache.mjs` (dry-run; pass `--execute`). Use `--replace <cacheKey> --execute` to regenerate a single backfilled day (archives the prior file under `cache/.replaced/`).
 

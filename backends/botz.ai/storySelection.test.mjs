@@ -6,6 +6,7 @@ import {
     buildGenAiNewsSearchQuery,
     isVerdictAcceptable,
     parseRelevanceScoringResponse,
+    passesHnStoryTypeGate,
     passesLocalAiTermGate,
     selectBestQualifyingStory,
 } from './storySelection.js';
@@ -25,6 +26,14 @@ test('passesLocalAiTermGate rejects pilot off-topic fixtures', () => {
 
 test('passesLocalAiTermGate accepts GenAI fixture', () => {
     assert.equal(passesLocalAiTermGate(fixtures.openAiRelease), true);
+});
+
+test('passesHnStoryTypeGate skips Show HN without AI terms', () => {
+    assert.equal(passesHnStoryTypeGate({ title: 'Show HN: My weekend gardening project' }), false);
+    assert.equal(
+        passesHnStoryTypeGate({ title: 'Show HN: Local LLM inference on Apple Silicon' }),
+        true
+    );
 });
 
 test('selectBestQualifyingStory picks highest scoring qualifying article', async () => {

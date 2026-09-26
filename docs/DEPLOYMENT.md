@@ -195,6 +195,25 @@ Compose bind-mount sources allowed by policy: `./backends/botz.ai/cache`, `${SSL
 
 Run on the droplet **before** the first deploy that uses `deploy-safe.sh`. The GitHub Actions deploy job runs `git fetch` then `bash scripts/deploy-safe.sh` from the **current** checkout; the first time this lands, ensure `scripts/deploy-safe.sh` exists (merge this PR, or copy the script and manifest from `main` once manually).
 
+**Git remote (fetch):** The live checkout’s `origin` may still be `git@github.com:zotoio/zoto-sites.git`. If `git fetch` fails with host key verification (`Could not resolve hostname github.com` / rejected key), switch fetch to HTTPS (keep SSH for push if you prefer):
+
+```bash
+git remote set-url origin https://github.com/zotoio/zoto-sites.git
+# optional: git remote set-url --push origin git@github.com:zotoio/zoto-sites.git
+```
+
+**Docker access:** The tree is owned by **`andrewv`**, who is not in the `docker` group by default. Run deploy from the checkout as `andrewv` with the docker group, e.g. from `/home/andrewv/git/zoto-sites`:
+
+```bash
+sudo setpriv --reuid="$(id -u andrewv)" --regid="$(id -g andrewv)" \
+  --groups="$(id -g andrewv),$(getent group docker | cut -d: -f3)" --reset-env \
+  bash scripts/deploy-safe.sh
+```
+
+(or add `andrewv` to `docker` once and use a normal login shell).
+
+**Cron windows:** Avoid running deploy during root cron jobs on the hour — roughly **:48–:55** and **:00–:04** past each hour (cert/sync/restart overlap). Pick a quiet minute outside those ranges.
+
 1. Record running mounts and compose labels:
    ```bash
    for c in nginx botz discord; do

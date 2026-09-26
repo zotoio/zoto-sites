@@ -32,6 +32,15 @@ die() {
   exit 1
 }
 
+# Preflight uses small Node snippets; host Node is optional (see docs/DEPLOYMENT.md).
+run_node() {
+  if command -v node >/dev/null 2>&1; then
+    node "$@"
+  else
+    docker run --rm -i node:18-alpine node "$@"
+  fi
+}
+
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   usage
   exit 0
@@ -144,7 +153,7 @@ assert_data_guards() {
 }
 
 compose_bind_sources() {
-  docker compose config --format json | node -e "
+  docker compose config --format json | run_node -e "
 const fs = require('fs');
 const j = JSON.parse(fs.readFileSync(0, 'utf8'));
 const out = new Set();
@@ -199,7 +208,7 @@ compare_mounts_preflight() {
   done
 
   local botz_cache_mount
-  botz_cache_mount="$(docker compose config --format json | node -e "
+  botz_cache_mount="$(docker compose config --format json | run_node -e "
 const j = JSON.parse(require('fs').readFileSync(0,'utf8'));
 const botz = j.services?.botz;
 const env = botz?.environment || {};

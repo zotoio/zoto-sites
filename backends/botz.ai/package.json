@@ -22,6 +22,6 @@
   },
   "scripts": {
     "start:dev": "kill-port 3000 && nodemon index.js",
-    "test": "node --test openaiImages.test.mjs"
+    "test": "node --test openaiImages.test.mjs backfillDates.test.mjs"
   }
 }

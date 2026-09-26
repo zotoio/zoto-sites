@@ -14,7 +14,9 @@ services:
       - botz
 
   botz:
-    build: ./backends/botz.ai
+    build:
+      context: .
+      dockerfile: backends/botz.ai/Dockerfile
     restart: always
     container_name: botz
     env_file:

@@ -11,7 +11,7 @@ yarn --cwd "$ROOT/backends/botz.ai" install --frozen-lockfile --production
 
 docker build -t "$IMAGE" "$ROOT/backends/botz.ai"
 
-docker run --rm -i --entrypoint node "$IMAGE" <<'NODE'
+docker run --rm -i --entrypoint node "$IMAGE" --input-type=module <<'NODE'
 import fs from 'fs';
 import path from 'path';
 import { pathToFileURL } from 'url';

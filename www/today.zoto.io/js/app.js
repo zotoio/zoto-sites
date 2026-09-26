@@ -86,7 +86,6 @@ async function bootstrap() {
   }
 
   setBackdrop(loc.lat, loc.lon);
-  const locale = (loc.countryCode || 'us').toLowerCase().slice(0, 2);
   const geo = { lat: loc.lat, lon: loc.lon };
 
   const [weather, news, transit, airQuality] = await Promise.all([

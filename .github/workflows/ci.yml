@@ -17,3 +17,6 @@ jobs:
 
       - name: Verify nginx configs match sites manifest
         run: node scripts/generate-nginx.js --check
+
+      - name: botz.ai OpenAI image API contract
+        run: yarn --cwd backends/botz.ai test

@@ -14,17 +14,21 @@ services:
       - botz
 
   botz:
-    build: ./backends/botz.ai
+    build:
+      context: .
+      dockerfile: backends/botz.ai/Dockerfile
     restart: always
     container_name: botz
     env_file:
       - ./backends/botz.ai/.env
     environment:
       CACHE_DIR: /home/root/cache
+      USAGE_LOG_DIR: /home/root/usage
     ports:
       - "127.0.0.1:3000:3000"
     volumes:
       - ./backends/botz.ai/cache:/home/root/cache
+      - ./backends/botz.ai/usage:/home/root/usage
 
   discord:
     build: ./backends/discord

@@ -9,19 +9,42 @@ import path from 'path';
 import sanitize from 'sanitize-filename';
 import helmet from 'helmet';
 import crypto from 'crypto';
-import curlirize from 'axios-curlirize';
 import cheerio from 'cheerio';
 import sanitizeHtml from 'sanitize-html';
-import { requestGeneratedImage } from './openaiImages.js';
-
-curlirize(axios);
+import { buildImageGenerateParams, requestGeneratedImage } from './openaiImages.js';
+import {
+    assertCacheFileWritable,
+    formatGeneratedAtFromAsOf,
+    formatRealGenerationTimestamp,
+    hourFromCacheKey,
+} from './backfillDates.js';
+import { NewsQuotaExhaustedError } from './newsApiErrors.js';
+import { fetchQualifyingStoryForEditorial } from './newsEditorialFetch.js';
+import { purgeCloudflareCacheByUrl } from './cloudflarePurge.js';
+import {
+    buildUsagePayload,
+    logOpenAiUsage,
+    usageFromChatCompletion,
+    usageFromImageGenerateResponse,
+} from './openaiUsageLog.js';
+import {
+    isPublicEditorialCacheFileName,
+    listPublicEditorialCacheFileNames,
+} from './cacheListing.js';
+import { stripPrivateEditorialFields, writeEditorialUsageRecord } from './editorialUsageStore.js';
+import { buildRelevanceScoringPrompt } from './storySelection.js';
+import { assertNewsSourceEnv, parseNewsSource } from './newsSourceConfig.js';
+import { readRecentLiveStoryIdentifiers } from './liveStoryDedup.js';
 
 dotenv.config();
 
+const NEWS_SOURCE = parseNewsSource();
+
 const {
     OPENAI_API_KEY,
-    OPENAI_MODEL_STRONG = 'gpt-4o',
-    OPENAI_MODEL_WEAK = 'gpt-4o-mini',
+    OPENAI_MODEL_STRONG = 'gpt-6-sol',
+    OPENAI_MODEL_WEAK = 'gpt-6-luna',
+    OPENAI_REASONING_EFFORT,
     NEWS_API_KEY,
     PORT = 3000,
     FREQUENCY = 'daily',
@@ -37,8 +60,14 @@ const {
     EDITORIAL_API_URL_PREFIX
 } = process.env;
 
-if (!OPENAI_API_KEY || !NEWS_API_KEY || !SHARED_SECRET) {
-    console.error("Required environment variables are missing.");
+if (!OPENAI_API_KEY || !SHARED_SECRET) {
+    console.error('Required environment variables are missing (OPENAI_API_KEY, SHARED_SECRET).');
+    process.exit(1);
+}
+try {
+    assertNewsSourceEnv({ newsSource: NEWS_SOURCE, newsApiKey: NEWS_API_KEY });
+} catch (error) {
+    console.error(error.message);
     process.exit(1);
 }
 
@@ -61,7 +90,43 @@ const limiter = rateLimit({
 app.use(limiter);
 
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
-const keywords = ['claude 3.5', 'anthropic', 'runwayml', 'slm', 'llm', 'large%2language%20model', 'ollama', 'sora', 'chatgpt', 'chatgpt%20pro', 'midjourney', 'dall-e', 'openai', 'genai', 'generative%20ai', 'copilot', 'google%20gemini', 'gemini%201.5', 'gemini%20pro', 'google%20gemma', 'bard', 'gpt-3', 'gpt-4', 'gpt', 'gpt-4o', 'hugging%20face', 'meta%20llama'];
+
+/** Per-request OpenAI usage records for the active editorial generation. */
+let editorialUsageCollector = null;
+
+const recordChatUsage = (model, completion) => {
+    const record = usageFromChatCompletion(model, completion);
+    if (!record) {
+        return;
+    }
+    logOpenAiUsage(record);
+    editorialUsageCollector?.push(record);
+};
+
+const logEditorialRouteError = (error) => {
+    const payload = {
+        event: 'editorial_generation_error',
+        statusCode: error?.statusCode || 500,
+        name: error?.name,
+        message: error?.message,
+    };
+    if (error?.response?.status) {
+        payload.upstreamStatus = error.response.status;
+    }
+    console.error(JSON.stringify(payload));
+};
+
+/** Chat completion body for reasoning models (no temperature / max_tokens). */
+const buildChatCompletionRequest = ({ model, messages, jsonMode = false }) => {
+    const body = { model, messages };
+    if (jsonMode) {
+        body.response_format = { type: 'json_object' };
+    }
+    if (OPENAI_REASONING_EFFORT) {
+        body.reasoning_effort = OPENAI_REASONING_EFFORT;
+    }
+    return body;
+};
 
 const isWeekend = () => {
     const currentDate = new Date();
@@ -69,6 +134,13 @@ const isWeekend = () => {
 };
 
 const fetchAiNews = async (req) => {
+    const asOfDate =
+        authorisedAdminRequest(req) &&
+        req.query.asOf &&
+        /^\d{4}-\d{2}-\d{2}$/.test(req.query.asOf)
+            ? req.query.asOf
+            : null;
+
     let articleUrl = req.query.articleUrl;
     let result = [];
     if (authorisedAdminRequest(req) && articleUrl) {
@@ -92,33 +164,51 @@ const fetchAiNews = async (req) => {
         return [result];
     }
 
-    let pageCount = PAGE_COUNT;
-    if (isWeekend()) {
-        pageCount = pageCount * 2; // double the number of pages on weekends
+    const maxNewsRequestsParam = Number(req.query.maxNewsRequests);
+    const maxNewsRequests =
+        authorisedAdminRequest(req) && Number.isFinite(maxNewsRequestsParam) && maxNewsRequestsParam > 0
+            ? maxNewsRequestsParam
+            : Infinity;
+
+    const excludeStoryIdentifiers = asOfDate ? null : readRecentLiveStoryIdentifiers(cacheDir);
+
+    let newsRequestCount = 0;
+    let article;
+    try {
+        const result = await fetchQualifyingStoryForEditorial({
+            newsSource: NEWS_SOURCE,
+            asOfDate,
+            isWeekend: isWeekend(),
+            newsApiKey: NEWS_API_KEY,
+            httpGet: async ({ url, params }) => {
+                const startTime = Date.now();
+                const response = await axios.get(url, { params });
+                console.log(
+                    `${NEWS_SOURCE} news fetch took ${Date.now() - startTime} ms (${url.split('/').slice(-2).join('/')})`
+                );
+                return response;
+            },
+            scoreArticle: async (article) =>
+                aiJSONResponse(buildRelevanceScoringPrompt(article), OPENAI_MODEL_WEAK),
+            log: (message) => console.log(message),
+            maxNewsRequests,
+            excludeStoryIdentifiers,
+        });
+        article = result.article;
+        newsRequestCount = result.newsRequestCount;
+    } catch (error) {
+        if (typeof error.newsRequestCount === 'number') {
+            newsRequestCount = error.newsRequestCount;
+        }
+        throw error;
     }
 
-    for (let i = 1; i <= pageCount; i++) {
-        let keywordsShuffled = keywords.sort(() => Math.random() - 0.5); // Shuffle the keywords
-        let randomPage = getRandomInt(1, 5);
-        const startTime = Date.now();
-        const response = await axios.get('https://api.thenewsapi.com/v1/news/top', {
-            params: {
-                search: keywordsShuffled.join('|'),
-                sort: 'published_at',
-                api_token: NEWS_API_KEY,
-                language: 'en',
-                limit: PAGE_SIZE,
-                page: randomPage,
-            },
-        });
-        const endTime = Date.now();
-        console.log(`API call ${i} took ${endTime - startTime} ms`);
-        result.push(...response.data.data);
-        //console.log(result);
+    req.newsFetchRequestCount = newsRequestCount;
+    if (NEWS_SOURCE === 'thenewsapi') {
+        req.theNewsApiRequestCount = newsRequestCount;
     }
-    if (SINGLE_RANDOM === 'true') result = result[getRandomInt(0, result.length - 1)];
-    console.log(result);
-    return [result];
+    console.log(`selected story: ${article.title}`);
+    return [article];
 };
 
 // function to return a true random between 2 integers - made more random by using crypto
@@ -176,13 +266,15 @@ const aiJSONResponse = async (prompt, model) => {
         const modelName = model ? model : OPENAI_MODEL_WEAK;
         const startTime = Date.now();
         console.log(`${startTime} - sending: ${prompt}`);
-        const chatCompletion = await openai.chat.completions.create({
-            model: modelName,
-            response_format: { type: 'json_object' },
-            messages: [{ role: 'user', content: prompt }]
-        });
+        const chatCompletion = await openai.chat.completions.create(
+            buildChatCompletionRequest({
+                model: modelName,
+                messages: [{ role: 'user', content: prompt }],
+                jsonMode: true,
+            })
+        );
         const endTime = Date.now();
-        console.log(chatCompletion.choices);
+        recordChatUsage(modelName, chatCompletion);
         console.log(`aiJSONResponse API call took ${endTime - startTime} ms`);
         return chatCompletion.choices[0].message.content;
     } catch (error) {
@@ -196,12 +288,14 @@ const aiResponse = async (prompt, model) => {
         const modelName = model ? model : OPENAI_MODEL_STRONG;
         const startTime = Date.now();
         console.log(`${startTime} - sending: ${prompt}`);
-        const chatCompletion = await openai.chat.completions.create({
-            model: modelName,
-            messages: [{ role: 'user', content: prompt }]
-        });
+        const chatCompletion = await openai.chat.completions.create(
+            buildChatCompletionRequest({
+                model: modelName,
+                messages: [{ role: 'user', content: prompt }],
+            })
+        );
         const endTime = Date.now();
-        console.log(chatCompletion.choices);
+        recordChatUsage(modelName, chatCompletion);
         console.log(`aiResponse API call took ${endTime - startTime} ms`);
         return chatCompletion.choices[0].message.content;
     } catch (error) {
@@ -213,6 +307,11 @@ const aiResponse = async (prompt, model) => {
 app.get('/editorials', async (req, res) => {
     try {
         const currentDate = new Date();
+        const isAdmin = authorisedAdminRequest(req);
+        const asOfDate =
+            isAdmin && req.query.asOf && /^\d{4}-\d{2}-\d{2}$/.test(req.query.asOf)
+                ? req.query.asOf
+                : null;
 
         let defaultCacheKey;
         let cacheKey;
@@ -255,31 +354,43 @@ app.get('/editorials', async (req, res) => {
         console.log('cacheKey:', cacheKey);
         console.log('cacheFilePath', cacheFilePath);
 
-        if (!authorisedAdminRequest(req) && CACHE === 'true' && fs.existsSync(cacheFilePath)) {
+        if (!isAdmin && CACHE === 'true' && fs.existsSync(cacheFilePath)) {
             // Cache file exists, read and return the cached data
             const cachedData = fs.readFileSync(cacheFilePath, 'utf8');
             console.log('content loaded from cache');
             if (cachedData != null) {
-                let data = JSON.parse(cachedData);
+                let data = stripPrivateEditorialFields(JSON.parse(cachedData));
                 data[0].navigation = getNextAndPreviousFilenames(cacheKey);
                 return res.json(data);
             }
         }
 
+        if (asOfDate && fs.existsSync(cacheFilePath)) {
+            return res.status(409).json({
+                message: 'Requested editorial cache already exists.',
+            });
+        }
+
         console.log('no cached content');
+        const generationContext = {
+            asOfDate,
+            cacheKey,
+            cacheKeyHour: hourFromCacheKey(cacheKey),
+        };
+        editorialUsageCollector = [];
         const articles = await fetchAiNews(req);
         const editorials = [];
 
         for (const article of articles) {
 
-            const { prompt, author } = await getArticlePrompt(article);
+            const { prompt, author } = await getArticlePrompt(article, generationContext);
 
             let editorial = await aiResponse(prompt);
             editorial = sanitizeHtml(editorial);
             editorial += sanitizeHtml(`<span style='display:none'>${author.name}</span>`);
 
-            let imagePrompt = await getImagePrompt(editorial);
-            const imageResponse = await generateImage(imagePrompt, article.title);
+            let imagePrompt = await getImagePrompt(editorial, generationContext);
+            const imageResponse = await generateImage(imagePrompt, article.title, generationContext);
 
             if (imageResponse?.data?.[0]?.localUrl) {
                 article.image_url = imageResponse.data[0].localUrl;
@@ -290,17 +401,45 @@ app.get('/editorials', async (req, res) => {
             }
             article.authorAlias = author.alias;
             const now = new Date();
-            article.generated_at = `${now.getFullYear()}-${padNumber(now.getMonth() + 1)}-${padNumber(now.getDate())}-${padNumber(now.getHours())}-${padNumber(now.getMinutes())}-${padNumber(now.getSeconds())}`;
+            if (asOfDate) {
+                const hour = generationContext.cacheKeyHour ?? '12';
+                article.as_of = asOfDate;
+                article.backfilled = true;
+                article.backfilled_at = formatRealGenerationTimestamp(now);
+                article.generated_at = formatGeneratedAtFromAsOf(asOfDate, hour);
+                if (!article.published_at) {
+                    article.published_at = article.generated_at;
+                }
+            } else {
+                article.generated_at = `${now.getFullYear()}-${padNumber(now.getMonth() + 1)}-${padNumber(now.getDate())}-${padNumber(now.getHours())}-${padNumber(now.getMinutes())}-${padNumber(now.getSeconds())}`;
+            }
             editorials.push({ article, editorial });
 
         }
+        const usagePayload = buildUsagePayload(editorialUsageCollector);
+        editorialUsageCollector = null;
         if (CACHE === 'true' && editorials.length > 0) {
+            if (asOfDate) {
+                assertCacheFileWritable(cacheFilePath);
+            }
             fs.writeFileSync(cacheFilePath, JSON.stringify(editorials));
+            if (usagePayload) {
+                writeEditorialUsageRecord(cacheDir, cacheKey, usagePayload);
+            }
         }
-        editorials[0].navigation = getNextAndPreviousFilenames(cacheKey)
-        res.json(editorials);
+        const publicEditorials = stripPrivateEditorialFields(editorials);
+        publicEditorials[0].navigation = getNextAndPreviousFilenames(cacheKey);
+        if (isAdmin && req.newsFetchRequestCount != null) {
+            res.setHeader('X-News-Fetch-Requests', String(req.newsFetchRequestCount));
+            if (req.theNewsApiRequestCount != null) {
+                res.setHeader('X-TheNewsApi-Requests', String(req.theNewsApiRequestCount));
+            }
+        }
+        res.json(publicEditorials);
 
-        if (authorisedAdminRequest(req)) {
+        const shouldPurgeCloudflare =
+            isAdmin && req.query.purgeCache !== 'false' && !asOfDate;
+        if (shouldPurgeCloudflare) {
             // if configured, clear the cloudflare cache for the editorial api latest article
             const latestArticleUrl = `${EDITORIAL_API_URL_PREFIX}/editorials`;
             clearCloudflareCache(latestArticleUrl);
@@ -315,8 +454,49 @@ app.get('/editorials', async (req, res) => {
         }
 
     } catch (error) {
-        console.error('Error generating editorials:', error);
-        res.status(500).json({ message: 'An internal server error occurred.' });
+        editorialUsageCollector = null;
+        if (typeof error.newsRequestCount === 'number') {
+            req.newsFetchRequestCount = error.newsRequestCount;
+            if (NEWS_SOURCE === 'thenewsapi') {
+                req.theNewsApiRequestCount = error.newsRequestCount;
+            }
+        }
+        logEditorialRouteError(error);
+        const isAdmin = authorisedAdminRequest(req);
+        const attachNewsFetchHeaders = () => {
+            if (isAdmin && req.newsFetchRequestCount != null) {
+                res.setHeader('X-News-Fetch-Requests', String(req.newsFetchRequestCount));
+                if (req.theNewsApiRequestCount != null) {
+                    res.setHeader('X-TheNewsApi-Requests', String(req.theNewsApiRequestCount));
+                }
+            }
+        };
+        if (error instanceof NewsQuotaExhaustedError || error.code === 'NEWS_QUOTA_EXHAUSTED') {
+            console.error(
+                JSON.stringify({
+                    event: 'news_quota_exhausted',
+                    message: error.message,
+                })
+            );
+            return res.status(503).json({ error: 'news_quota_exhausted' });
+        }
+        if (error.code === 'NEWS_REQUEST_BUDGET_EXHAUSTED') {
+            return res.status(503).json({ error: 'news_request_budget_exhausted' });
+        }
+
+        const status = error?.statusCode || 500;
+        let message = 'An internal server error occurred.';
+        if (status === 409) {
+            message = 'Requested editorial cache already exists.';
+        } else if (status === 422 && error.code === 'NO_QUALIFYING_STORY') {
+            message = 'Unable to produce an editorial for the requested period.';
+        }
+        attachNewsFetchHeaders();
+        const body = { message };
+        if (req.newsFetchRequestCount != null) {
+            body.news_fetch_requests = req.newsFetchRequestCount;
+        }
+        res.status(status).json(body);
     }
 });
 
@@ -355,7 +535,11 @@ const getImageStyle = async () => {
     return imageStyle;
 };
 
-const getArticlePrompt = async (article) => {
+const historicalWritingRules = (asOfDate) =>
+    ` You are writing this editorial as of ${asOfDate} (UTC). Use only knowledge that would have been available on or before that date. ` +
+    `Do not mention or allude to events, product releases, regulations, or news that occurred after ${asOfDate}.`;
+
+const getArticlePrompt = async (article, generationContext = {}) => {
     const recurrentPhrases = await getRecurrentPhrases();
     let prompt;
     let variations = ['commentary', 'opinion', 'review', 'analysis', 'critique', 'editorial', 'summary', 'rebuttal', 'response', 'take', 'view', 'perspective', 'reaction', 'appraisal', 'assessment', 'examination', 'study', 'criticism', 'dissection', 'dissertation', 'essay', 'exposition', 'celebration'];
@@ -418,6 +602,10 @@ const getArticlePrompt = async (article) => {
     // always add the caveat
     prompt += ` ${caveat}`;
 
+    if (generationContext.asOfDate) {
+        prompt += historicalWritingRules(generationContext.asOfDate);
+    }
+
     return { prompt, author };
 };
 
@@ -445,7 +633,7 @@ async function extractSummary(article) {
     return summary;
 }
 
-async function getImagePrompt(article) {
+async function getImagePrompt(article, generationContext = {}) {
     const imageStyle = await getImageStyle();
     let imagePrompt = `create an image generation prompt that creates and image for the following article with a style "${imageStyle}". This is the article: \n\n ${article}`;
 
@@ -457,11 +645,14 @@ async function getImagePrompt(article) {
     }
 
     let generatedPrompt = await aiResponse(imagePrompt, OPENAI_MODEL_WEAK);
-    generatedPrompt += 'IMPORTANT: The image MUST be relevant to the article.'
+    generatedPrompt += 'IMPORTANT: The image MUST be relevant to the article.';
+    if (generationContext.asOfDate) {
+        generatedPrompt += historicalWritingRules(generationContext.asOfDate);
+    }
     return generatedPrompt;
 }
 
-const generateImage = async (prompt, supaSafeFallbackPrompt) => {
+const generateImage = async (prompt, supaSafeFallbackPrompt, generationContext = {}) => {
     const attemptPrompts = [
         { label: 'primary', text: prompt },
         { label: 'fallback', text: `Anonymous hackers in a scene related to ${prompt}` },
@@ -472,10 +663,14 @@ const generateImage = async (prompt, supaSafeFallbackPrompt) => {
         try {
             const startTime = Date.now();
             console.log(`${startTime} - imageGen ${attempt.label}: sending prompt`);
+            const imageParams = buildImageGenerateParams(attempt.text);
             const response = await requestGeneratedImage(openai, attempt.text);
+            const imageUsage = usageFromImageGenerateResponse(response, imageParams);
+            logOpenAiUsage(imageUsage);
+            editorialUsageCollector?.push(imageUsage);
             const endTime = Date.now();
             console.log(`generateImage ${attempt.label} API call took ${endTime - startTime} ms`);
-            return await saveImageToFile(response);
+            return await saveImageToFile(response, generationContext);
         } catch (error) {
             console.error(`imageGen ${attempt.label} failed (non-fatal):`, error?.message || error);
         }
@@ -485,7 +680,7 @@ const generateImage = async (prompt, supaSafeFallbackPrompt) => {
     return null;
 };
 
-const saveImageToFile = async (response) => {
+const saveImageToFile = async (response, generationContext = {}) => {
     if (!response?.data?.[0]) {
         throw new Error('saveImageToFile: empty image response');
     }
@@ -506,8 +701,14 @@ const saveImageToFile = async (response) => {
     }
 
     const urlHash = crypto.createHash('sha256').update(hashInput).digest('hex');
-    const currentDate = new Date();
-    const cacheKey = `${currentDate.getFullYear()}-${padNumber(currentDate.getMonth() + 1)}-${padNumber(currentDate.getDate())}-${padNumber(currentDate.getHours())}-${urlHash}`;
+    let datePrefix;
+    if (generationContext.asOfDate && generationContext.cacheKeyHour) {
+        datePrefix = `${generationContext.asOfDate}-${generationContext.cacheKeyHour}`;
+    } else {
+        const currentDate = new Date();
+        datePrefix = `${currentDate.getFullYear()}-${padNumber(currentDate.getMonth() + 1)}-${padNumber(currentDate.getDate())}-${padNumber(currentDate.getHours())}`;
+    }
+    const cacheKey = `${datePrefix}-${urlHash}`;
     const cacheFilePath = `${path.join(cacheDir, 'images', cacheKey)}.png`;
     console.log(cacheFilePath);
     fs.writeFileSync(cacheFilePath, buffer);
@@ -528,8 +729,7 @@ function parseFilename(filename) {
 
 function getNextAndPreviousFilenames(currentFilename) {
     console.log(`currentFilename: ${currentFilename}`);
-    const files = fs.readdirSync(cacheDir);
-    //console.log(`files: ${files}`);
+    const files = listPublicEditorialCacheFileNames(cacheDir);
 
     const dates = files
         .map(parseFilename)
@@ -563,7 +763,7 @@ function getNextAndPreviousFilenames(currentFilename) {
 }
 
 function getLatestFileCacheKey() {
-    const files = fs.readdirSync(cacheDir);
+    const files = listPublicEditorialCacheFileNames(cacheDir);
 
     const dates = files
         .map(parseFilename)
@@ -616,8 +816,8 @@ app.get('/archive', async (req, res) => {
     });
 
     let jsonFiles = files
-        .filter(file => file.isFile() && path.extname(file.name) === '.json')
-        .map(file => file.name)
+        .filter((file) => file.isFile() && isPublicEditorialCacheFileName(file.name))
+        .map((file) => file.name)
         .sort((a, b) => b.localeCompare(a));
 
     console.log(`found ${jsonFiles.length} editorials in archive..`);
@@ -695,34 +895,12 @@ app.get('/archive', async (req, res) => {
     }
 });
 
-const clearCloudflareCache = async url => {
-
-    if (!CF_ZONE_ID || !CF_API_TOKEN) return
-
-    const apiUrl = `https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/purge_cache`;
-
-    try {
-        const response = await axios.post(
-            apiUrl,
-            {
-                files: [url]
-            },
-            {
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${CF_API_TOKEN}`
-                }
-            }
-        );
-
-        if (response.data.success) {
-            console.log('Cloudflare: cache cleared successfully:', response.data);
-        } else {
-            console.error('Cloudflare: Failed to clear cache:', response.data);
-        }
-    } catch (error) {
-        console.error('Cloudflare: Error clearing cache:', error.response ? error.response.data : error.message);
-    }
+const clearCloudflareCache = async (url) => {
+    await purgeCloudflareCacheByUrl({
+        zoneId: CF_ZONE_ID,
+        apiToken: CF_API_TOKEN,
+        url,
+    });
 };
 
 app.listen(PORT, () => {

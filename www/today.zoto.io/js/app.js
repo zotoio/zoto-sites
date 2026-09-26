@@ -88,11 +88,18 @@ async function bootstrap() {
   setBackdrop(loc.lat, loc.lon);
   const geo = { lat: loc.lat, lon: loc.lon };
 
+  async function loadLive(path, params = {}) {
+    if (forceDemo) {
+      return fetchJson(path, { ...params, demo: 1 });
+    }
+    return fetchJson(path, params);
+  }
+
   const [weather, news, transit, airQuality] = await Promise.all([
-    fetchJson('/api/weather', geo).catch(() => fetchJson('/api/weather', { demo: 1 })),
-    fetchJson('/api/news', { topic: 'top' }).catch(() => fetchJson('/api/news', { demo: 1, topic: 'top' })),
-    fetchJson('/api/transit', geo).catch(() => fetchJson('/api/transit', { demo: 1 })),
-    fetchJson('/api/air-quality', geo).catch(() => fetchJson('/api/air-quality', { demo: 1 })),
+    loadLive('/api/weather', geo),
+    loadLive('/api/news', { topic: 'top' }),
+    loadLive('/api/transit', geo),
+    loadLive('/api/air-quality', geo),
   ]);
 
   const initialLayout =

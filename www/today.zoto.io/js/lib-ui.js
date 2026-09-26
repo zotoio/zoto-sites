@@ -118,6 +118,20 @@ export function renderNews(listEl, payload, maxItems = 10) {
     note.textContent = payload.attribution || 'Demo sample — not live Hacker News';
     listEl.appendChild(note);
   }
+  if (payload.source === 'unavailable') {
+    const note = document.createElement('p');
+    note.className = 'muted-note';
+    note.textContent = payload.message || 'News temporarily unavailable';
+    listEl.appendChild(note);
+    return;
+  }
+  if (!(payload.articles || []).length) {
+    const note = document.createElement('p');
+    note.className = 'muted-note';
+    note.textContent = 'No stories to show.';
+    listEl.appendChild(note);
+    return;
+  }
   (payload.articles || []).slice(0, maxItems).forEach((a) => {
     const li = document.createElement('li');
     li.className = 'news-item';
@@ -176,6 +190,23 @@ export function renderNews(listEl, payload, maxItems = 10) {
 export function renderTransit(mapEl, listEl, center, payload, options = {}) {
   const mapHeight = options.mapHeight || 220;
   listEl.innerHTML = '';
+  const stops = payload.stops || [];
+  if (payload.source === 'demo') {
+    const note = document.createElement('p');
+    note.className = 'demo-badge';
+    note.setAttribute('role', 'note');
+    note.textContent = 'Demo transit stops — not your location';
+    listEl.appendChild(note);
+  }
+  if (!stops.length) {
+    const empty = document.createElement('p');
+    empty.className = 'muted-note';
+    empty.textContent =
+      payload.source === 'demo'
+        ? 'No demo stops.'
+        : 'No transit stops found nearby for your location.';
+    listEl.appendChild(empty);
+  }
   (payload.stops || []).forEach((s) => {
     const li = document.createElement('li');
     const modes = (s.modes || []).join(', ');

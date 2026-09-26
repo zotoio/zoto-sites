@@ -3,6 +3,9 @@ import axios from 'axios';
 const MAX_BYTES = 256 * 1024;
 export const ARTICLE_FETCH_UA = 'today.zoto.io/1.0 (link preview; +https://today.zoto.io)';
 
+/** Same-origin placeholder (orange HN tile) — never hotlink Google favicons from the client. */
+export const HN_NEWS_PLACEHOLDER = '/assets/hn-news-placeholder.svg';
+
 /**
  * @param {string} html
  * @param {string} property
@@ -34,15 +37,6 @@ export function absolutizeUrl(href, baseUrl) {
   }
 }
 
-export function faviconForUrl(pageUrl) {
-  try {
-    const host = new URL(pageUrl).hostname;
-    return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=128`;
-  } catch {
-    return '';
-  }
-}
-
 /**
  * @param {string} html
  * @param {string} pageUrl
@@ -56,8 +50,7 @@ export function parseOpenGraphFromHtml(html, pageUrl) {
   const description =
     extractMetaContent(slice, 'og:description') ||
     extractMetaContent(slice, 'description');
-  let image_url = absolutizeUrl(image, pageUrl);
-  if (!image_url) image_url = faviconForUrl(pageUrl);
+  const image_url = absolutizeUrl(image, pageUrl) || HN_NEWS_PLACEHOLDER;
   return {
     image_url,
     description: description.slice(0, 280),
@@ -69,7 +62,7 @@ export function parseOpenGraphFromHtml(html, pageUrl) {
  */
 export async function fetchArticlePreview(pageUrl) {
   if (!pageUrl || !pageUrl.startsWith('http')) {
-    return { image_url: faviconForUrl('https://news.ycombinator.com'), description: '' };
+    return { image_url: HN_NEWS_PLACEHOLDER, description: '' };
   }
   try {
     const { data } = await axios.get(pageUrl, {
@@ -85,6 +78,6 @@ export async function fetchArticlePreview(pageUrl) {
     });
     return parseOpenGraphFromHtml(data, pageUrl);
   } catch {
-    return { image_url: faviconForUrl(pageUrl), description: '' };
+    return { image_url: HN_NEWS_PLACEHOLDER, description: '' };
   }
 }

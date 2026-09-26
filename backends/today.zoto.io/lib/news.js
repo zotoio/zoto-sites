@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { cached } from './cache.js';
-import { fetchArticlePreview, faviconForUrl } from './article-meta.js';
+import { fetchArticlePreview, HN_NEWS_PLACEHOLDER } from './article-meta.js';
 
 const NEWS_TTL_MS = 15 * 60 * 1000;
 const ALGOLIA = 'https://hn.algolia.com/api/v1';
@@ -47,7 +47,7 @@ async function enrichArticles(articles) {
       }
       return {
         ...article,
-        image_url: faviconForUrl('https://news.ycombinator.com'),
+        image_url: HN_NEWS_PLACEHOLDER,
         description: '',
       };
     })

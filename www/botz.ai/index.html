@@ -176,7 +176,8 @@
                   Generated: ${article.article.generated_at || article.article.published_at}<br>
                   Original source: ${article.article.source} | ${article.article.published_at}<br>
                   Original title: ${article.article.title}<br>
-                  <a href="${article.article.url}" style="font-weight: bold">Read Original article</a>
+                  <a href="${article.article.url}" style="font-weight: bold">Read original article</a>
+                  ${article.article.hn_url ? `<br><a href="${article.article.hn_url}">Hacker News discussion</a>` : ''}
                 </p>
                 <hr>
               </div></<article>`;

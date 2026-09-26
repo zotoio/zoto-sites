@@ -13,4 +13,5 @@ ssl
 
 # ALLOWED_COMPOSE_BIND_SOURCES — host paths that may appear as bind-mount sources in docker-compose.yml.
 ./backends/botz.ai/cache
+./backends/botz.ai/usage
 ${SSL_CERT_DIR:-./ssl}

@@ -9,7 +9,7 @@ IMAGE="${BOTZ_DOCKER_VERIFY_IMAGE:-zoto-botz-ci-verify:ci}"
 # Dockerfile COPYs host node_modules (same as production deploy on the droplet).
 yarn --cwd "$ROOT/backends/botz.ai" install --frozen-lockfile --production
 
-docker build -t "$IMAGE" "$ROOT/backends/botz.ai"
+docker build -t "$IMAGE" -f "$ROOT/backends/botz.ai/Dockerfile" "$ROOT"
 
 docker run --rm -i --entrypoint node "$IMAGE" --input-type=module <<'NODE'
 import fs from 'fs';
@@ -48,3 +48,5 @@ for (const rel of relImports) {
 
 console.log(`Verified ${relImports.length} relative module(s) in botz Docker image.`);
 NODE
+
+docker run --rm --entrypoint node "$IMAGE" /home/root/scripts/backfill-editorials.mjs --help

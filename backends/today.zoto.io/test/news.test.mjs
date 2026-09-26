@@ -13,9 +13,9 @@ test('parseOpenGraphFromHtml extracts og tags', () => {
   assert.equal(out.description, 'Hello world');
 });
 
-test('extractMetaContent supports name attribute', () => {
-  const html = `<meta name="description" content="Fallback desc">`;
-  assert.equal(extractMetaContent(html, 'description'), 'Fallback desc');
+test('parseOpenGraphFromHtml uses same-origin placeholder without og image', () => {
+  const out = parseOpenGraphFromHtml('<html></html>', 'https://example.com/post');
+  assert.equal(out.image_url, '/assets/hn-news-placeholder.svg');
 });
 
 test('demoNews includes HN-style fields and demo source', () => {

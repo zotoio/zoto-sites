@@ -138,11 +138,21 @@ app.get('/api/news', async (req, res) => {
   try {
     const data = await fetchHackerNewsTop({ topic });
     if (!data.articles?.length) {
-      return res.json(demoNews(topic));
+      return res.json({
+        source: 'unavailable',
+        topic,
+        articles: [],
+        message: 'Hacker News feed temporarily unavailable',
+      });
     }
     return res.json(data);
   } catch {
-    return res.json(demoNews(topic));
+    return res.json({
+      source: 'unavailable',
+      topic,
+      articles: [],
+      message: 'Hacker News feed temporarily unavailable',
+    });
   }
 });
 
@@ -157,12 +167,9 @@ app.get('/api/transit', async (req, res) => {
   }
   try {
     const data = await fetchNearbyTransit(lat, lon);
-    if (!data.stops?.length) {
-      return res.json(demoTransit());
-    }
     return res.json(data);
   } catch {
-    return res.json(demoTransit());
+    return res.json({ source: 'overpass', stops: [] });
   }
 });
 

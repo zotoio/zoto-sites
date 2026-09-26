@@ -99,6 +99,19 @@ function renderExtraHeaders(headers) {
   return lines.length ? `\n${lines.join('\n')}` : '';
 }
 
+function renderBotzEditorialCacheBlocks() {
+  return `
+    # Editorial cache bind-mount: block dot-path archives (e.g. /cache/.replaced/).
+    location ~ ^/cache/\\. {
+        deny all;
+        return 403;
+    }
+
+    location /cache/ {
+        alias /usr/share/nginx/html/botz.ai/cache/;
+    }`;
+}
+
 function renderSite(site) {
   const serverNames = site.domains.join(' ');
   const proxies = site.proxies || [];
@@ -110,6 +123,7 @@ function renderSite(site) {
     .join('\n\n');
   const fallbackBlock = apiFallbackName ? `\n\n${renderApiUnavailableFallback(apiFallbackName)}` : '';
   const proxySection = proxyBlocks ? `\n\n${proxyBlocks}${fallbackBlock}` : '';
+  const cacheBlocks = site.id === 'botz.ai' ? renderBotzEditorialCacheBlocks() : '';
 
   return `server {
     listen 443 ssl;
@@ -119,7 +133,7 @@ function renderSite(site) {
     location / {
         root   /usr/share/nginx/html/${site.id};
         index  index.html index.htm;
-    }${proxySection}
+    }${cacheBlocks}${proxySection}
 ${ERROR_PAGE_BLOCK}
 }
 `;

@@ -280,8 +280,11 @@ assert_host_ssl_dir_consistent "$(resolve_ssl_dir)"
 
 TODAY_ENV="${ROOT}/backends/today.zoto.io/.env"
 if [[ ! -f "$TODAY_ENV" ]]; then
-  echo "Note: $TODAY_ENV missing — today API will serve demo news until configured; nginx and other sites are unaffected."
+  echo "Note: $TODAY_ENV missing — optional today keys unset; nginx and other sites are unaffected."
 fi
+
+# OpenAI usage logs (not editorial archive; not guarded as DATA).
+mkdir -p "${ROOT}/backends/botz.ai/usage"
 
 # --- (b) Record pre-deploy counts and data guards ---
 record_data_counts

@@ -7,8 +7,18 @@ import {
   saveLayout,
 } from './layout-storage.js';
 import { mountWidget } from './widget-mount.js';
+import {
+  GRID_COLUMNS_STANDARD,
+  GRID_COLUMNS_ULTRAWIDE,
+  syncUltrawideMode,
+} from './display-mode.js';
 
 const MOBILE_MQ = window.matchMedia('(max-width: 768px)');
+
+function gridColumnsForViewport(ultrawideActive) {
+  if (MOBILE_MQ.matches) return 1;
+  return ultrawideActive ? GRID_COLUMNS_ULTRAWIDE : GRID_COLUMNS_STANDARD;
+}
 
 /**
  * @param {object} ctx
@@ -23,10 +33,12 @@ export function initWidgetCanvas(ctx, options = {}) {
   const libraryEl = document.getElementById('widget-library');
   const libraryList = document.getElementById('widget-library-list');
 
+  const { active: ultrawideActive } = syncUltrawideMode();
+
   const grid = GridStack.init(
     {
-      column: 12,
-      cellHeight: 72,
+      column: gridColumnsForViewport(ultrawideActive),
+      cellHeight: ultrawideActive ? 64 : 72,
       margin: 10,
       float: true,
       animate: true,
@@ -35,6 +47,14 @@ export function initWidgetCanvas(ctx, options = {}) {
     },
     gridEl
   );
+
+  function applyUltrawideGrid(active) {
+    if (MOBILE_MQ.matches) return;
+    const cols = active ? GRID_COLUMNS_ULTRAWIDE : GRID_COLUMNS_STANDARD;
+    grid.cellHeight(active ? 64 : 72, false);
+    grid.column(cols, 'moveScale');
+    instances.forEach((api) => api.resize?.());
+  }
 
   function persist() {
     const nodes = grid.save(false);
@@ -250,5 +270,6 @@ export function initWidgetCanvas(ctx, options = {}) {
       loadFromLayout();
       refreshLibrary();
     },
+    setUltrawideGrid: applyUltrawideGrid,
   };
 }

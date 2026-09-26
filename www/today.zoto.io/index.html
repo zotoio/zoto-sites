@@ -20,8 +20,18 @@
           +
         </button>
         <button type="button" id="reset-layout-btn" class="btn-ghost">Reset layout</button>
+        <button
+          type="button"
+          id="ultrawide-mode-btn"
+          class="btn-ghost"
+          aria-pressed="false"
+          title="Ultrawide layout (24 columns, wider canvas). Cycles Auto → On → Off."
+        >
+          Ultrawide: Auto
+        </button>
       </div>
 
+      <div class="dashboard-stage">
       <aside id="widget-library" class="widget-library" hidden aria-label="Widget library">
         <header class="library-head">
           <h2>Add a widget</h2>
@@ -32,6 +42,7 @@
       </aside>
 
       <div id="widget-grid" class="grid-stack widget-canvas" aria-label="Widget canvas"></div>
+      </div>
 
       <footer class="foot">
         <p>

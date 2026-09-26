@@ -46,8 +46,38 @@ export function demoShowcaseLayout() {
   };
 }
 
+/** Demo layout tuned for 24-column ultrawide grid. */
+export function ultrawideShowcaseLayout() {
+  const types = [
+    ['location', 0, 0, 24, 2],
+    ['weather', 0, 2, 7, 8],
+    ['news-topics', 7, 2, 5, 8],
+    ['traffic-cams', 12, 2, 6, 8],
+    ['nearby-webcams', 18, 2, 6, 8],
+    ['clock', 0, 10, 4, 3],
+    ['day-progress', 4, 10, 4, 3],
+    ['air-quality', 8, 10, 4, 4],
+    ['radar', 12, 10, 6, 6],
+    ['iss', 18, 10, 6, 6],
+    ['wiki-nearby', 0, 14, 5, 5],
+    ['walk-rings', 5, 14, 5, 6],
+    ['bikes', 10, 14, 5, 5],
+    ['transit', 15, 14, 9, 6],
+    ['calculator', 0, 20, 4, 4],
+    ['daily-quote', 4, 20, 5, 3],
+  ];
+  return {
+    schema: LAYOUT_SCHEMA,
+    widgets: types.map(([type, x, y, w, h]) => {
+      const e = createLayoutEntry(type, x, y);
+      e.w = w;
+      e.h = h;
+      return e;
+    }),
+  };
+}
+
 /**
- * @param {unknown} raw
  * @returns {{ schema: number, widgets: LayoutWidget[] } | null}
  */
 export function migrateLayout(raw) {

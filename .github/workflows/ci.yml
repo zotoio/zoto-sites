@@ -21,6 +21,9 @@ jobs:
       - name: today.zoto.io widget registry tests
         run: node --test www/today.zoto.io/test/widget-registry.test.mjs
 
+      - name: today.zoto.io display mode tests
+        run: node --test www/today.zoto.io/test/display-mode.test.mjs
+
       - name: today.zoto.io API tests
         run: yarn --cwd backends/today.zoto.io test
 

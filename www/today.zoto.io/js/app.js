@@ -1,5 +1,12 @@
 import { fetchJson, forceDemo, setBackdrop } from './lib-ui.js';
-import { demoShowcaseLayout, loadLayout, STORAGE_KEY } from './layout-storage.js';
+import {
+  cycleUltrawidePreference,
+  getUltrawidePreference,
+  syncUltrawideMode,
+  ultrawidePreferenceLabel,
+  watchUltrawide,
+} from './display-mode.js';
+import { demoShowcaseLayout, loadLayout, STORAGE_KEY, ultrawideShowcaseLayout } from './layout-storage.js';
 import { initWidgetCanvas } from './widget-canvas.js';
 
 async function resolveLocation() {
@@ -35,6 +42,36 @@ async function resolveLocation() {
   return fetchJson('/api/location');
 }
 
+function mountDashboard(ctx, initialLayout) {
+  const ultrawideBtn = document.getElementById('ultrawide-mode-btn');
+
+  function refreshUltrawideButton() {
+    const pref = getUltrawidePreference();
+    const { active } = syncUltrawideMode();
+    if (ultrawideBtn) {
+      ultrawideBtn.textContent = `Ultrawide: ${ultrawidePreferenceLabel(pref)}`;
+      ultrawideBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    }
+  }
+
+  refreshUltrawideButton();
+
+  const canvas = initWidgetCanvas(ctx, { initialLayout });
+
+  ultrawideBtn?.addEventListener('click', () => {
+    cycleUltrawidePreference();
+    refreshUltrawideButton();
+    canvas.setUltrawideGrid(syncUltrawideMode().active);
+  });
+
+  watchUltrawide((active) => {
+    refreshUltrawideButton();
+    canvas.setUltrawideGrid(active);
+  });
+
+  return canvas;
+}
+
 async function bootstrap() {
   const hint = document.getElementById('demo-hint');
   if (forceDemo) {
@@ -60,9 +97,13 @@ async function bootstrap() {
   ]);
 
   const initialLayout =
-    forceDemo && !localStorage.getItem(STORAGE_KEY) ? demoShowcaseLayout() : loadLayout();
+    forceDemo && !localStorage.getItem(STORAGE_KEY)
+      ? syncUltrawideMode().active
+        ? ultrawideShowcaseLayout()
+        : demoShowcaseLayout()
+      : loadLayout();
 
-  initWidgetCanvas(
+  mountDashboard(
     {
       loc,
       weather,
@@ -72,7 +113,7 @@ async function bootstrap() {
       forceDemo,
       fetch: (path, extra = {}) => fetchJson(path, extra),
     },
-    { initialLayout }
+    initialLayout
   );
 }
 
@@ -80,7 +121,9 @@ bootstrap().catch(async () => {
   document.getElementById('demo-hint').textContent = 'Offline — loading demo layout.';
   const loc = await fetchJson('/api/location');
   setBackdrop(loc.lat, loc.lon);
-  initWidgetCanvas(
+  const initial =
+    syncUltrawideMode().active ? ultrawideShowcaseLayout() : demoShowcaseLayout();
+  mountDashboard(
     {
       loc,
       weather: await fetchJson('/api/weather', { demo: 1 }),
@@ -90,6 +133,6 @@ bootstrap().catch(async () => {
       forceDemo: true,
       fetch: (path, extra = {}) => fetchJson(path, extra),
     },
-    { initialLayout: demoShowcaseLayout() }
+    initial
   );
 });

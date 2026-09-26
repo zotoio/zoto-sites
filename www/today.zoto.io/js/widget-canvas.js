@@ -12,6 +12,8 @@ import {
   GRID_COLUMNS_ULTRAWIDE,
   syncUltrawideMode,
 } from './display-mode.js';
+import { GRID_GUTTER_PX } from './grid-config.js';
+import { normalizeWidgetLayout } from './layout-normalize.js';
 
 const MOBILE_MQ = window.matchMedia('(max-width: 768px)');
 
@@ -25,7 +27,15 @@ function gridColumnsForViewport(ultrawideActive) {
  * @param {(open: boolean) => void} [onLibraryToggle]
  */
 export function initWidgetCanvas(ctx, options = {}) {
+  const { active: ultrawideActive } = syncUltrawideMode();
   let layout = options.initialLayout || loadLayout();
+  layout = {
+    ...layout,
+    widgets: normalizeWidgetLayout(
+      layout.widgets,
+      gridColumnsForViewport(ultrawideActive)
+    ),
+  };
   /** @type {Map<string, { resize: Function, destroy: Function }>} */
   const instances = new Map();
 
@@ -33,14 +43,14 @@ export function initWidgetCanvas(ctx, options = {}) {
   const libraryEl = document.getElementById('widget-library');
   const libraryList = document.getElementById('widget-library-list');
 
-  const { active: ultrawideActive } = syncUltrawideMode();
+  gridEl.style.setProperty('--widget-gutter', `${GRID_GUTTER_PX}px`);
 
   const grid = GridStack.init(
     {
       column: gridColumnsForViewport(ultrawideActive),
       cellHeight: ultrawideActive ? 64 : 72,
-      margin: 10,
-      float: true,
+      margin: GRID_GUTTER_PX,
+      float: false,
       animate: true,
       handle: '.widget-drag-handle',
       columnOpts: { breakpoints: [{ w: 768, c: 1, layout: 'list' }] },
@@ -241,7 +251,7 @@ export function initWidgetCanvas(ctx, options = {}) {
     if (id) instances.get(id)?.resize?.();
   });
 
-  void loadFromLayout();
+  void loadFromLayout().then(() => persist());
   refreshLibrary();
   applyResponsive();
   MOBILE_MQ.addEventListener('change', applyResponsive);

@@ -1,3 +1,4 @@
+import { attachLeafletResizeObserver } from './leaflet-widget.js';
 import { formatDay, formatSunTime, weatherIcon } from './weather-utils.js';
 
 const params = new URLSearchParams(window.location.search);
@@ -201,11 +202,20 @@ export function renderTransit(mapEl, listEl, center, payload, options = {}) {
   if (!stops.length) {
     const empty = document.createElement('p');
     empty.className = 'muted-note';
+    const radius = payload.radiusM ? ` (within ${Math.round(payload.radiusM)} m)` : '';
     empty.textContent =
       payload.source === 'demo'
         ? 'No demo stops.'
-        : 'No transit stops found nearby for your location.';
+        : `No transit stops found nearby for your location${radius}.`;
     listEl.appendChild(empty);
+    if (options.onWidenSearch && payload.source !== 'demo') {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn-ghost transit-widen-btn';
+      btn.textContent = 'Search wider area (2.5 km)';
+      btn.addEventListener('click', () => options.onWidenSearch());
+      listEl.appendChild(btn);
+    }
   }
   (payload.stops || []).forEach((s) => {
     const li = document.createElement('li');
@@ -218,14 +228,22 @@ export function renderTransit(mapEl, listEl, center, payload, options = {}) {
   });
 
   if (mapEl._leaflet) {
+    mapEl._leafletResizeObserver?.disconnect();
     mapEl._leaflet.remove();
   }
   mapEl.style.height = `${mapHeight}px`;
+  mapEl.style.minHeight = `${mapHeight}px`;
+  mapEl.style.maxHeight = `${mapHeight}px`;
   const map = L.map(mapEl, { zoomControl: false, attributionControl: true }).setView(
     [center.lat, center.lon],
     15
   );
   mapEl._leaflet = map;
+  attachLeafletResizeObserver(mapEl, map);
+  map.whenReady(() => {
+    map.invalidateSize({ animate: false });
+    window.setTimeout(() => map.invalidateSize({ animate: false }), 100);
+  });
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
     attribution: '&copy; OpenStreetMap',

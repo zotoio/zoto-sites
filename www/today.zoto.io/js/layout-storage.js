@@ -1,6 +1,8 @@
 /** @typedef {{ id: string, type: string, x: number, y: number, w: number, h: number, settings?: Record<string, unknown> }} LayoutWidget */
 
 import { createLayoutEntry } from './widget-registry.js';
+import { GRID_COLUMNS_ULTRAWIDE } from './display-mode.js';
+import { normalizeWidgetLayout } from './layout-normalize.js';
 
 export const LAYOUT_SCHEMA = 1;
 export const STORAGE_KEY = 'today.zoto.io.layout.v1';
@@ -8,12 +10,15 @@ export const STORAGE_KEY = 'today.zoto.io.layout.v1';
 export function defaultLayout() {
   return {
     schema: LAYOUT_SCHEMA,
-    widgets: [
-      createLayoutEntry('location', 0, 0),
-      createLayoutEntry('weather', 0, 2),
-      createLayoutEntry('news', 7, 2),
-      createLayoutEntry('transit', 0, 11),
-    ],
+    widgets: normalizeWidgetLayout(
+      [
+        createLayoutEntry('location', 0, 0),
+        createLayoutEntry('weather', 0, 2),
+        createLayoutEntry('news', 7, 2),
+        createLayoutEntry('transit', 0, 11),
+      ],
+      12
+    ),
   };
 }
 
@@ -28,21 +33,24 @@ export function demoShowcaseLayout() {
     ['air-quality', 0, 9, 3, 3],
     ['radar', 3, 9, 4, 4],
     ['iss', 7, 9, 3, 3],
-    ['wiki-nearby', 10, 7, 2, 5],
+    ['daily-quote', 7, 12, 3, 2],
+    ['wiki-nearby', 10, 5, 2, 3],
     ['walk-rings', 0, 12, 4, 5],
-    ['bikes', 4, 12, 4, 4],
-    ['calculator', 8, 12, 2, 4],
-    ['daily-quote', 10, 12, 2, 2],
+    ['bikes', 4, 12, 3, 4],
+    ['calculator', 10, 12, 2, 4],
     ['transit', 0, 17, 12, 5],
   ];
   return {
     schema: LAYOUT_SCHEMA,
-    widgets: types.map(([type, x, y, w, h]) => {
-      const e = createLayoutEntry(type, x, y);
-      e.w = w;
-      e.h = h;
-      return e;
-    }),
+    widgets: normalizeWidgetLayout(
+      types.map(([type, x, y, w, h]) => {
+        const e = createLayoutEntry(type, x, y);
+        e.w = w;
+        e.h = h;
+        return e;
+      }),
+      12
+    ),
   };
 }
 
@@ -68,12 +76,15 @@ export function ultrawideShowcaseLayout() {
   ];
   return {
     schema: LAYOUT_SCHEMA,
-    widgets: types.map(([type, x, y, w, h]) => {
-      const e = createLayoutEntry(type, x, y);
-      e.w = w;
-      e.h = h;
-      return e;
-    }),
+    widgets: normalizeWidgetLayout(
+      types.map(([type, x, y, w, h]) => {
+        const e = createLayoutEntry(type, x, y);
+        e.w = w;
+        e.h = h;
+        return e;
+      }),
+      GRID_COLUMNS_ULTRAWIDE
+    ),
   };
 }
 
@@ -99,7 +110,10 @@ export function migrateLayout(raw) {
       };
     });
   if (widgets.length === 0) return null;
-  return { schema: LAYOUT_SCHEMA, widgets };
+  return {
+    schema: LAYOUT_SCHEMA,
+    widgets: normalizeWidgetLayout(widgets, GRID_COLUMNS_ULTRAWIDE),
+  };
 }
 
 /**

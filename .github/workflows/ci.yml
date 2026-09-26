@@ -28,3 +28,6 @@ jobs:
           if command -v shellcheck >/dev/null 2>&1; then
             shellcheck -x scripts/deploy-safe.sh scripts/deploy.sh scripts/sync-ssl.sh || true
           fi
+
+      - name: botz.ai OpenAI image API contract
+        run: yarn --cwd backends/botz.ai test

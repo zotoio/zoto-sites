@@ -14,33 +14,8 @@ Environment (for remote deploy):
   DEPLOY_PATH   App directory on the remote host (default: /opt/zoto-sites)
   DEPLOY_BRANCH Git branch to deploy (default: main)
 
-Local / on-droplet deploy runs:
-  git pull (if inside a git repo)
-  scripts/sync-ssl.sh (host LE certs → ssl/, skipped if absent)
-  node scripts/generate-nginx.js
-  docker compose up -d --build
+Local / on-droplet deploy runs scripts/deploy-safe.sh (backup, guards, ff-only pull, compose).
 EOF
-}
-
-deploy_local() {
-  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    BRANCH="${DEPLOY_BRANCH:-main}"
-    echo "Pulling latest ${BRANCH}..."
-    git pull origin "${BRANCH}"
-  fi
-
-  echo "Syncing host Let's Encrypt certs (if present)..."
-  bash scripts/sync-ssl.sh
-
-  echo "Generating nginx configs..."
-  node scripts/generate-nginx.js
-
-  echo "Building and starting services..."
-  docker compose up -d --build
-
-  echo ""
-  echo "Deploy complete. Running containers:"
-  docker compose ps
 }
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
@@ -49,7 +24,7 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 fi
 
 if [[ $# -eq 0 ]]; then
-  deploy_local
+  bash scripts/deploy-safe.sh
   exit 0
 fi
 
@@ -61,13 +36,9 @@ echo "Deploying to ${TARGET}:${REMOTE_PATH} (branch ${REMOTE_BRANCH})..."
 
 ssh "${TARGET}" "set -euo pipefail
   cd '${REMOTE_PATH}'
+  export DEPLOY_BRANCH='${REMOTE_BRANCH}'
   git fetch origin '${REMOTE_BRANCH}'
-  git checkout '${REMOTE_BRANCH}'
-  git pull origin '${REMOTE_BRANCH}'
-  bash scripts/sync-ssl.sh
-  node scripts/generate-nginx.js
-  docker compose up -d --build
-  docker compose ps
+  bash scripts/deploy-safe.sh
 "
 
 echo "Remote deploy complete."

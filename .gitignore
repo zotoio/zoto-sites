@@ -74,11 +74,12 @@ dist/
 *.out
 
 scripts/*.json
-ssl/*.pem
-ssl/*.key
+ssl/*
+!ssl/.gitkeep
 
 .env
 cache/
+backends/botz.ai/cache/
 .aider*
 
 .vscode/

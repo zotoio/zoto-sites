@@ -7,11 +7,9 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./backends/botz.ai/cache:/usr/share/nginx/html/botz.ai/cache
-      # Origin TLS: synced from host Let's Encrypt via scripts/sync-ssl.sh
-      # (see docs/DEPLOYMENT.md — Cloudflare Full Strict to origin :443).
-      # Without certs here, krewh/hardened-nginx uses a self-signed cert (local dev).
-      - ${SSL_CERT_DIR:-./ssl}:/etc/nginx/ssl:ro
+      - ./backends/botz.ai/cache:/usr/share/nginx/html/botz.ai/cache:ro
+      # LE copies for future vhost use; mount avoids /etc/nginx/ssl so the image can write its default self-signed cert at startup.
+      - ${SSL_CERT_DIR:-./ssl}:/etc/nginx/certs:ro
     depends_on:
       - botz
 
@@ -21,8 +19,10 @@ services:
     container_name: botz
     env_file:
       - ./backends/botz.ai/.env
+    environment:
+      CACHE_DIR: /home/root/cache
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       - ./backends/botz.ai/cache:/home/root/cache
 

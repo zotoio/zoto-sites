@@ -30,7 +30,7 @@ const {
     SINGLE_RANDOM = 'true',
     CACHE = 'true',
     CATEGORY_HOURS = 12,
-    CACHE_DIR = '/var/lib/cache',
+    CACHE_DIR = '/home/root/cache',
     SHARED_SECRET,
     CF_ZONE_ID,
     CF_API_TOKEN,

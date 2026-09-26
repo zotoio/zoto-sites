@@ -1,0 +1,16 @@
+# Persistent paths relative to the repository root (zoto-sites checkout).
+# Used by scripts/deploy-safe.sh and scripts/check-persistent-mounts.js.
+
+# DATA — editorial archive (*.json + images/*.png). If non-empty before deploy, must stay non-empty.
+backends/botz.ai/cache
+
+# CONFIG — secrets and service configuration (back up with deploy-safe.sh; not file-count guarded).
+backends/botz.ai/.env
+backends/discord/.env
+
+# DERIVED — synced from host Let's Encrypt via scripts/sync-ssl.sh.
+ssl
+
+# ALLOWED_COMPOSE_BIND_SOURCES — host paths that may appear as bind-mount sources in docker-compose.yml.
+./backends/botz.ai/cache
+${SSL_CERT_DIR:-./ssl}

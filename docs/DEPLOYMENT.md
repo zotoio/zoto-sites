@@ -138,7 +138,7 @@ chmod 600 backends/botz.ai/.env backends/discord/.env
 | `OPENAI_API_KEY` | Yes | OpenAI API key |
 | `NEWS_API_KEY` | Yes | News API key for article fetching |
 | `SHARED_SECRET` | Yes | Shared with Discord bot for auth |
-| `CACHE_DIR` | No | Defaults to `/home/root/cache` in container (mounted volume) |
+| `CACHE_DIR` | No | Compose sets `/home/root/cache` (bind mount). Code default matches; keep in `.env` for local non-Docker runs |
 | `CF_ZONE_ID` | No | Cloudflare zone ID for cache purge after new editorials |
 | `CF_API_TOKEN` | No | API token with `Cache Purge` permission |
 
@@ -150,6 +150,76 @@ chmod 600 backends/botz.ai/.env backends/discord/.env
 | `DISCORD_APPLICATION_ID` | Yes | Application ID for slash commands |
 | `SHARED_SECRET` | Yes | Must match botz.ai |
 | `EDITORIAL_FRONTEND_URL_PREFIX` | No | URL shown to users (e.g. `https://botz.ai/#`) |
+
+## Persistent data
+
+Host paths below are **relative to the git checkout** (usually `/opt/zoto-sites`). They are listed in `deploy/persistent-data.txt` and backed up by `scripts/deploy-safe.sh`.
+
+| Host path | Container path | Writer | Criticality |
+| --- | --- | --- | --- |
+| `backends/botz.ai/cache/` | botz: `/home/root/cache`; nginx: `/usr/share/nginx/html/botz.ai/cache` (read-only) | botz API | **Critical** — ~21k+ editorial JSON + PNG archive |
+| `backends/botz.ai/.env` | (env_file) | operator | **Critical** — API keys, `SHARED_SECRET`, optional `CACHE_DIR` |
+| `backends/discord/.env` | (env_file) | operator | **Critical** — Discord token and shared secret |
+| `ssl/` | nginx: `/etc/nginx/certs` (read-only) | `scripts/sync-ssl.sh` from host LE | Derived — regenerable from `/etc/letsencrypt` |
+
+Compose bind-mount sources allowed by policy: `./backends/botz.ai/cache`, `${SSL_CERT_DIR:-./ssl}` → `/etc/nginx/certs`. There are **no** named Docker volumes.
+
+**Backups:** `scripts/deploy-safe.sh` writes `tar.gz` archives to `${BACKUP_DIR:-/var/backups/zoto-sites}/zoto-sites-<UTC>-<sha>.tar.gz`, verifies the archive, and retains the last `${BACKUP_KEEP:-7}`. A `.state` file records pre-deploy file counts for the cache.
+
+**Restore example** (from a failed deploy):
+
+```bash
+cd /opt/zoto-sites
+docker compose stop
+tar -xzf /var/backups/zoto-sites/zoto-sites-YYYYMMDDTHHMMSSZ-<sha>.tar.gz -C /opt/zoto-sites
+docker compose up -d
+```
+
+**Never run on the droplet checkout** (they can delete or orphan the archive and secrets):
+
+- `git clean -fdx` / `git clean -X`
+- `git reset --hard`
+- `git stash`
+- `docker compose down -v` or `--volumes`
+- `docker volume rm` / `docker volume prune`
+- `rm -rf backends/botz.ai/cache` (or other manifest paths)
+
+### Origin TLS note (main branch)
+
+`scripts/sync-ssl.sh` copies Let's Encrypt material into `ssl/fullchain.pem` and `ssl/privkey.pem`, and compose mounts `ssl/` at `/etc/nginx/certs`. **No generated vhost references those files yet** — nginx still serves the per-start self-signed cert from `/etc/nginx/ssl` inside `krewh/hardened-nginx`. Wiring LE certs into vhosts is a separate change.
+
+### FIRST-DEPLOY checklist (24a283e-era droplet → current `main`)
+
+Run on the droplet **before** the first deploy that uses `deploy-safe.sh`. The GitHub Actions deploy job runs `git fetch` then `bash scripts/deploy-safe.sh` from the **current** checkout; the first time this lands, ensure `scripts/deploy-safe.sh` exists (merge this PR, or copy the script and manifest from `main` once manually).
+
+1. Record running mounts and compose labels:
+   ```bash
+   for c in nginx botz discord; do
+     echo "== $c"
+     docker inspect -f '{{json .Mounts}}' "$c"
+     docker inspect -f 'working_dir={{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$c"
+   done
+   ```
+2. Confirm botz writes to the bind mount, not the container layer:
+   ```bash
+   docker exec botz printenv CACHE_DIR
+   docker exec botz ls /var/lib/cache
+   ```
+   If files exist under `/var/lib/cache`, copy them **before** recreating botz:
+   ```bash
+   docker cp botz:/var/lib/cache/. backends/botz.ai/cache/
+   ```
+3. Confirm checkout path matches `DEPLOY_PATH` (e.g. `/opt/zoto-sites`).
+4. `git status` clean; no untracked files that would collide with incoming tracked paths; note `git log -1`.
+5. Count cache files; optional manual backup:
+   ```bash
+   find backends/botz.ai/cache -maxdepth 1 -name '*.json' | wc -l
+   sudo mkdir -p /var/backups/zoto-sites
+   sudo tar -czf /var/backups/zoto-sites/manual-pre-migrate-$(date -u +%Y%m%d).tar.gz backends/botz.ai/cache backends/botz.ai/.env backends/discord/.env ssl
+   ```
+6. Ensure `backends/botz.ai/node_modules` and `backends/discord/node_modules` exist (Dockerfiles `COPY` them).
+7. `docker compose version` (v2).
+8. Deploy: `./scripts/deploy.sh` or GitHub Actions; verify cache file counts unchanged and https://botz.ai/archive loads.
 
 ## Deploy and update
 
@@ -166,14 +236,17 @@ From your laptop (SSH to droplet IP — not the Cloudflare edge IP):
 DEPLOY_PATH=/opt/zoto-sites ./scripts/deploy.sh deploy@YOUR_DROPLET_IP
 ```
 
-Each deploy:
+Each deploy runs `scripts/deploy-safe.sh`:
 
-1. `git pull` (branch `main` by default)
-2. `scripts/sync-ssl.sh` — copy host LE certs into `ssl/` when present
-3. `node scripts/generate-nginx.js` — render vhosts from `sites/`
-4. `docker compose up -d --build`
+1. Preflight (clean tree, untracked collision check, compose v2, bind-mount regression guard)
+2. Timestamped `tar` backup of manifest paths to `/var/backups/zoto-sites`
+3. Data guards on the editorial cache
+4. `git pull --ff-only origin main`
+5. `scripts/sync-ssl.sh`
+6. `node scripts/generate-nginx.js` only when `node` is on the host (skipped otherwise; image regenerates confs)
+7. `docker compose up -d --build` and post-checks
 
-GitHub Actions (`.github/workflows/deploy.yml`) runs the same steps over SSH when `DEPLOY_*` secrets are set.
+GitHub Actions (`.github/workflows/deploy.yml`) runs `git fetch origin main` and `bash scripts/deploy-safe.sh` over SSH when `DEPLOY_*` secrets are set.
 
 ## Add a site in production
 

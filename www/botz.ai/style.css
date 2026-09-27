@@ -104,6 +104,18 @@ a:hover{color:var(--green-hi)}
   transform:translateY(-42%); z-index:2; pointer-events:none;
   display:flex; flex-direction:column; align-items:center; gap:10px;
 }
+.stage-end.is-separated{right:max(36px, calc(50% - min(var(--card-w),100%) / 2 - 148px))}
+.stage-end[role="button"]{cursor:pointer}
+.stage-end[role="button"]:focus-visible{outline:2px solid rgba(47,207,55,.45); outline-offset:4px}
+
+.card.card-loading{position:relative}
+.card.card-loading .card-text{opacity:.35; pointer-events:none}
+.card.card-loading .card-head{opacity:.7}
+.card.card-loading::after{
+  content:""; position:absolute; left:50%; top:54%; width:28px; height:28px; margin:-14px 0 0 -14px;
+  border:2px solid rgba(154,163,155,.25); border-top-color:rgba(47,207,55,.85); border-radius:50%;
+  animation:spin 0.8s linear infinite; z-index:3;
+}
 .stage-end-label{
   font:bold 11px/1 Arial, sans-serif; letter-spacing:.14em; text-transform:uppercase;
   color:rgba(154,163,155,.92); padding:8px 12px; border-radius:999px;

@@ -107,6 +107,13 @@ let offsets = [];
 let busy = false;
 let navQueue = 0;
 let archiveKeysChrono = [];
+window.__navLog = [];
+
+function logCenteredKey() {
+  const id = FEAT[active]?.id || LATEST_SLOT_ID;
+  window.__navLog.push(id);
+  console.debug('[nav]', id);
+}
 let geom = { W: 0, H: 0, cx: 0, cy: 0, cardW: 0, cardH: 0, k: 1, sideW: 0, sideH: 0, floorY: 0, showSides: true };
 let sideBtns = [];
 let archivePage = 1;
@@ -136,6 +143,7 @@ async function fetchEditorial(cacheKey) {
   if (isLocalDev) {
     const response = await fetch(stub, { cache: 'no-store' });
     if (response.ok) return response.json();
+    return [];
   }
   let url = '/editorials';
   if (cacheKey) url += `?cacheKey=${encodeURIComponent(cacheKey)}`;
@@ -264,7 +272,7 @@ async function ensureLatestSlotResolved() {
         const payload = await fetchEditorial(k);
         if (payload[0] && matchesLatestIdentity(payload[0])) {
           globalLatestKey = k;
-          newestRealHourlyKey = lastReal;
+          newestRealHourlyKey = lastReal === newestArchiveKey ? k : lastReal;
           break;
         }
         if (payload[0]) lastReal = k;
@@ -281,10 +289,11 @@ async function ensureLatestSlotResolved() {
 /** Hourly slot only — returns null when the API echoes LATEST (missing hour). */
 async function fetchHourlyEditorial(cacheKey, prefetchedPayload = null) {
   if (!cacheKey || cacheKey === LATEST_SLOT_ID) return null;
+  await ensureLatestSlotResolved();
   const payload = prefetchedPayload || await fetchEditorial(cacheKey);
   const row = payload?.[0];
   if (!row) return null;
-  if (matchesLatestIdentity(row)) return null;
+  if (matchesLatestIdentity(row) && cacheKey !== newestRealHourlyKey) return null;
   return payload;
 }
 
@@ -299,19 +308,18 @@ async function resolveNewerTarget(fromKey) {
   if (fromKey === newestRealHourlyKey) return LATEST_SLOT_ID;
   await refreshArchiveKeyIndex();
   const idx = archiveKeysChrono.indexOf(fromKey);
-  if (idx >= 0) {
-    for (let j = idx + 1; j < archiveKeysChrono.length; j++) {
-      const next = archiveKeysChrono[j];
-      if (newestRealHourlyKey && next > newestRealHourlyKey) return LATEST_SLOT_ID;
-      return next;
-    }
-    if (newestRealHourlyKey && fromKey >= newestRealHourlyKey) return LATEST_SLOT_ID;
+  if (idx >= 0 && idx < archiveKeysChrono.length - 1) {
+    const next = archiveKeysChrono[idx + 1];
+    if (newestRealHourlyKey && next > newestRealHourlyKey) return LATEST_SLOT_ID;
+    if (next > fromKey) return next;
   }
+  if (newestRealHourlyKey && fromKey >= newestRealHourlyKey) return LATEST_SLOT_ID;
   let k = incrementHourCacheKey(fromKey);
   for (let steps = 0; k && steps < 8; steps++) {
     const payload = await fetchEditorial(k);
     if (!payload[0]) break;
     if (matchesLatestIdentity(payload[0])) {
+      if (k === newestRealHourlyKey) return k;
       if (globalLatestKey && k === globalLatestKey) return LATEST_SLOT_ID;
       k = incrementHourCacheKey(k);
       continue;
@@ -585,7 +593,7 @@ cardEl.addEventListener('click', e => {
     relayout();
     return;
   }
-  const b = e.target.closest('[data-nav]'); if (b) go(active + Number(b.dataset.nav));
+  const b = e.target.closest('[data-nav]'); if (b) navRelative(Number(b.dataset.nav));
 });
 
 function rebuildSideButtons() {
@@ -1061,37 +1069,64 @@ async function initGL() {
 function indexFromHash() { const id = decodeURIComponent(location.hash.slice(1)); return FEAT.findIndex(a => a.id === id); }
 function snapFor(i) { renderCard(measureEl, i); measureEl.style.width = geom.cardW + 'px'; return snapshot(measureEl, i); }
 
-async function go(target, fromHash = false) {
-  if (target === active) return;
-  await ensureLatestSlotResolved();
-  if (target < 0) {
-    const olderKey = await resolveOlderCacheKey(FEAT[0]?.id);
-    if (olderKey) await openStory(olderKey, fromHash);
-    return;
-  }
-  if (target >= FEAT.length) {
-    const newer = await resolveNewerTarget(FEAT[FEAT.length - 1]?.id);
-    if (newer === LATEST_SLOT_ID) {
-      const idx = FEAT.findIndex(a => a.id === LATEST_SLOT_ID);
-      if (idx >= 0) await go(idx, fromHash);
-      else await openLatestView(fromHash);
-    } else if (newer) await openStory(newer, fromHash);
-    return;
-  }
-  if (target < 0 || target >= FEAT.length) return;
-  if (target === active + 1 && FEAT[target]?.id === LATEST_SLOT_ID) {
-    const hop = await resolveNewerTarget(FEAT[active]?.id);
-    if (hop && hop !== LATEST_SLOT_ID) {
-      await openStory(hop, fromHash);
-      return;
+async function navRelative(delta, fromHash = false) {
+  if (!delta) return;
+  navQueue += delta;
+  if (busy) return;
+  await pumpNavQueue(fromHash);
+}
+
+async function pumpNavQueue(fromHash = false) {
+  while (!busy && navQueue !== 0) {
+    const delta = Math.sign(navQueue);
+    navQueue -= delta;
+    const instant = navQueue !== 0;
+    busy = true;
+    try {
+      await stepRelative(delta, fromHash, { instant });
+    } catch (err) {
+      console.error(err);
+    } finally {
+      busy = false;
     }
   }
-  if (busy) {
-    navQueue += target - active;
+}
+
+async function stepRelative(delta, fromHash = false, { instant = false } = {}) {
+  await ensureLatestSlotResolved();
+  const curId = FEAT[active]?.id;
+  if (!curId) return;
+
+  if (delta < 0) {
+    const olderKey = await resolveOlderCacheKey(curId);
+    if (!olderKey) return;
+    const idx = FEAT.findIndex(a => a.id === olderKey);
+    if (idx >= 0) {
+      await goToIndex(idx, fromHash, { instant });
+      return;
+    }
+    await openStory(olderKey, fromHash);
     return;
   }
-  busy = true;
-  const skipFlip = navQueue !== 0;
+
+  const newerKey = await resolveNewerTarget(curId);
+  if (!newerKey) return;
+  if (newerKey === LATEST_SLOT_ID) {
+    const idx = FEAT.findIndex(a => a.id === LATEST_SLOT_ID);
+    if (idx >= 0) await goToIndex(idx, fromHash, { instant });
+    else await openLatestView(fromHash);
+    return;
+  }
+  const idx = FEAT.findIndex(a => a.id === newerKey);
+  if (idx >= 0) {
+    await goToIndex(idx, fromHash, { instant });
+    return;
+  }
+  await openStory(newerKey, fromHash);
+}
+
+async function goToIndex(target, fromHash = false, { instant = false } = {}) {
+  if (target === active || target < 0 || target >= FEAT.length) return;
   const from = active, dir = Math.sign(target - from);
   const start = FEAT.map((_, i) => i - from), end = FEAT.map((_, i) => i - target);
   const setOff = e => { offsets = start.map((s, i) => s + (end[i] - s) * e); layoutButtons(); };
@@ -1102,20 +1137,19 @@ async function go(target, fromHash = false) {
   }
   const hadFocus = document.activeElement && document.activeElement.closest('.side, .card-nav') ? document.activeElement : null;
 
-  if (gl && !skipFlip && !reduced) {
+  if (gl && !instant && !reduced) {
     const backSnap = snapFor(target);
     cardEl.style.opacity = '0';
     await gl.flipTo(target, dir, backSnap, setOff);
     active = target; renderCard(cardEl, target); cardEl.style.opacity = '1';
     gl.endFlip(backSnap);
-  } else if (skipFlip) {
+  } else if (instant || reduced) {
+    if (!instant && reduced) {
+      cardEl.classList.add('fade-out'); scene.classList.add('fading');
+      await wait(180);
+    }
     active = target; renderCard(cardEl, target); setOff(1);
     cardEl.style.opacity = '1';
-    cardEl.classList.remove('fade-out'); scene.classList.remove('fading');
-  } else if (reduced) {
-    cardEl.classList.add('fade-out'); scene.classList.add('fading');
-    await wait(180);
-    active = target; renderCard(cardEl, target); setOff(1);
     cardEl.classList.remove('fade-out'); scene.classList.remove('fading');
   } else {
     cardEl.style.setProperty('--flip-to', dir > 0 ? '90deg' : '-90deg');
@@ -1136,13 +1170,20 @@ async function go(target, fromHash = false) {
     : 'botz.ai - GenAI News';
   if (storyAnnouncer) storyAnnouncer.textContent = FEAT[active].title;
   trackPageView();
-  if (hadFocus && hadFocus.classList.contains('side')) { const nb = sideBtns[Number(hadFocus.dataset.i)]; (nb.hidden ? cardEl.querySelector('.card-title') : nb)?.focus?.(); }
+  logCenteredKey();
+  if (hadFocus && hadFocus.classList.contains('side')) { const nb = sideBtns[Number(hadFocus.dataset.i)]; (nb?.hidden ? cardEl.querySelector('.card-title') : nb)?.focus?.(); }
   else if (hadFocus) { const b = cardEl.querySelector(`[data-nav="${dir}"]`); (b && !b.disabled ? b : cardEl.querySelector(`[data-nav="${-dir}"]`))?.focus(); }
-  busy = false;
-  if (navQueue !== 0) {
-    const step = Math.sign(navQueue);
-    navQueue -= step;
-    go(active + step, fromHash);
+}
+
+async function go(target, fromHash = false) {
+  if (target === active) return;
+  if (target < 0 || target >= FEAT.length) return;
+  if (busy) return;
+  busy = true;
+  try {
+    await goToIndex(target, fromHash, { instant: false });
+  } finally {
+    busy = false;
   }
 }
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -1152,8 +1193,8 @@ function animate(ms, fn) {
 
 window.addEventListener('keydown', e => {
   if (e.altKey || e.ctrlKey || e.metaKey || /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
-  if (e.key === 'ArrowRight') { e.preventDefault(); go(active + 1); }
-  else if (e.key === 'ArrowLeft') { e.preventDefault(); go(active - 1); }
+  if (e.key === 'ArrowRight') { e.preventDefault(); navRelative(1); }
+  else if (e.key === 'ArrowLeft') { e.preventDefault(); navRelative(-1); }
 });
 window.addEventListener('hashchange', () => {
   const id = decodeURIComponent(location.hash.slice(1));
@@ -1172,7 +1213,7 @@ let sw = null;
 stage.addEventListener('pointerdown', e => { if (e.pointerType === 'mouse' && e.target.closest('.card')) return; sw = { x: e.clientX, y: e.clientY }; });
 stage.addEventListener('pointerup', e => {
   if (!sw) return; const dx = e.clientX - sw.x, dy = e.clientY - sw.y; sw = null;
-  if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.3) go(active + (dx < 0 ? 1 : -1));
+  if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.3) navRelative(dx < 0 ? 1 : -1);
 });
 $('.random-link')?.addEventListener('click', async e => {
   e.preventDefault();
@@ -1205,6 +1246,7 @@ async function applyFeaturedState(feat, activeIndex, fromHash, { omitHash = fals
   renderCard(cardEl, active);
   markActiveTile();
   await relayout();
+  logCenteredKey();
   const id = FEAT[active]?.id;
   if (id === LATEST_SLOT_ID) {
     history.replaceState(null, '', location.pathname + location.search);
@@ -1240,22 +1282,32 @@ async function openLatestView(fromHash = false) {
 async function openStory(cacheKey, fromHash = false) {
   window.scrollTo(0, 0);
   await ensureLatestSlotResolved();
-  if (!cacheKey || cacheKey === globalLatestKey) {
+  if (!cacheKey) {
+    await openLatestView(fromHash);
+    return;
+  }
+  if (cacheKey === globalLatestKey && cacheKey !== newestRealHourlyKey) {
     await openLatestView(fromHash);
     return;
   }
   const existing = FEAT.findIndex(a => a.id === cacheKey);
   if (existing >= 0) {
-    if (existing !== active) await go(existing, fromHash);
+    if (existing !== active) await goToIndex(existing, fromHash, { instant: navQueue !== 0 });
     return;
   }
   stage.classList.add('is-loading');
   cardEl.classList.add('card-loading');
   cardEl.setAttribute('aria-busy', 'true');
-  busy = true;
+  const ownedBusy = !busy;
+  if (ownedBusy) busy = true;
   try {
     const anchorPayload = await fetchEditorial(cacheKey);
-    if (!anchorPayload[0] || matchesLatestIdentity(anchorPayload[0])) {
+    await ensureLatestSlotResolved();
+    if (!anchorPayload[0]) {
+      await openLatestView(fromHash);
+      return;
+    }
+    if (matchesLatestIdentity(anchorPayload[0]) && cacheKey !== newestRealHourlyKey && cacheKey !== globalLatestKey) {
       await openLatestView(fromHash);
       return;
     }
@@ -1270,12 +1322,8 @@ async function openStory(cacheKey, fromHash = false) {
     stage.classList.remove('is-loading');
     cardEl.classList.remove('card-loading');
     cardEl.removeAttribute('aria-busy');
-    busy = false;
-    if (navQueue !== 0) {
-      const step = Math.sign(navQueue);
-      navQueue -= step;
-      go(active + step, fromHash);
-    }
+    if (ownedBusy) busy = false;
+    await pumpNavQueue(fromHash);
   }
 }
 
@@ -1330,4 +1378,4 @@ endMarker?.addEventListener('keydown', e => {
 });
 let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(relayout, 120); });
 wide.addEventListener('change', relayout);
-window.__botzCarousel = { go, openStory, get active() { return active; }, get navQueue() { return navQueue; }, get mode() { return gl ? 'webgl' : (reduced ? 'reduced' : 'css'); }, get editorialRequestCount() { return editorialRequestCount; }, get latestSlotId() { return LATEST_SLOT_ID; }, ready: true };
+window.__botzCarousel = { go, navRelative, openStory, get active() { return active; }, get busy() { return busy; }, get navQueue() { return navQueue; }, get navLog() { return window.__navLog; }, get centerKey() { return FEAT[active]?.id; }, get featIds() { return FEAT.map(a => a.id); }, get newestRealHourlyKey() { return newestRealHourlyKey; }, get mode() { return gl ? 'webgl' : (reduced ? 'reduced' : 'css'); }, get editorialRequestCount() { return editorialRequestCount; }, get latestSlotId() { return LATEST_SLOT_ID; }, ready: true };

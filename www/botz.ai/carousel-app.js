@@ -54,23 +54,82 @@ async function fetchEditorial(cacheKey) {
   return fetchJsonWithLocalStub(url, stub);
 }
 
+function incrementHourCacheKey(key) {
+  const m = /^(\d{4}-\d{2}-\d{2})-(\d{2})$/.exec(key || '');
+  if (!m) return null;
+  const h = parseInt(m[2], 10) + 1;
+  if (h > 23) return null;
+  return `${m[1]}-${String(h).padStart(2, '0')}`;
+}
+
+/** Match a /editorials payload to the cache key used to store it (never from generated_at). */
+async function resolveCacheKeyForPayload(entry) {
+  if (entry.cache_key) return entry.cache_key;
+  const targetGen = entry.article?.generated_at;
+  const targetTitle = entry.article?.title;
+  if (!targetGen && !targetTitle) throw new Error('Cannot resolve cache key');
+
+  const candidates = [];
+  try {
+    const arch = await fetchJsonWithLocalStub('/archive?page=1', '/stubs/archive.json');
+    const keys = (arch.editorials || []).map(e => e.cache_key).filter(Boolean);
+    if (keys[0]) {
+      candidates.push(incrementHourCacheKey(keys[0]));
+      candidates.push(...keys.slice(0, 8));
+    }
+  } catch (_) { /* archive optional for resolution */ }
+
+  const seen = new Set();
+  for (const key of candidates) {
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    try {
+      const payload = await fetchEditorial(key);
+      const row = payload[0];
+      if (!row) continue;
+      if (targetGen && row.article?.generated_at === targetGen) return key;
+      if (targetTitle && row.article?.title === targetTitle) return key;
+    } catch (_) { /* try next candidate */ }
+  }
+  throw new Error('Could not resolve editorial cache key from API');
+}
+
+function splitTitleAndAgent(h2Inner, authorAlias) {
+  let title = h2Inner.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  title = title.replace(/\s*Agent\s+[\w\s.'♟️🤖📚🏛️-]+$/iu, '').trim();
+  const agent = authorAlias || '';
+  const agentPlain = agent.replace(/^Agent\s+/i, '').trim();
+  const showAgent = !!(agentPlain && !title.toLowerCase().includes(agentPlain.toLowerCase()));
+  return { title, agent, showAgent };
+}
+
+function cleanArchiveTitle(raw, authorAlias) {
+  let t = String(raw ?? '').replace(/\s+/g, ' ').trim();
+  const alias = (authorAlias || '').replace(/^Agent\s+/i, '').trim();
+  if (alias) {
+    t = t.replace(new RegExp(`\\s*Agent\\s+${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i'), '').trim();
+    t = t.replace(new RegExp(`${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i'), '').trim();
+  }
+  return t.replace(/\s*Agent\s+[\w\s.'♟️🤖-]+$/iu, '').trim();
+}
+
 function normalizeArticle(entry, cacheKey) {
+  if (!cacheKey) throw new Error('normalizeArticle requires an explicit cache key');
   const raw = entry.editorial || '';
   let editorial = raw.replaceAll('```html\n', '').replaceAll('\n```', '');
   editorial = editorial.replaceAll("<span style='display:none'", '<span class="byline-alias" style="display:none"');
+  editorial = editorial.replace(/<span>(Agent\s+[^<]+)<\/span>/gi, '');
   const titleMatch = editorial.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i);
-  const title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : entry.article.title;
+  const parsed = titleMatch
+    ? splitTitleAndAgent(titleMatch[1], entry.article.authorAlias)
+    : { title: entry.article.title, agent: entry.article.authorAlias || '', showAgent: !!entry.article.authorAlias };
   const bodyHtml = editorial.replace(/<h2[^>]*>[\s\S]*?<\/h2>/i, '').trim();
   const nav = entry.navigation || {};
-  const id = (cacheKey && cacheKey !== 'latest')
-    ? cacheKey
-    : (entry.article.uuid && /^\d{4}-\d{2}-\d{2}-\d{2}/.test(entry.article.uuid)
-      ? entry.article.uuid
-      : cacheKeyFromGenerated(entry.article) || cacheKey || entry.article.uuid);
   return {
-    id,
-    title,
-    agent: entry.article.authorAlias || 'AInonymous',
+    id: cacheKey,
+    title: parsed.title,
+    agent: parsed.agent || entry.article.authorAlias || '',
+    showAgent: parsed.showAgent,
     bodyHtml,
     generated: entry.article.generated_at || entry.article.published_at,
     source: entry.article.source,
@@ -85,12 +144,6 @@ function normalizeArticle(entry, cacheKey) {
       random: nav.random || '',
     },
   };
-}
-
-function cacheKeyFromGenerated(article) {
-  const g = article.generated_at || article.published_at || '';
-  const m = /^(\d{4}-\d{2}-\d{2})-(\d{2})/.exec(g);
-  return m ? `${m[1]}-${m[2]}` : '';
 }
 
 async function buildFeaturedWindow(centerKey, radius = WINDOW_RADIUS) {
@@ -165,7 +218,7 @@ function cardHTML(a, i) {
     <img class="card-img" data-snap="img" src="${esc(a.img)}" alt="" width="340" height="340">
     <div class="card-text">
       <h2 class="card-title" data-snap="text">${esc(a.title)}</h2>
-      <p class="card-agent" data-snap="text">${esc(a.agent)}</p>
+      ${a.showAgent ? `<p class="card-agent" data-snap="text">${esc(a.agent)}</p>` : ''}
       <div class="card-paras">${a.bodyHtml}</div>
       <button type="button" class="card-read-more" hidden aria-expanded="false">Read more</button>
       <div class="card-meta">
@@ -197,7 +250,7 @@ function wireByline(el) {
   });
 }
 function updateReadMoreState(el = cardEl) {
-  const compact = window.innerHeight <= 920 || (window.innerWidth <= 1500 && window.innerHeight <= 980);
+  const compact = window.innerHeight <= 900 || (window.innerWidth <= 1500 && window.innerHeight <= 920);
   const paras = el.querySelector('.card-paras');
   const btn = el.querySelector('.card-read-more');
   if (!paras || !btn) return;
@@ -244,11 +297,14 @@ function appendArchiveTiles(items) {
     a.className = 'tile';
     a.href = `#${editorial.cache_key}`;
     a.dataset.id = editorial.cache_key;
+    const tileTitle = cleanArchiveTitle(editorial.title, editorial.authorAlias);
+    const tileAgent = editorial.authorAlias || '';
+    const showTileAgent = tileAgent && !tileTitle.includes(tileAgent.replace(/^Agent\s+/i, '').trim());
     a.innerHTML = `<img src="${esc(editorial.image_url)}" alt="" loading="lazy" width="400" height="400">
-      <div class="tile-body"><div class="tile-title">${esc(editorial.title)}</div><div class="tile-agent">${esc(editorial.authorAlias || '')}</div></div>`;
+      <div class="tile-body"><div class="tile-title">${esc(tileTitle)}</div>${showTileAgent ? `<div class="tile-agent">${esc(tileAgent)}</div>` : ''}</div>`;
     a.addEventListener('click', e => {
       e.preventDefault();
-      openStory(editorial.cache_key, true);
+      openStory(editorial.cache_key, false);
     });
     gridEl.appendChild(a);
   });
@@ -819,9 +875,9 @@ async function openStory(cacheKey, fromHash = false) {
 }
 
 async function openStoryFromLatest(fromHash) {
-  const payload = await fetchEditorial();
-  const center = normalizeArticle(payload[0], null);
-  await openStory(center.id, fromHash);
+  const payload = await fetchEditorial(null);
+  const centerKey = await resolveCacheKeyForPayload(payload[0]);
+  await openStory(centerKey, fromHash);
   if (!fromHash && !location.hash) history.replaceState(null, '', '/');
 }
 

@@ -304,7 +304,14 @@ const aiResponse = async (prompt, model) => {
     }
 };
 
+function applyEditorialNoStore(res) {
+    res.setHeader('Cache-Control', 'no-store, private');
+    res.setHeader('CDN-Cache-Control', 'no-store');
+    res.setHeader('Pragma', 'no-cache');
+}
+
 app.get('/editorials', async (req, res) => {
+    applyEditorialNoStore(res);
     try {
         const currentDate = new Date();
         const isAdmin = authorisedAdminRequest(req);
@@ -340,14 +347,19 @@ app.get('/editorials', async (req, res) => {
             // example valid values: 2021-09-01-09, 2021-09-01-99-1630480000000 
             const isValidCacheKey = suppliedCacheKey && /^(\d{4}-\d{2}-\d{2})(-\d{2})(-\d{13})?$/.test(suppliedCacheKey);
 
-            if (isValidCacheKey) {
-                let suppliedCacheFilePath = `${path.join(cacheDir, suppliedCacheKey)}.json`;
-                if (authorisedAdminRequest(req) || fs.existsSync(suppliedCacheFilePath)) {
-                    cacheKey = suppliedCacheKey;
-                    cacheFilePath = suppliedCacheFilePath;
-                }
+            if (!isValidCacheKey) {
+                return res.status(400).json({ message: 'Invalid cache key' });
+            }
+
+            const suppliedCacheFilePath = path.join(cacheDir, `${suppliedCacheKey}.json`);
+            if (fs.existsSync(suppliedCacheFilePath)) {
+                cacheKey = suppliedCacheKey;
+                cacheFilePath = suppliedCacheFilePath;
+            } else if (!isAdmin) {
+                return res.status(404).json({ message: 'Editorial not found' });
             } else {
-                console.log('invalid cache key supplied:', suppliedCacheKey);
+                cacheKey = suppliedCacheKey;
+                cacheFilePath = suppliedCacheFilePath;
             }
         }
 
@@ -435,18 +447,15 @@ app.get('/editorials', async (req, res) => {
                 res.setHeader('X-TheNewsApi-Requests', String(req.theNewsApiRequestCount));
             }
         }
+        const shouldPurgeCloudflare =
+            req.query.purgeCache !== 'false' && !asOfDate && editorials.length > 0;
         res.json(publicEditorials);
 
-        const shouldPurgeCloudflare =
-            isAdmin && req.query.purgeCache !== 'false' && !asOfDate;
         if (shouldPurgeCloudflare) {
-            // if configured, clear the cloudflare cache for the editorial api latest article
-            const latestArticleUrl = `${EDITORIAL_API_URL_PREFIX}/editorials`;
-            clearCloudflareCache(latestArticleUrl);
-            // request url to pregenerate the new article after 10 seconds
+            await purgeEditorialUrlsForCacheKey(cacheKey);
             setTimeout(() => {
                 try {
-                    axios.get(latestArticleUrl);
+                    axios.get(`${EDITORIAL_API_URL_PREFIX}/editorials`);
                 } catch (error) {
                     console.error('Error in pregenerating the new article:', error);
                 }
@@ -806,6 +815,7 @@ app.get('/cache/images/:image', (req, res) => {
 
 // an express route that responds with cached editorials
 app.get('/archive', async (req, res) => {
+    applyEditorialNoStore(res);
 
     // read the files
     let files = await fs.promises.readdir(`${cacheDir}`, { withFileTypes: true }, (err, files) => {
@@ -902,6 +912,18 @@ const clearCloudflareCache = async (url) => {
         url,
     });
 };
+
+async function purgeEditorialUrlsForCacheKey(cacheKey) {
+    const base = EDITORIAL_API_URL_PREFIX;
+    const urls = [
+        `${base}/editorials`,
+        `${base}/editorials?cacheKey=${encodeURIComponent(cacheKey)}`,
+        `${base}/archive?page=1`,
+    ];
+    for (const url of urls) {
+        await clearCloudflareCache(url);
+    }
+}
 
 app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);

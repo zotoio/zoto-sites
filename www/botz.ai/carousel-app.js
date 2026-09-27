@@ -15,24 +15,73 @@ const PERSP = 2200;
 const SIDE_W0 = 440, SIDE_ASPECT = 704 / 512;
 const SLOTS = { S: [1, 0.8, 0.65, 0.52, 0.42], R: [0, 40, 40, 40, 40], Z: [0, -70, -150, -230, -310],
                 DIM: [1, 0.8, 0.6, 0.44, 0.3], BIAS: [0, 0.2, 0.9, 1.7, 2.4] };
-const WINDOW_RADIUS = 4;
-const isLocalDev = ['localhost', '127.0.0.1'].includes(window.location.hostname);
+const WINDOW_RADIUS = 3;
+const useLocalStubs = params.get('live') !== '1' && ['localhost', '127.0.0.1'].includes(window.location.hostname);
 
 /** No-key /editorials is a dedicated LATEST slot (empty URL hash when centered). */
 const LATEST_SLOT_ID = '__latest__';
-const LATEST_PROBE_MAX = 4;
-
 let globalLatestPayload = null;
-/** Proven hourly cache key whose payload matches LATEST identity (e.g. 2026-09-27-07). */
-let globalLatestKey = null;
 /** { generated_at, headline } — never match by source article.title alone. */
 let latestIdentity = null;
 let newestArchiveKey = null;
-let newestRealHourlyKey = null;
+/** LATEST /editorials matches the archive page-1 top story (no separate Latest slot). */
+let latestIsArchiveTop = false;
+/** Distinct LATEST newer than archive top — shown as __latest__ with empty hash. */
+let showLatestSlot = false;
 let latestSlotResolved = false;
+let archivePagesLoaded = 0;
+const ARCHIVE_PAGE_SEARCH_CAP = 8;
+/** @type {Record<number, string[]>} */
+const archiveKeysByPage = {};
 
 const knownAuthorPlain = new Set();
 const knownAuthorLabels = new Set();
+
+const STATIC_AUTHOR_SEED = [
+  'AInonymous',
+  'Agent ChatGPT',
+  'Agent Mao Zedong',
+  'Agent Henry Ford',
+  'Agent Steve Jobs',
+  'Agent Angela Merkel',
+  'Agent Tony Blair',
+];
+
+function seedStaticAuthors() {
+  STATIC_AUTHOR_SEED.forEach(registerKnownAuthor);
+}
+
+async function refreshArchiveKeyIndex(extraKeys = []) {
+  const fromPages = Object.values(archiveKeysByPage).flat();
+  archiveKeysChrono = [...new Set([...fromPages, ...extraKeys])].sort();
+}
+
+function rebuildArchiveKeysChrono(extraKeys = []) {
+  const fromPages = Object.values(archiveKeysByPage).flat();
+  archiveKeysChrono = [...new Set([...fromPages, ...extraKeys])].sort();
+}
+
+function neighborArchiveKeys(centerKey, radius = WINDOW_RADIUS) {
+  if (!centerKey) return [];
+  const idx = archiveKeysChrono.indexOf(centerKey);
+  if (idx < 0) return [centerKey];
+  const lo = Math.max(0, idx - radius);
+  const hi = Math.min(archiveKeysChrono.length - 1, idx + radius);
+  return archiveKeysChrono.slice(lo, hi + 1);
+}
+
+function authorSuffixAllowed(suffix) {
+  if (!suffix) return false;
+  if (STATIC_AUTHOR_SEED.includes(suffix)) return true;
+  if (knownAuthorLabels.has(suffix)) return true;
+  const plain = suffix.replace(/^Agent\s+/i, '').trim();
+  return !!(plain && knownAuthorPlain.has(plain));
+}
+
+/** Never split when the headline ends with the word "Agent" (e.g. "…Change the Agent"). */
+function titleEndsWithBareAgent(title) {
+  return /\bAgent\s*$/i.test(String(title ?? '').trim());
+}
 
 /** In-flight + settled JSON cache keyed by request URL (dedupes parallel fetches). */
 const jsonFlight = new Map();
@@ -58,7 +107,16 @@ function fetchArchivePage1() {
 let FEAT = [];   // oldest -> newest
 let active = 0;
 let offsets = [];
-let busy = false, pending = null;
+let busy = false;
+let navQueue = 0;
+let archiveKeysChrono = [];
+window.__navLog = [];
+
+function logCenteredKey() {
+  const id = FEAT[active]?.id || LATEST_SLOT_ID;
+  window.__navLog.push(id);
+  console.debug('[nav]', id);
+}
 let geom = { W: 0, H: 0, cx: 0, cy: 0, cardW: 0, cardH: 0, k: 1, sideW: 0, sideH: 0, floorY: 0, showSides: true };
 let sideBtns = [];
 let archivePage = 1;
@@ -66,13 +124,13 @@ let archiveLoading = false;
 let archiveHasMore = true;
 
 async function fetchJsonWithLocalStub(url, stubUrl) {
-  const requestOptions = isLocalDev ? { cache: 'no-store' } : {};
+  const requestOptions = useLocalStubs ? { cache: 'no-store' } : {};
   try {
     const response = await fetch(url, requestOptions);
     if (!response.ok) throw new Error(`Request failed: ${response.status}`);
     return response.json();
   } catch (error) {
-    if (!isLocalDev) throw error;
+    if (!useLocalStubs) throw error;
     console.warn(`Using local stub for ${url}`, error);
     const response = await fetch(stubUrl, { cache: 'no-store' });
     if (!response.ok) throw new Error(`Stub request failed: ${response.status}`);
@@ -82,20 +140,66 @@ async function fetchJsonWithLocalStub(url, stubUrl) {
 
 let editorialRequestCount = 0;
 const editorialUrlsSeen = new Set();
+const editorialFlight = new Map();
 
-async function fetchEditorial(cacheKey) {
+function editorialMemoKey(cacheKey, bust = false) {
+  return `${cacheKey ?? '__latest__'}|${bust ? 'bust' : 'normal'}`;
+}
+
+async function fetchEditorialNetwork(cacheKey, bust = false) {
   const stub = cacheKey ? `/stubs/editorials/${cacheKey}.json` : '/stubs/editorials/latest.json';
-  if (isLocalDev) {
+  if (useLocalStubs) {
     const response = await fetch(stub, { cache: 'no-store' });
     if (response.ok) return response.json();
+    return [];
   }
   let url = '/editorials';
-  if (cacheKey) url += `?cacheKey=${encodeURIComponent(cacheKey)}`;
+  if (cacheKey) {
+    url += `?cacheKey=${encodeURIComponent(cacheKey)}`;
+    if (bust) url += `&_=${Date.now()}`;
+  }
   if (!editorialUrlsSeen.has(url)) {
     editorialUrlsSeen.add(url);
     editorialRequestCount++;
   }
-  return fetchJsonMemo(url, stub);
+  try {
+    const response = await fetch(url, { cache: 'no-store' });
+    if (response.status === 404) return [];
+    if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+    return response.json();
+  } catch (error) {
+    console.warn(`Editorial fetch failed for ${url}`, error);
+    return [];
+  }
+}
+
+function fetchEditorialOnce(cacheKey, bust = false) {
+  const mk = editorialMemoKey(cacheKey, bust);
+  if (!editorialFlight.has(mk)) {
+    editorialFlight.set(mk, fetchEditorialNetwork(cacheKey, bust));
+  }
+  return editorialFlight.get(mk);
+}
+
+/** Latest slot (no cacheKey) — not hour-validated. */
+async function fetchLatestEditorial() {
+  return fetchEditorialOnce(null);
+}
+
+async function fetchValidatedEditorial(cacheKey) {
+  if (!cacheKey) return fetchLatestEditorial();
+  let payload = await fetchEditorialOnce(cacheKey);
+  if (payload[0] && editorialBelongsToCacheKey(payload[0], cacheKey)) return payload;
+  if (payload[0]) {
+    payload = await fetchEditorialOnce(cacheKey, true);
+    if (payload[0] && editorialBelongsToCacheKey(payload[0], cacheKey)) return payload;
+  }
+  return [];
+}
+
+async function fetchEditorial(cacheKey) {
+  if (!cacheKey) return fetchLatestEditorial();
+  return fetchValidatedEditorial(cacheKey);
 }
 
 function cacheKeyToUtcMs(key) {
@@ -201,28 +305,111 @@ function formatDisplayAgent(authorAlias) {
   return `Agent ${raw.replace(/^Agent\s+/i, '').trim()}`;
 }
 
+function generatedAtUtcMs(entry) {
+  const ga = entry?.article?.generated_at || '';
+  const m = /^(\d{4})-(\d{2})-(\d{2})-(\d{2})-(\d{2})-(\d{2})/.exec(ga);
+  if (!m) return null;
+  return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+}
+
+/** generated_at in [keyHour - 1h, keyHour + 1h) — hourly stories often generate just before the key hour. */
+function editorialBelongsToCacheKey(entry, cacheKey) {
+  const keyMs = cacheKeyToUtcMs(cacheKey);
+  const genMs = generatedAtUtcMs(entry);
+  if (keyMs == null || genMs == null) return false;
+  return genMs >= keyMs - 3600000 && genMs < keyMs + 3600000;
+}
+
+function isFutureCacheKey(cacheKey) {
+  const ms = cacheKeyToUtcMs(cacheKey);
+  if (ms == null) return false;
+  const now = new Date();
+  const currentHourMs = Date.UTC(
+    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours(), 0, 0
+  );
+  return ms > currentHourMs;
+}
+
+async function loadArchivePage(page) {
+  const stub = page === 2 ? '/stubs/archive-page2.json' : '/stubs/archive.json';
+  if (useLocalStubs) {
+    const response = await fetch(stub, { cache: 'no-store' });
+    if (response.ok) return response.json();
+  }
+  return fetchJsonMemo(`/archive?page=${page}`, stub);
+}
+
+async function ensureArchivePageLoaded(page) {
+  if (page <= archivePagesLoaded) return;
+  if (archiveLoading) return;
+  archiveLoading = true;
+  try {
+    const data = await loadArchivePage(page);
+    const keys = (data.editorials || []).map(e => e.cache_key).filter(Boolean);
+    archiveKeysByPage[page] = keys;
+    rebuildArchiveKeysChrono();
+    appendArchiveTiles(data.editorials || []);
+    refreshArchiveTileTitles();
+    archiveHasMore = !!data.pagination?.has_next;
+    archivePage = page;
+    archivePagesLoaded = page;
+  } catch (err) {
+    console.error(err);
+  } finally {
+    archiveLoading = false;
+  }
+}
+
+async function ensureKeyListedInArchive(cacheKey) {
+  if (!cacheKey) return false;
+  rebuildArchiveKeysChrono();
+  if (archiveKeysChrono.includes(cacheKey)) return true;
+  if (archivePagesLoaded < 1) await ensureArchivePageLoaded(1);
+  if (archiveKeysChrono.includes(cacheKey)) return true;
+  for (let p = archivePagesLoaded + 1; p <= ARCHIVE_PAGE_SEARCH_CAP; p++) {
+    if (!archiveHasMore) break;
+    await ensureArchivePageLoaded(p);
+    if (archiveKeysChrono.includes(cacheKey)) return true;
+  }
+  return archiveKeysChrono.includes(cacheKey);
+}
+
+async function ensureAdjacentArchivePagesForCenter(centerKey) {
+  if (!centerKey || centerKey === LATEST_SLOT_ID) return;
+  await ensureKeyListedInArchive(centerKey);
+  for (let p = 1; p <= archivePagesLoaded; p++) {
+    const keys = archiveKeysByPage[p];
+    if (!keys?.includes(centerKey)) continue;
+    const sorted = [...keys].sort();
+    const localIdx = sorted.indexOf(centerKey);
+    if (localIdx <= WINDOW_RADIUS && archiveHasMore) {
+      await ensureArchivePageLoaded(archivePagesLoaded + 1);
+    }
+    break;
+  }
+  rebuildArchiveKeysChrono();
+}
+
 async function ensureLatestSlotResolved() {
   if (latestSlotResolved) return;
-  globalLatestPayload = await fetchEditorial(null);
+  globalLatestPayload = await fetchLatestEditorial();
   latestIdentity = storyIdentity(globalLatestPayload[0]);
-  globalLatestKey = null;
   try {
+    await ensureArchivePageLoaded(1);
     const arch = await fetchArchivePage1();
     newestArchiveKey = arch.editorials?.[0]?.cache_key || null;
-    if (newestArchiveKey) {
-      let k = incrementHourCacheKey(newestArchiveKey);
-      let lastReal = newestArchiveKey;
-      for (let i = 0; i < LATEST_PROBE_MAX && k; i++) {
-        const payload = await fetchEditorial(k);
-        if (payload[0] && matchesLatestIdentity(payload[0])) {
-          globalLatestKey = k;
-          newestRealHourlyKey = lastReal;
-          break;
-        }
-        if (payload[0]) lastReal = k;
-        k = incrementHourCacheKey(k);
+    rebuildArchiveKeysChrono();
+    latestIsArchiveTop = false;
+    showLatestSlot = false;
+    if (newestArchiveKey && globalLatestPayload?.[0]) {
+      const topPayload = await fetchValidatedEditorial(newestArchiveKey);
+      if (topPayload[0] && matchesLatestIdentity(topPayload[0])) {
+        latestIsArchiveTop = true;
+      } else {
+        showLatestSlot = true;
       }
-      if (!newestRealHourlyKey) newestRealHourlyKey = lastReal;
+    } else if (globalLatestPayload?.[0]) {
+      showLatestSlot = true;
     }
   } catch (err) {
     console.warn(err);
@@ -230,47 +417,53 @@ async function ensureLatestSlotResolved() {
   latestSlotResolved = true;
 }
 
-/** Hourly slot only — returns null when the API echoes LATEST (missing hour). */
+/** Archive-backed hourly slot; validates generated_at window and rejects stale LATEST echoes. */
 async function fetchHourlyEditorial(cacheKey, prefetchedPayload = null) {
   if (!cacheKey || cacheKey === LATEST_SLOT_ID) return null;
-  const payload = prefetchedPayload || await fetchEditorial(cacheKey);
+  await ensureLatestSlotResolved();
+  let payload = prefetchedPayload;
+  if (!payload?.[0]) {
+    if (!archiveKeysChrono.includes(cacheKey) && !prefetchedPayload?.[0]) return null;
+    payload = await fetchValidatedEditorial(cacheKey);
+  } else if (!editorialBelongsToCacheKey(payload[0], cacheKey)) {
+    payload = await fetchValidatedEditorial(cacheKey);
+  }
   const row = payload?.[0];
   if (!row) return null;
-  if (matchesLatestIdentity(row)) return null;
+  if (matchesLatestIdentity(row)) {
+    if (cacheKey === newestArchiveKey) return payload;
+    return null;
+  }
+  if (!editorialBelongsToCacheKey(row, cacheKey)) return null;
   return payload;
-}
-
-async function findNewestRealHourlyKey() {
-  await ensureLatestSlotResolved();
-  return newestRealHourlyKey || newestArchiveKey;
 }
 
 async function resolveNewerTarget(fromKey) {
   if (!fromKey || fromKey === LATEST_SLOT_ID) return null;
   await ensureLatestSlotResolved();
-  if (fromKey === newestRealHourlyKey) return LATEST_SLOT_ID;
-  let k = incrementHourCacheKey(fromKey);
-  for (let steps = 0; k && steps < 48; steps++) {
-    const payload = await fetchEditorial(k);
-    if (!payload[0]) break;
-    if (matchesLatestIdentity(payload[0])) {
-      if (globalLatestKey && k === globalLatestKey) return LATEST_SLOT_ID;
-      k = incrementHourCacheKey(k);
-      continue;
-    }
-    return k;
-  }
+  rebuildArchiveKeysChrono();
+  await ensureArchivePagesForWindow(fromKey);
+  rebuildArchiveKeysChrono();
+  if (showLatestSlot && fromKey === newestArchiveKey) return LATEST_SLOT_ID;
+  const idx = archiveKeysChrono.indexOf(fromKey);
+  if (idx >= 0 && idx < archiveKeysChrono.length - 1) return archiveKeysChrono[idx + 1];
   return null;
 }
 
 async function resolveOlderCacheKey(fromKey) {
   if (!fromKey) return null;
-  if (fromKey === LATEST_SLOT_ID) return newestRealHourlyKey;
+  if (fromKey === LATEST_SLOT_ID) return newestArchiveKey;
   await ensureLatestSlotResolved();
-  let k = decrementHourCacheKey(fromKey);
-  for (let steps = 0; k && steps < 48; steps++) {
-    if (await fetchHourlyEditorial(k)) return k;
-    k = decrementHourCacheKey(k);
+  rebuildArchiveKeysChrono();
+  await ensureArchivePagesForWindow(fromKey);
+  rebuildArchiveKeysChrono();
+  let idx = archiveKeysChrono.indexOf(fromKey);
+  if (idx > 0) return archiveKeysChrono[idx - 1];
+  if (idx === 0 && archiveHasMore) {
+    await ensureArchivePageLoaded(archivePagesLoaded + 1);
+    rebuildArchiveKeysChrono();
+    idx = archiveKeysChrono.indexOf(fromKey);
+    if (idx > 0) return archiveKeysChrono[idx - 1];
   }
   return null;
 }
@@ -290,24 +483,33 @@ function registerKnownAuthorsFromEntry(entry) {
   registerKnownAuthor(entry?.article?.authorAlias);
 }
 
+function splitTitleAndAgentFromGluedArchive(t, label) {
+  if (!label || !t.endsWith(label)) return null;
+  let title = t.slice(0, -label.length).trim();
+  if (/\bAgent\s+Agent\s*$/i.test(title)) title = title.replace(/\sAgent\s*$/i, '').trim();
+  if (titleEndsWithBareAgent(title) && !STATIC_AUTHOR_SEED.includes(label) && !knownAuthorLabels.has(label)) {
+    return null;
+  }
+  return { title, agent: label };
+}
+
 /** Archive titles glue the agent onto the headline; only split when suffix matches a known author. */
 function parseArchiveTileTitle(raw) {
   const t = String(raw ?? '').trim();
   if (!t) return { title: t, agent: '' };
 
-  for (const label of [...knownAuthorLabels].sort((a, b) => b.length - a.length)) {
-    if (label && t.endsWith(label) && t.length > label.length) {
-      return { title: t.slice(0, -label.length).trim(), agent: label };
-    }
+  for (const label of [...knownAuthorLabels, ...STATIC_AUTHOR_SEED].sort((a, b) => b.length - a.length)) {
+    if (!label || !t.endsWith(label) || t.length <= label.length) continue;
+    const split = splitTitleAndAgentFromGluedArchive(t, label);
+    if (split) return split;
   }
 
-  const agentSuffix = t.match(/(Agent\s+(.+))$/);
+  const agentSuffix = t.match(/(Agent\s+[A-Z][\w\s.'♟️🤖-]+)$/);
   if (agentSuffix) {
     const suffix = agentSuffix[1].trim();
-    const namePart = agentSuffix[2].trim();
-    if (knownAuthorLabels.has(suffix) || knownAuthorPlain.has(namePart)) {
-      return { title: t.slice(0, -suffix.length).trim(), agent: suffix };
-    }
+    if (!authorSuffixAllowed(suffix)) return { title: t, agent: '' };
+    const split = splitTitleAndAgentFromGluedArchive(t, suffix);
+    if (split) return split;
   }
 
   return { title: t, agent: '' };
@@ -333,6 +535,7 @@ function normalizeArticle(entry, cacheKey) {
   editorial = editorial.replace(/<span>(Agent\s+[^<]+)<\/span>/gi, '');
   const bodyHtml = editorial.replace(/<h2[^>]*>[\s\S]*?<\/h2>/i, '').trim();
   const nav = entry.navigation || {};
+  const ident = storyIdentity(entry);
   return {
     id: cacheKey,
     title: parsed.title,
@@ -340,6 +543,7 @@ function normalizeArticle(entry, cacheKey) {
     showAgent: parsed.showAgent,
     bodyHtml,
     generated: entry.article.generated_at || entry.article.published_at,
+    storyIdentityKey: `${ident.generated_at}|${ident.headline}`,
     source: entry.article.source,
     published: entry.article.published_at,
     origTitle: entry.article.title,
@@ -360,9 +564,29 @@ function normalizeLatestSlotArticle(entry) {
   return a;
 }
 
+async function ensureArchivePagesForWindow(centerKey) {
+  if (!centerKey || centerKey === LATEST_SLOT_ID) return;
+  await ensureKeyListedInArchive(centerKey);
+  await ensureAdjacentArchivePagesForCenter(centerKey);
+  for (let attempt = 0; attempt < ARCHIVE_PAGE_SEARCH_CAP; attempt++) {
+    rebuildArchiveKeysChrono();
+    const want = neighborArchiveKeys(centerKey, WINDOW_RADIUS);
+    if (want.every(k => archiveKeysChrono.includes(k))) break;
+    if (!archiveHasMore) break;
+    await ensureArchivePageLoaded(archivePagesLoaded + 1);
+  }
+}
+
 async function buildFeaturedWindow(centerKey, opts = {}) {
   const { anchorPayload = null, centerOnLatest = false } = opts;
   await ensureLatestSlotResolved();
+  let center = centerKey;
+  if (centerOnLatest) {
+    center = showLatestSlot ? null : newestArchiveKey;
+  }
+  if (center) await ensureArchivePagesForWindow(center);
+  else if (centerOnLatest && newestArchiveKey) await ensureArchivePagesForWindow(newestArchiveKey);
+  rebuildArchiveKeysChrono(centerKey ? [centerKey] : []);
   const byId = new Map();
 
   async function addHourly(key, payload) {
@@ -372,50 +596,21 @@ async function buildFeaturedWindow(centerKey, opts = {}) {
     byId.set(key, normalizeArticle(p[0], key));
   }
 
-  let center = centerKey;
-  if (centerOnLatest) {
-    center = await findNewestRealHourlyKey();
-    if (!center) center = newestArchiveKey;
-  }
-
-  if (center) await addHourly(center, anchorPayload);
-
-  let   key = center;
-  for (let i = 0; i < WINDOW_RADIUS && key; i++) {
-    let older = null;
-    let probe = decrementHourCacheKey(key);
-    for (let hop = 0; probe && hop < 8; hop++) {
-      if (byId.has(probe)) { probe = decrementHourCacheKey(probe); continue; }
-      if (await fetchHourlyEditorial(probe)) { older = probe; break; }
-      probe = decrementHourCacheKey(probe);
+  if (center) {
+    const keys = archiveKeysChrono.includes(center)
+      ? neighborArchiveKeys(center, WINDOW_RADIUS)
+      : [center];
+    await Promise.all(keys.filter(k => k !== center).map(k => addHourly(k)));
+    await addHourly(center, anchorPayload);
+    if (!byId.has(center) && anchorPayload?.[0] && editorialBelongsToCacheKey(anchorPayload[0], center)) {
+      byId.set(center, normalizeArticle(anchorPayload[0], center));
     }
-    if (!older) break;
-    await addHourly(older);
-    key = older;
+  } else if (centerOnLatest && showLatestSlot && newestArchiveKey) {
+    const keys = neighborArchiveKeys(newestArchiveKey, WINDOW_RADIUS);
+    await Promise.all(keys.map(k => addHourly(k)));
   }
 
-  key = center;
-  for (let i = 0; i < WINDOW_RADIUS && key; i++) {
-    let newer = null;
-    let probe = incrementHourCacheKey(key);
-    for (let hop = 0; probe && hop < 8; hop++) {
-      if (byId.has(probe)) { probe = incrementHourCacheKey(probe); continue; }
-      const payload = await fetchEditorial(probe);
-      if (!payload[0]) break;
-      if (matchesLatestIdentity(payload[0])) {
-        if (globalLatestKey && probe === globalLatestKey) break;
-        probe = incrementHourCacheKey(probe);
-        continue;
-      }
-      newer = probe;
-      break;
-    }
-    if (!newer) break;
-    await addHourly(newer);
-    key = newer;
-  }
-
-  if (globalLatestPayload?.[0]) {
+  if (globalLatestPayload?.[0] && showLatestSlot) {
     byId.set(LATEST_SLOT_ID, normalizeLatestSlotArticle(globalLatestPayload[0]));
   }
   return orderFeaturedArticles(byId);
@@ -423,7 +618,15 @@ async function buildFeaturedWindow(centerKey, opts = {}) {
 
 function orderFeaturedArticles(byId) {
   const hourly = [...byId.keys()].filter(k => k !== LATEST_SLOT_ID).sort();
-  const ordered = hourly.map(k => byId.get(k));
+  const seenIdentity = new Set();
+  const ordered = [];
+  for (const k of hourly) {
+    const art = byId.get(k);
+    const key = art?.storyIdentityKey;
+    if (key && seenIdentity.has(key)) continue;
+    if (key) seenIdentity.add(key);
+    ordered.push(art);
+  }
   if (byId.has(LATEST_SLOT_ID)) ordered.push(byId.get(LATEST_SLOT_ID));
   return ordered;
 }
@@ -514,14 +717,15 @@ cardEl.addEventListener('click', e => {
     relayout();
     return;
   }
-  const b = e.target.closest('[data-nav]'); if (b) go(active + Number(b.dataset.nav));
+  const b = e.target.closest('[data-nav]'); if (b) navRelative(Number(b.dataset.nav));
 });
 
 function rebuildSideButtons() {
   scene.innerHTML = '';
   sideBtns = FEAT.map((a, i) => {
+    if (a.id === LATEST_SLOT_ID) return null;
     const b = document.createElement('button');
-    b.type = 'button'; b.className = 'side'; b.dataset.i = i;
+    b.type = 'button'; b.className = 'side'; b.dataset.i = String(i);
     b.innerHTML = `<img class="side-img" src="${esc(a.img)}" alt=""><span class="side-txt"><span class="side-t">${esc(a.title)}</span><span class="side-a">${esc(a.agent)}</span></span>`;
     b.addEventListener('click', () => go(i));
     b.addEventListener('focus', () => { gl && gl.setHighlight(i, 1); });
@@ -552,23 +756,10 @@ function appendArchiveTiles(items) {
 }
 async function fetchArchive(page) {
   if (archiveLoading || !archiveHasMore) return;
-  archiveLoading = true;
   if (loadingEl) loadingEl.style.display = 'block';
-  const stub = page === 2 ? '/stubs/archive-page2.json' : '/stubs/archive.json';
   try {
-    let data;
-    if (isLocalDev) {
-      const response = await fetch(stub, { cache: 'no-store' });
-      if (response.ok) data = await response.json();
-    }
-    if (!data) data = await fetchJsonMemo(`/archive?page=${page}`, stub);
-    appendArchiveTiles(data.editorials || []);
-    archiveHasMore = !!data.pagination?.has_next;
-    archivePage = page;
-  } catch (e) {
-    console.error(e);
+    await ensureArchivePageLoaded(page);
   } finally {
-    archiveLoading = false;
     if (loadingEl) loadingEl.style.display = 'none';
   }
 }
@@ -581,7 +772,12 @@ window.addEventListener('scroll', () => {
 function updateEndMarker() {
   if (!endMarker) return;
   const atNewest = FEAT[active]?.id === LATEST_SLOT_ID;
+  const hasLatestSlot = FEAT.some(a => a.id === LATEST_SLOT_ID);
   endMarker.hidden = !(geom.showSides && atNewest);
+  endMarker.classList.toggle('is-separated', geom.showSides && hasLatestSlot);
+  endMarker.style.pointerEvents = atNewest ? 'auto' : 'none';
+  endMarker.setAttribute('role', atNewest ? 'button' : 'presentation');
+  endMarker.tabIndex = atNewest ? 0 : -1;
 }
 function markActiveTile() {
   document.querySelectorAll('.tile').forEach(t => t.classList.toggle('is-active', t.dataset.id === FEAT[active]?.id));
@@ -653,6 +849,7 @@ function layoutButtons() {
   scene.style.perspective = PERSP + 'px';
   scene.style.perspectiveOrigin = `${g.cx}px ${g.cy}px`;
   sideBtns.forEach((b, i) => {
+    if (!b || FEAT[i]?.id === LATEST_SLOT_ID) return;
     const o = offsets[i], L = slot(o), a = Math.abs(o);
     const vis = g.showSides && a > 0.5 && a < 3.5 && L.alpha > 0.02;
     if (b.hidden === vis) b.hidden = !vis;
@@ -983,33 +1180,64 @@ async function initGL() {
 function indexFromHash() { const id = decodeURIComponent(location.hash.slice(1)); return FEAT.findIndex(a => a.id === id); }
 function snapFor(i) { renderCard(measureEl, i); measureEl.style.width = geom.cardW + 'px'; return snapshot(measureEl, i); }
 
-async function go(target, fromHash = false) {
-  if (target === active) return;
-  await ensureLatestSlotResolved();
-  if (target < 0) {
-    const olderKey = await resolveOlderCacheKey(FEAT[0]?.id);
-    if (olderKey) await openStory(olderKey, fromHash);
-    return;
-  }
-  if (target >= FEAT.length) {
-    const newer = await resolveNewerTarget(FEAT[FEAT.length - 1]?.id);
-    if (newer === LATEST_SLOT_ID) {
-      const idx = FEAT.findIndex(a => a.id === LATEST_SLOT_ID);
-      if (idx >= 0) await go(idx, fromHash);
-      else await openLatestView(fromHash);
-    } else if (newer) await openStory(newer, fromHash);
-    return;
-  }
-  if (target < 0 || target >= FEAT.length) return;
-  if (target > active && target < FEAT.length && FEAT[target]?.id === LATEST_SLOT_ID) {
-    const hop = await resolveNewerTarget(FEAT[active]?.id);
-    if (hop && hop !== LATEST_SLOT_ID) {
-      await openStory(hop, fromHash);
-      return;
+async function navRelative(delta, fromHash = false) {
+  if (!delta) return;
+  navQueue += delta;
+  if (busy) return;
+  await pumpNavQueue(fromHash);
+}
+
+async function pumpNavQueue(fromHash = false) {
+  while (!busy && navQueue !== 0) {
+    const delta = Math.sign(navQueue);
+    navQueue -= delta;
+    const instant = navQueue !== 0;
+    busy = true;
+    try {
+      await stepRelative(delta, fromHash, { instant });
+    } catch (err) {
+      console.error(err);
+    } finally {
+      busy = false;
     }
   }
-  if (busy) { pending = target; return; }
-  busy = true;
+}
+
+async function stepRelative(delta, fromHash = false, { instant = false } = {}) {
+  await ensureLatestSlotResolved();
+  const curId = FEAT[active]?.id;
+  if (!curId) return;
+
+  if (delta < 0) {
+    const olderKey = await resolveOlderCacheKey(curId);
+    if (!olderKey) return;
+    const idx = FEAT.findIndex(a => a.id === olderKey);
+    if (idx >= 0) {
+      await goToIndex(idx, fromHash, { instant });
+      return;
+    }
+    await openStory(olderKey, fromHash);
+    return;
+  }
+
+  const newerKey = await resolveNewerTarget(curId);
+  if (!newerKey) return;
+  if (newerKey === LATEST_SLOT_ID) {
+    const idx = FEAT.findIndex(a => a.id === LATEST_SLOT_ID);
+    if (idx >= 0) await goToIndex(idx, fromHash, { instant });
+    else await openLatestView(fromHash);
+    return;
+  }
+  const idx = FEAT.findIndex(a => a.id === newerKey);
+  if (idx >= 0) {
+    await goToIndex(idx, fromHash, { instant });
+    return;
+  }
+  await openStory(newerKey, fromHash);
+}
+
+async function goToIndex(target, fromHash = false, { instant = false } = {}) {
+  if (target === active || target < 0 || target >= FEAT.length) return;
   const from = active, dir = Math.sign(target - from);
   const start = FEAT.map((_, i) => i - from), end = FEAT.map((_, i) => i - target);
   const setOff = e => { offsets = start.map((s, i) => s + (end[i] - s) * e); layoutButtons(); };
@@ -1020,18 +1248,21 @@ async function go(target, fromHash = false) {
   }
   const hadFocus = document.activeElement && document.activeElement.closest('.side, .card-nav') ? document.activeElement : null;
 
-  if (gl) {
+  if (gl && !instant && !reduced) {
     const backSnap = snapFor(target);
     cardEl.style.opacity = '0';
     await gl.flipTo(target, dir, backSnap, setOff);
     active = target; renderCard(cardEl, target); cardEl.style.opacity = '1';
     gl.endFlip(backSnap);
-  } else if (reduced) {                         // crossfade only, no rotation
-    cardEl.classList.add('fade-out'); scene.classList.add('fading');
-    await wait(180);
+  } else if (instant || reduced) {
+    if (!instant && reduced) {
+      cardEl.classList.add('fade-out'); scene.classList.add('fading');
+      await wait(180);
+    }
     active = target; renderCard(cardEl, target); setOff(1);
+    cardEl.style.opacity = '1';
     cardEl.classList.remove('fade-out'); scene.classList.remove('fading');
-  } else {                                      // CSS 3D flip fallback
+  } else {
     cardEl.style.setProperty('--flip-to', dir > 0 ? '90deg' : '-90deg');
     cardEl.classList.add('css-flip-out');
     await animate(FLIP_MS / 2, e => setOff(e * 0.5));
@@ -1050,10 +1281,21 @@ async function go(target, fromHash = false) {
     : 'botz.ai - GenAI News';
   if (storyAnnouncer) storyAnnouncer.textContent = FEAT[active].title;
   trackPageView();
-  if (hadFocus && hadFocus.classList.contains('side')) { const nb = sideBtns[Number(hadFocus.dataset.i)]; (nb.hidden ? cardEl.querySelector('.card-title') : nb)?.focus?.(); }
+  logCenteredKey();
+  if (hadFocus && hadFocus.classList.contains('side')) { const nb = sideBtns[Number(hadFocus.dataset.i)]; (nb?.hidden ? cardEl.querySelector('.card-title') : nb)?.focus?.(); }
   else if (hadFocus) { const b = cardEl.querySelector(`[data-nav="${dir}"]`); (b && !b.disabled ? b : cardEl.querySelector(`[data-nav="${-dir}"]`))?.focus(); }
-  busy = false;
-  if (pending !== null) { const p = pending; pending = null; go(p); }
+}
+
+async function go(target, fromHash = false) {
+  if (target === active) return;
+  if (target < 0 || target >= FEAT.length) return;
+  if (busy) return;
+  busy = true;
+  try {
+    await goToIndex(target, fromHash, { instant: false });
+  } finally {
+    busy = false;
+  }
 }
 const wait = ms => new Promise(r => setTimeout(r, ms));
 function animate(ms, fn) {
@@ -1062,8 +1304,8 @@ function animate(ms, fn) {
 
 window.addEventListener('keydown', e => {
   if (e.altKey || e.ctrlKey || e.metaKey || /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
-  if (e.key === 'ArrowRight') { e.preventDefault(); go(active + 1); }
-  else if (e.key === 'ArrowLeft') { e.preventDefault(); go(active - 1); }
+  if (e.key === 'ArrowRight') { e.preventDefault(); navRelative(1); }
+  else if (e.key === 'ArrowLeft') { e.preventDefault(); navRelative(-1); }
 });
 window.addEventListener('hashchange', () => {
   const id = decodeURIComponent(location.hash.slice(1));
@@ -1082,7 +1324,7 @@ let sw = null;
 stage.addEventListener('pointerdown', e => { if (e.pointerType === 'mouse' && e.target.closest('.card')) return; sw = { x: e.clientX, y: e.clientY }; });
 stage.addEventListener('pointerup', e => {
   if (!sw) return; const dx = e.clientX - sw.x, dy = e.clientY - sw.y; sw = null;
-  if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.3) go(active + (dx < 0 ? 1 : -1));
+  if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.3) navRelative(dx < 0 ? 1 : -1);
 });
 $('.random-link')?.addEventListener('click', async e => {
   e.preventDefault();
@@ -1115,6 +1357,7 @@ async function applyFeaturedState(feat, activeIndex, fromHash, { omitHash = fals
   renderCard(cardEl, active);
   markActiveTile();
   await relayout();
+  logCenteredKey();
   const id = FEAT[active]?.id;
   if (id === LATEST_SLOT_ID) {
     history.replaceState(null, '', location.pathname + location.search);
@@ -1137,8 +1380,16 @@ async function openLatestView(fromHash = false) {
   try {
     await ensureLatestSlotResolved();
     const feat = await buildFeaturedWindow(null, { centerOnLatest: true });
-    const idx = feat.findIndex(a => a.id === LATEST_SLOT_ID);
-    await applyFeaturedState(feat, idx >= 0 ? idx : feat.length - 1, fromHash, { omitHash: true });
+    let activeIndex;
+    if (showLatestSlot) {
+      activeIndex = feat.findIndex(a => a.id === LATEST_SLOT_ID);
+      if (activeIndex < 0) activeIndex = feat.length - 1;
+      await applyFeaturedState(feat, activeIndex, fromHash, { omitHash: true });
+    } else {
+      activeIndex = feat.findIndex(a => a.id === newestArchiveKey);
+      if (activeIndex < 0) activeIndex = Math.max(0, feat.length - 1);
+      await applyFeaturedState(feat, activeIndex, fromHash, { omitHash: true });
+    }
   } catch (err) {
     console.error(err);
     toast('Failed to load GenAI News.');
@@ -1150,31 +1401,61 @@ async function openLatestView(fromHash = false) {
 async function openStory(cacheKey, fromHash = false) {
   window.scrollTo(0, 0);
   await ensureLatestSlotResolved();
-  if (!cacheKey || cacheKey === globalLatestKey) {
+  if (!cacheKey) {
+    await openLatestView(fromHash);
+    return;
+  }
+  if (isFutureCacheKey(cacheKey)) {
     await openLatestView(fromHash);
     return;
   }
   const existing = FEAT.findIndex(a => a.id === cacheKey);
   if (existing >= 0) {
-    if (existing !== active) await go(existing, fromHash);
+    if (existing !== active) await goToIndex(existing, fromHash, { instant: navQueue !== 0 });
     return;
   }
   stage.classList.add('is-loading');
+  cardEl.classList.add('card-loading');
+  cardEl.setAttribute('aria-busy', 'true');
+  const ownedBusy = !busy;
+  if (ownedBusy) busy = true;
   try {
-    const anchorPayload = await fetchEditorial(cacheKey);
-    if (!anchorPayload[0] || matchesLatestIdentity(anchorPayload[0])) {
+    if (isFutureCacheKey(cacheKey)) {
+      await openLatestView(fromHash);
+      return;
+    }
+    const listed = await ensureKeyListedInArchive(cacheKey);
+    let anchorPayload = await fetchValidatedEditorial(cacheKey);
+    if (!anchorPayload[0]) {
+      await openLatestView(fromHash);
+      return;
+    }
+    if (!listed && !editorialBelongsToCacheKey(anchorPayload[0], cacheKey)) {
+      await openLatestView(fromHash);
+      return;
+    }
+    if (!listed) rebuildArchiveKeysChrono([cacheKey]);
+    if (matchesLatestIdentity(anchorPayload[0]) && cacheKey !== newestArchiveKey) {
       await openLatestView(fromHash);
       return;
     }
     const feat = await buildFeaturedWindow(cacheKey, { anchorPayload });
     let activeIndex = feat.findIndex(a => a.id === cacheKey);
-    if (activeIndex < 0) activeIndex = Math.max(0, feat.findIndex(a => a.id === LATEST_SLOT_ID) - 1);
+    if (activeIndex < 0) {
+      if (showLatestSlot) activeIndex = Math.max(0, feat.findIndex(a => a.id === LATEST_SLOT_ID) - 1);
+      else activeIndex = feat.findIndex(a => a.id === newestArchiveKey);
+    }
+    if (activeIndex < 0) activeIndex = 0;
     await applyFeaturedState(feat, activeIndex, fromHash);
   } catch (err) {
     console.error(err);
     toast('Could not load that story.');
   } finally {
     stage.classList.remove('is-loading');
+    cardEl.classList.remove('card-loading');
+    cardEl.removeAttribute('aria-busy');
+    if (ownedBusy) busy = false;
+    await pumpNavQueue(fromHash);
   }
 }
 
@@ -1199,13 +1480,10 @@ async function relayout() {
 async function boot() {
   editorialRequestCount = 0;
   editorialUrlsSeen.clear();
+  seedStaticAuthors();
   stage.classList.add('is-loading');
   try {
-    const arch = await fetchArchivePage1();
-    const archItems = arch.editorials || [];
-    appendArchiveTiles(archItems);
-    archivePage = 1;
-    archiveHasMore = !!arch.pagination?.has_next;
+    await ensureArchivePageLoaded(1);
     const hashKey = decodeURIComponent(location.hash.slice(1));
     if (hashKey) await openStory(hashKey, true);
     else await openStoryFromLatest(true);
@@ -1217,6 +1495,13 @@ async function boot() {
   }
 }
 await boot();
+endMarker?.addEventListener('click', () => {
+  const idx = FEAT.findIndex(a => a.id === LATEST_SLOT_ID);
+  if (idx >= 0 && active !== idx) go(idx);
+});
+endMarker?.addEventListener('keydown', e => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); endMarker?.click(); }
+});
 let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(relayout, 120); });
 wide.addEventListener('change', relayout);
-window.__botzCarousel = { go, openStory, get active() { return active; }, get mode() { return gl ? 'webgl' : (reduced ? 'reduced' : 'css'); }, get editorialRequestCount() { return editorialRequestCount; }, get latestSlotId() { return LATEST_SLOT_ID; }, ready: true };
+window.__botzCarousel = { go, navRelative, openStory, get active() { return active; }, get busy() { return busy; }, get navQueue() { return navQueue; }, get navLog() { return window.__navLog; }, get centerKey() { return FEAT[active]?.id; }, get featIds() { return FEAT.map(a => a.id); }, get showLatestSlot() { return showLatestSlot; }, get latestIsArchiveTop() { return latestIsArchiveTop; }, get newestArchiveKey() { return newestArchiveKey; }, get mode() { return gl ? 'webgl' : (reduced ? 'reduced' : 'css'); }, get editorialRequestCount() { return editorialRequestCount; }, get latestSlotId() { return LATEST_SLOT_ID; }, ready: true };

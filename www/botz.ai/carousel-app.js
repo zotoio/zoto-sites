@@ -17,7 +17,13 @@ const SLOTS = { S: [1, 0.8, 0.65, 0.52, 0.42], R: [0, 40, 40, 40, 40], Z: [0, -7
                 DIM: [1, 0.8, 0.6, 0.44, 0.3], BIAS: [0, 0.2, 0.9, 1.7, 2.4] };
 const WINDOW_RADIUS = 4;
 const isLocalDev = ['localhost', '127.0.0.1'].includes(window.location.hostname);
-const SYDNEY_TZ = 'Australia/Sydney';
+
+/** Newest editorial cache key from GET /editorials (no cacheKey); set before deep-link navigation. */
+let globalLatestKey = null;
+let globalLatestPayload = null;
+
+const knownAuthorPlain = new Set();
+const knownAuthorLabels = new Set();
 
 /** In-flight + settled JSON cache keyed by request URL (dedupes parallel fetches). */
 const jsonFlight = new Map();
@@ -76,40 +82,82 @@ async function fetchEditorial(cacheKey) {
   return fetchJsonMemo(url, stub);
 }
 
-function sydneyPartsFromUtcMs(ms) {
-  const f = new Intl.DateTimeFormat('en-GB', {
-    timeZone: SYDNEY_TZ,
-    year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', hour12: false,
-  });
-  const parts = Object.fromEntries(f.formatToParts(new Date(ms)).filter(p => p.type !== 'literal').map(p => [p.type, +p.value]));
-  let h = parts.hour;
-  if (h === 24) h = 0;
-  return { y: parts.year, mo: parts.month, d: parts.day, h };
-}
-
-function sydneyWallHourToUtcMs(y, mo, d, h) {
-  for (let utc = 0; utc < 48; utc++) {
-    const ms = Date.UTC(y, mo - 1, d, utc, 0, 0);
-    const p = sydneyPartsFromUtcMs(ms);
-    if (p.y === y && p.mo === mo && p.d === d && p.h === h) return ms;
-  }
-  return Date.UTC(y, mo - 1, d, h - 10, 0, 0);
-}
-
-function utcMsToSydneyCacheKey(ms) {
-  const p = sydneyPartsFromUtcMs(ms);
-  return `${p.y}-${String(p.mo).padStart(2, '0')}-${String(p.d).padStart(2, '0')}-${String(p.h).padStart(2, '0')}`;
-}
-
-/** Next hourly editorial cache key in Australia/Sydney (23:00 rolls to next calendar day). */
-function incrementHourCacheKey(key) {
+function cacheKeyToUtcMs(key) {
   const m = /^(\d{4})-(\d{2})-(\d{2})-(\d{2})$/.exec(key || '');
   if (!m) return null;
-  const ms = sydneyWallHourToUtcMs(+m[1], +m[2], +m[3], +m[4]);
-  return utcMsToSydneyCacheKey(ms + 3600000);
+  return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], 0, 0);
+}
+
+function utcMsToCacheKey(ms) {
+  const d = new Date(ms);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}-${String(d.getUTCHours()).padStart(2, '0')}`;
+}
+
+/** Next hourly editorial cache key in UTC (23:00 rolls to next calendar day). */
+function incrementHourCacheKey(key) {
+  const ms = cacheKeyToUtcMs(key);
+  if (ms == null) return null;
+  return utcMsToCacheKey(ms + 3600000);
+}
+
+function decrementHourCacheKey(key) {
+  const ms = cacheKeyToUtcMs(key);
+  if (ms == null) return null;
+  return utcMsToCacheKey(ms - 3600000);
 }
 if (incrementHourCacheKey('2026-09-30-23') !== '2026-10-01-00') {
-  console.warn('incrementHourCacheKey: expected 2026-09-30-23 → 2026-10-01-00 in Sydney');
+  console.warn('incrementHourCacheKey: expected 2026-09-30-23 → 2026-10-01-00 in UTC');
+}
+
+async function ensureGlobalLatestResolved() {
+  if (globalLatestKey) return globalLatestKey;
+  globalLatestPayload = await fetchEditorial(null);
+  try {
+    globalLatestKey = await resolveCacheKeyForPayload(globalLatestPayload[0]);
+  } catch (err) {
+    console.warn(err);
+  }
+  return globalLatestKey;
+}
+
+async function editorialExists(key) {
+  if (!key) return false;
+  try {
+    const p = await fetchEditorial(key);
+    return !!p[0];
+  } catch {
+    return false;
+  }
+}
+
+/** Next chronologically newer cache key that has an editorial (nav chain, then UTC hour steps). */
+async function resolveNewerCacheKey(fromKey) {
+  if (!fromKey || fromKey === globalLatestKey) return null;
+  const payload = await fetchEditorial(fromKey);
+  const navNewer = payload[0]?.navigation?.previous;
+  if (navNewer && navNewer !== fromKey && await editorialExists(navNewer)) return navNewer;
+  let k = incrementHourCacheKey(fromKey);
+  for (let steps = 0; k && steps < 48; steps++) {
+    if (k === fromKey) break;
+    if (globalLatestKey && k > globalLatestKey) return null;
+    if (await editorialExists(k)) return k;
+    k = incrementHourCacheKey(k);
+  }
+  return null;
+}
+
+async function resolveOlderCacheKey(fromKey) {
+  if (!fromKey) return null;
+  const payload = await fetchEditorial(fromKey);
+  const navOlder = payload[0]?.navigation?.next;
+  if (navOlder && navOlder !== fromKey && await editorialExists(navOlder)) return navOlder;
+  let k = decrementHourCacheKey(fromKey);
+  for (let steps = 0; k && steps < 48; steps++) {
+    if (k === fromKey) break;
+    if (await editorialExists(k)) return k;
+    k = decrementHourCacheKey(k);
+  }
+  return null;
 }
 
 /** Match a /editorials payload to the cache key used to store it (never from generated_at). */
@@ -168,18 +216,55 @@ function splitTitleAndAgent(h2Inner, authorAlias) {
   return { title, agent, showAgent };
 }
 
-/** Archive titles glue the agent onto the headline with no space; do not strip bare trailing "Agent". */
+function registerKnownAuthor(authorAlias) {
+  const raw = String(authorAlias ?? '').trim();
+  if (!raw) return;
+  const plain = raw.replace(/^Agent\s+/i, '').trim();
+  if (plain) knownAuthorPlain.add(plain);
+  knownAuthorLabels.add(raw);
+  if (plain) knownAuthorLabels.add(`Agent ${plain}`);
+}
+
+function registerKnownAuthorsFromArticle(article) {
+  registerKnownAuthor(article?.authorAlias);
+  registerKnownAuthor(article?.agent);
+}
+
+/** Archive titles glue the agent onto the headline; only split when suffix matches a known author. */
 function parseArchiveTileTitle(raw) {
   const t = String(raw ?? '').trim();
-  const m = t.match(/^(.+?)(Agent\s+[A-Z][\w\s.'♟️🤖-]+)$/);
-  if (m && m[2].split(/\s+/).length >= 2) {
-    return { title: m[1].trim(), agent: m[2].trim() };
+  if (!t) return { title: t, agent: '' };
+
+  for (const label of [...knownAuthorLabels].sort((a, b) => b.length - a.length)) {
+    if (label && t.endsWith(label) && t.length > label.length) {
+      return { title: t.slice(0, -label.length).trim(), agent: label };
+    }
   }
+
+  const agentSuffix = t.match(/(Agent\s+(.+))$/);
+  if (agentSuffix) {
+    const suffix = agentSuffix[1].trim();
+    const namePart = agentSuffix[2].trim();
+    if (knownAuthorLabels.has(suffix) || knownAuthorPlain.has(namePart)) {
+      return { title: t.slice(0, -suffix.length).trim(), agent: suffix };
+    }
+  }
+
   return { title: t, agent: '' };
+}
+
+function refreshArchiveTileTitles() {
+  gridEl.querySelectorAll('.tile[data-raw-title]').forEach(a => {
+    const tile = parseArchiveTileTitle(a.dataset.rawTitle);
+    const body = a.querySelector('.tile-body');
+    if (!body) return;
+    body.innerHTML = `<div class="tile-title">${esc(tile.title)}</div>${tile.agent ? `<div class="tile-agent">${esc(tile.agent)}</div>` : ''}`;
+  });
 }
 
 function normalizeArticle(entry, cacheKey) {
   if (!cacheKey) throw new Error('normalizeArticle requires an explicit cache key');
+  registerKnownAuthorsFromArticle(entry.article);
   const raw = entry.editorial || '';
   let editorial = raw.replaceAll('```html\n', '').replaceAll('\n```', '');
   editorial = editorial.replaceAll("<span style='display:none'", '<span class="byline-alias" style="display:none"');
@@ -212,21 +297,29 @@ function normalizeArticle(entry, cacheKey) {
 }
 
 async function buildFeaturedWindow(centerKey, opts = {}) {
-  const { anchorPayload = null, pinNewestKey = null, pinNewestPayload = null } = opts;
+  const { anchorPayload = null, pinLatestKey = null, pinLatestPayload = null } = opts;
   const byId = new Map();
 
   async function add(key, payload) {
-    if (!key || byId.has(key)) return;
-    const p = payload || await fetchEditorial(key);
-    byId.set(key, normalizeArticle(p[0], key));
+    if (!key || key.startsWith('__') || byId.has(key)) return;
+    try {
+      const p = payload || await fetchEditorial(key);
+      if (!p[0]) return;
+      byId.set(key, normalizeArticle(p[0], key));
+    } catch (_) { /* skip missing hours */ }
   }
 
-  if (pinNewestKey && pinNewestPayload) await add(pinNewestKey, pinNewestPayload);
+  if (pinLatestKey && pinLatestPayload) await add(pinLatestKey, pinLatestPayload);
   await add(centerKey, anchorPayload);
 
   let key = centerKey;
   for (let i = 0; i < WINDOW_RADIUS; i++) {
-    const older = byId.get(key)?.navigation.next;
+    const row = byId.get(key);
+    let older = row?.navigation.next;
+    if (!older || !await editorialExists(older)) {
+      older = decrementHourCacheKey(key);
+      while (older && byId.has(older)) older = decrementHourCacheKey(older);
+    }
     if (!older) break;
     await add(older);
     key = older;
@@ -234,33 +327,28 @@ async function buildFeaturedWindow(centerKey, opts = {}) {
 
   key = centerKey;
   for (let i = 0; i < WINDOW_RADIUS; i++) {
-    const newer = byId.get(key)?.navigation.previous;
+    const row = byId.get(key);
+    let newer = row?.navigation.previous;
+    if (!newer || !await editorialExists(newer)) {
+      newer = incrementHourCacheKey(key);
+      while (newer && byId.has(newer)) newer = incrementHourCacheKey(newer);
+    }
     if (!newer) break;
+    if (globalLatestKey && newer > globalLatestKey) break;
     await add(newer);
     key = newer;
   }
 
-  return orderFeaturedArticles(byId, pinNewestKey || centerKey);
+  const pinRight = pinLatestKey && pinLatestKey === globalLatestKey ? pinLatestKey : null;
+  return orderFeaturedArticles(byId, pinRight);
 }
 
-function orderFeaturedArticles(byId, rightMostKey) {
-  const ids = new Set(byId.keys());
-  let oldestKey = [...byId.values()].find(a => !a.navigation.next || !ids.has(a.navigation.next))?.id;
-  if (!oldestKey) oldestKey = [...byId.keys()][0];
-
-  const ordered = [];
-  const seen = new Set();
-  let k = oldestKey;
-  while (k && byId.has(k) && !seen.has(k)) {
-    seen.add(k);
-    ordered.push(byId.get(k));
-    k = byId.get(k).navigation.previous;
-  }
-
-  if (rightMostKey && byId.has(rightMostKey)) {
+function orderFeaturedArticles(byId, pinLatestKey) {
+  let ordered = [...byId.keys()].sort().map(k => byId.get(k));
+  if (pinLatestKey && byId.has(pinLatestKey)) {
     const lastId = ordered[ordered.length - 1]?.id;
-    if (lastId !== rightMostKey) {
-      return [...ordered.filter(a => a.id !== rightMostKey), byId.get(rightMostKey)];
+    if (lastId !== pinLatestKey) {
+      ordered = [...ordered.filter(a => a.id !== pinLatestKey), byId.get(pinLatestKey)];
     }
   }
   return ordered;
@@ -283,6 +371,9 @@ function canGoOlder(i) {
 }
 function canGoNewer(i) {
   if (i < FEAT.length - 1) return true;
+  const id = FEAT[i]?.id;
+  if (!id || id.startsWith('__')) return false;
+  if (globalLatestKey) return id !== globalLatestKey;
   return !!FEAT[FEAT.length - 1]?.navigation?.previous;
 }
 function cardHTML(a, i) {
@@ -377,6 +468,7 @@ function appendArchiveTiles(items) {
     a.className = 'tile';
     a.href = `#${editorial.cache_key}`;
     a.dataset.id = editorial.cache_key;
+    a.dataset.rawTitle = editorial.title;
     const tile = parseArchiveTileTitle(editorial.title);
     a.innerHTML = `<img src="${esc(editorial.image_url)}" alt="" loading="lazy" width="400" height="400">
       <div class="tile-body"><div class="tile-title">${esc(tile.title)}</div>${tile.agent ? `<div class="tile-agent">${esc(tile.agent)}</div>` : ''}</div>`;
@@ -417,7 +509,10 @@ window.addEventListener('scroll', () => {
 });
 function updateEndMarker() {
   if (!endMarker) return;
-  const atNewest = active === FEAT.length - 1;
+  const curId = FEAT[active]?.id;
+  const atNewest = globalLatestKey
+    ? curId === globalLatestKey
+    : active === FEAT.length - 1;
   endMarker.hidden = !(geom.showSides && atNewest);
 }
 function markActiveTile() {
@@ -822,12 +917,15 @@ function snapFor(i) { renderCard(measureEl, i); measureEl.style.width = geom.car
 
 async function go(target, fromHash = false) {
   if (target === active) return;
-  if (target < 0 && FEAT[0]?.navigation?.next) {
-    await openStory(FEAT[0].navigation.next, fromHash);
+  await ensureGlobalLatestResolved();
+  if (target < 0) {
+    const olderKey = await resolveOlderCacheKey(FEAT[0]?.id);
+    if (olderKey) await openStory(olderKey, fromHash);
     return;
   }
-  if (target >= FEAT.length && FEAT[FEAT.length - 1]?.navigation?.previous) {
-    await openStory(FEAT[FEAT.length - 1].navigation.previous, fromHash);
+  if (target >= FEAT.length) {
+    const newerKey = await resolveNewerCacheKey(FEAT[FEAT.length - 1]?.id);
+    if (newerKey) await openStory(newerKey, fromHash);
     return;
   }
   if (target < 0 || target >= FEAT.length) return;
@@ -942,10 +1040,12 @@ async function applyFeaturedState(feat, activeIndex, fromHash, { omitHash = fals
     : 'botz.ai - GenAI News';
   if (storyAnnouncer) storyAnnouncer.textContent = FEAT[active].title;
   trackPageView();
+  refreshArchiveTileTitles();
 }
 
 async function openStory(cacheKey, fromHash = false) {
   window.scrollTo(0, 0);
+  await ensureGlobalLatestResolved();
   const existing = FEAT.findIndex(a => a.id === cacheKey);
   if (existing >= 0) {
     if (existing !== active) await go(existing, fromHash);
@@ -954,10 +1054,12 @@ async function openStory(cacheKey, fromHash = false) {
   stage.classList.add('is-loading');
   try {
     const anchorPayload = await fetchEditorial(cacheKey);
+    const pinLatest = cacheKey === globalLatestKey
+      ? { pinLatestKey: globalLatestKey, pinLatestPayload: globalLatestPayload || anchorPayload }
+      : {};
     const feat = await buildFeaturedWindow(cacheKey, {
       anchorPayload,
-      pinNewestKey: cacheKey,
-      pinNewestPayload: anchorPayload,
+      ...pinLatest,
     });
     let activeIndex = feat.findIndex(a => a.id === cacheKey);
     if (activeIndex < 0) activeIndex = feat.length - 1;
@@ -974,24 +1076,25 @@ async function openStoryFromLatest(fromHash) {
   window.scrollTo(0, 0);
   stage.classList.add('is-loading');
   try {
-    const latestPayload = await fetchEditorial(null);
+    globalLatestPayload = await fetchEditorial(null);
     let latestKey = null;
     try {
-      latestKey = await resolveCacheKeyForPayload(latestPayload[0]);
+      latestKey = await resolveCacheKeyForPayload(globalLatestPayload[0]);
     } catch (err) {
       console.warn(err);
     }
+    globalLatestKey = latestKey;
 
     if (!latestKey) {
-      const solo = [normalizeArticle(latestPayload[0], '__live_latest__')];
+      const solo = [normalizeArticle(globalLatestPayload[0], '__live_latest__')];
       await applyFeaturedState(solo, 0, fromHash, { omitHash: true });
       return;
     }
 
     const feat = await buildFeaturedWindow(latestKey, {
-      anchorPayload: latestPayload,
-      pinNewestKey: latestKey,
-      pinNewestPayload: latestPayload,
+      anchorPayload: globalLatestPayload,
+      pinLatestKey: latestKey,
+      pinLatestPayload: globalLatestPayload,
     });
     const activeIndex = feat.findIndex(a => a.id === latestKey);
     await applyFeaturedState(feat, activeIndex >= 0 ? activeIndex : feat.length - 1, fromHash, { omitHash: !fromHash });

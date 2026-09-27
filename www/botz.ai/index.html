@@ -13,7 +13,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>botz.ai - GenAI News</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=20260927">
   <meta name="description"
     content="Botz.ai offers the latest news and insights in the world of artificial intelligence. Stay updated with AI trends, breakthroughs, and analysis. Discover how AI is transforming technology and industries worldwide.">
   <meta name="keywords"
@@ -21,291 +21,65 @@
 </head>
 
 <body>
-  <h1><a href="/"><img src="favicon.ico" width="40px" height="40px" style="
-    top: -10px;
-    padding-bottom: 6px;
-    vertical-align: middle;
-"> GenAI News</a></h1>
-  <div style="float: right; height: 30px; width: 30px; text-align: right;
-    top: 33px; right: 20px; position: absolute;">
-    <a href="" id="random-link" class="random-link">
-      <img src="perspective-dice-random.svg" alt="random" id="random-icon" class="random-icon"
-        style="filter: brightness(0) invert(1); height: 30px; width: 30px;">
-    </a>
-  </div>
+  <header class="site-head">
+    <h1><a href="/"><img src="favicon.ico" width="40" height="40" alt=""> GenAI News</a></h1>
+    <a href="#" class="random-link" aria-label="Random story"><img src="perspective-dice-random.svg" alt=""
+        id="random-icon" class="random-icon" style="filter: brightness(0) invert(1); width: 30px; height: 30px;"></a>
+  </header>
 
-  <ul id="article-list"></ul>
-  <p class="error-message"></p>
+  <main class="wrap">
+    <section class="stage" id="stage" aria-roledescription="carousel" aria-label="Featured stories">
+      <canvas id="gl" aria-hidden="true"></canvas>
+      <div class="scene" id="scene"></div>
+      <div class="stage-end" id="end-marker" hidden aria-hidden="true"></div>
 
-  <div id="editorials-container"></div>
+      <article class="card" id="card" aria-live="polite"></article>
+      <div class="card measure" id="measure" aria-hidden="true"></div>
+      <p class="hint" id="hint">← / → keys, click a side card, or swipe</p>
+    </section>
+
+    <section class="browse" aria-labelledby="browse-h">
+      <h2 id="browse-h">More stories</h2>
+      <div class="grid" id="grid"></div>
+    </section>
+  </main>
+
+  <p class="error-message" role="alert"></p>
   <div id="loading" style="display: none;">Loading...</div>
+  <div id="story-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 
-  <div id="scroll-to-top" class="scroll-to-top">
+  <div id="scroll-to-top" class="scroll-to-top" role="button" tabindex="0" aria-label="Scroll to top">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
       stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
       <path d="M18 15l-6-6-6 6" />
     </svg>
   </div>
 
+  <div class="toast" id="toast" role="status" hidden></div>
+
   <script>
-    // Fetch the list of articles from the API endpoint
-    let currentDate = new Date();
-    const articleList = document.querySelector('#article-list');
-    const scrollToTopButton = document.getElementById('scroll-to-top');
-
-    // Function to check scroll position and show/hide the button
-    function toggleScrollToTopButton() {
-      if (window.pageYOffset > 300) {
-        scrollToTopButton.classList.add('visible');
-      } else {
-        scrollToTopButton.classList.remove('visible');
-      }
-    }
-
-    // Function to scroll to top
-    function scrollToTop() {
-      window.scrollTo({
-        top: 0,
-        behavior: 'smooth'
-      });
-    }
-
-    // Add event listeners
-    window.addEventListener('scroll', toggleScrollToTopButton);
-    scrollToTopButton.addEventListener('click', scrollToTop);
-    window.onhashchange = () => {
-      loadArticle();
-      gtag('config', 'G-3HMC4TBL9L', {
-        'page_location': window.location.href,
-        'page_title': document.title
-      });
-    }
-
     window.onerror = function (message, source, lineno, colno, error) {
-      gtag('event', 'javascript_error', {
-        'event_category': 'JS Error',
-        'event_label': `${message} at ${source}:${lineno}:${colno}`,
-        'non_interaction': true,
-        'error_details': error ? error.stack : 'N/A'
-      });
+      if (typeof gtag === 'function') {
+        gtag('event', 'javascript_error', {
+          'event_category': 'JS Error',
+          'event_label': `${message} at ${source}:${lineno}:${colno}`,
+          'non_interaction': true,
+          'error_details': error ? error.stack : 'N/A'
+        });
+      }
     };
 
-    // load article based on hash
-    function loadArticle() {
-      try {
-        if (window.location.hash) {
-          let hashKey = window.location.hash.slice(1);
-          // console.log(hashKey);
-          document.title = `botz.ai - GenAI News - ${hashKey}`;
-          fetchArticles(hashKey);
-        } else {
-          fetchArticles();
-        }
-      } catch (e) {
-        let cacheKey;
-        document.title = `botz.ai - GenAI News`;
-        fetchArticles();
-        //console.log(e);
-      }
+    const scrollToTopButton = document.getElementById('scroll-to-top');
+    function toggleScrollToTopButton() {
+      if (window.pageYOffset > 300) scrollToTopButton.classList.add('visible');
+      else scrollToTopButton.classList.remove('visible');
     }
-
-    const isLocalDev = ['localhost', '127.0.0.1'].includes(window.location.hostname);
-
-    function fetchJsonWithLocalStub(url, stubUrl) {
-      const requestOptions = isLocalDev ? { cache: 'no-store' } : {};
-
-      return fetch(url, requestOptions)
-        .then(response => {
-          if (!response.ok) {
-            throw new Error(`Request failed: ${response.status}`);
-          }
-          return response.json();
-        })
-        .catch(error => {
-          if (!isLocalDev) {
-            throw error;
-          }
-
-          console.warn(`Using local stub for ${url}`, error);
-          return fetch(stubUrl, { cache: 'no-store' }).then(response => {
-            if (!response.ok) {
-              throw new Error(`Stub request failed: ${response.status}`);
-            }
-            return response.json();
-          });
-        });
-    }
-
-    // initial load
-    loadArticle();
-
-    function fetchArticles(key) {
-
-      window.scrollTo(0, 0);
-      articleList.innerHTML = `<div class="spinner">
-          <div class="bounce1"></div>
-          <div class="bounce2"></div>
-        </div>`;
-
-      let url = '/editorials';
-      if (key) {
-        url += `?cacheKey=${key}`;
-      }
-
-      fetchJsonWithLocalStub(url, '/stubs/editorials.json')
-        .then(articles => {
-          //console.log(articles);
-
-          articleList.innerHTML = '';
-
-          // Loop through the array of articles and create an <li> element for each one
-          articles.forEach(article => {
-            const li = document.createElement('li');
-            li.uuid = article.article.uuid;
-            li.className = 'article';
-            li.innerHTML = `<article>
-                ${article.article.image_url ? `<img class="ai-pic" src="${article.article.image_url}" 
-                alt="${article.article.authorAlias}" width="400px" height="400px" style="float:right">
-                ` : ``}`;
-            article.editorial = article.editorial.replaceAll('```html\n', '');
-            article.editorial = article.editorial.replaceAll('\n```', '');
-            li.innerHTML += ` 
-              <p>${article.editorial}</p><span style="display:none" class="byline-alias">by ${article.article.authorAlias}</span>
-              <div class="metadata" style="font-size:14px">
-                <p>
-                  Generated: ${article.article.generated_at || article.article.published_at}<br>
-                  Original source: ${article.article.source} | ${article.article.published_at}<br>
-                  Original title: ${article.article.title}<br>
-                  <a href="${article.article.url}" style="font-weight: bold">Read original article</a>
-                  ${article.article.hn_url ? `<br><a href="${article.article.hn_url}">Hacker News discussion</a>` : ''}
-                </p>
-                <hr>
-              </div></<article>`;
-            articleList.appendChild(li);
-          });
-
-          const navigation = document.createElement('nav');
-
-          let nav = '';
-          nav += `<button onclick="window.location.href='/'">Latest</button>`;
-          //console.log(articles[0].navigation);
-          if (articles[0].navigation.previous) {
-            nav += `<button onclick="window.location.hash='${articles[0].navigation.previous}'"><< Previous</button>`;
-          }
-          if (articles[0].navigation.next) {
-            nav += `<button onclick="window.location.hash='${articles[0].navigation.next}'">Next >></button>`;
-          }
-          if (articles[0].navigation.random) {
-            let randomElement = document.querySelector('#random-icon');
-            randomElement.onclick = (event) => {
-              event.preventDefault();
-              let randomIcon = document.querySelector('#random-icon');
-              randomIcon.className = randomIcon.className == 'random-icon' ? 'random-icon-roll' : 'random-icon';
-              window.location.hash = articles[0].navigation.random;
-
-              // setTimeout(() => {
-              //   randomElement.className == 'random-icon';
-              // }, 1000); 
-            }
-          }
-          navigation.innerHTML = nav;
-          articleList.appendChild(navigation);
-
-          try {
-            const articleElements = document.querySelectorAll('.article');
-            articleElements.forEach(articleElement => {
-              const bylineElement = articleElement.querySelector('.byline');
-              const bylineAliasElement = articleElement.querySelector('.byline-alias');
-
-              bylineElement.onclick = (event) => {
-                event.preventDefault();
-                let byline = bylineElement.innerHTML;
-                let bylineAlias = bylineAliasElement.innerHTML;
-
-                bylineElement.innerHTML = bylineAlias;
-                bylineAliasElement.innerHTML = byline;
-              }
-            });
-          } catch (e) {
-            //console.log(e);
-          }
-
-          gtag('event', 'page_view', {
-            page_title: document.title,
-            page_location: window.location.href,
-            page_path: location.pathname
-          });
-
-        })
-        .catch(error => {
-          console.error(error);
-          const articleList = document.querySelector('#article-list');
-          articleList.innerHTML = '<li>Failed to load articles</li>';
-          throw error;
-        });
-    }
-
-    let currentPage = 1;
-    let isLoading = false;
-    let hasMore = true;
-
-    // Fetch the list of editorials from the API endpoint
-    function fetchArchive(page) {
-      if (isLoading || !hasMore) return;
-
-      isLoading = true;
-      document.getElementById('loading').style.display = 'block';
-
-      fetchJsonWithLocalStub(`/archive?page=${page}`, '/stubs/archive.json')
-        .then(data => {
-          let container = document.querySelector('#editorials-container');
-
-          data.editorials.forEach(editorial => {
-            const div = document.createElement('div');
-            div.className = 'editorial-item';
-
-            const img = document.createElement('img');
-            img.src = editorial.image_url;
-            img.alt = editorial.title;
-
-            const title = document.createElement('div');
-            title.className = 'editorial-title';
-            title.textContent = editorial.title;
-
-            div.appendChild(img);
-            div.appendChild(title);
-
-            div.addEventListener('click', function () {
-              window.location.href = `/#${editorial.cache_key}`;
-            });
-
-            container.appendChild(div);
-          });
-
-          hasMore = data.pagination.has_next;
-          isLoading = false;
-          document.getElementById('loading').style.display = 'none';
-        }).catch(error => {
-          console.error('Error:', error);
-          isLoading = false;
-          document.getElementById('loading').style.display = 'none';
-        });
-    }
-
-    function isBottomOfPage() {
-      return (window.innerHeight + window.scrollY) >= document.body.offsetHeight - 700;
-    }
-
-    window.addEventListener('scroll', function () {
-      console.log(`${isBottomOfPage()} ${isLoading} ${hasMore}`);
-      if (isBottomOfPage() && !isLoading && hasMore) {
-        currentPage++;
-        fetchArchive(currentPage);
-      }
-    });
-
-    fetchArchive(currentPage);
+    function scrollToTop() { window.scrollTo({ top: 0, behavior: 'smooth' }); }
+    window.addEventListener('scroll', toggleScrollToTopButton);
+    scrollToTopButton.addEventListener('click', scrollToTop);
+    scrollToTopButton.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); scrollToTop(); } });
   </script>
+  <script type="module" src="carousel-app.js?v=20260927"></script>
 </body>
 
 </html>

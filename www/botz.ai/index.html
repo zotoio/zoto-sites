@@ -13,7 +13,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>botz.ai - GenAI News</title>
-  <link rel="stylesheet" href="style.css?v=20260927">
+  <link rel="stylesheet" href="style.css?v=20260929">
   <meta name="description"
     content="Botz.ai offers the latest news and insights in the world of artificial intelligence. Stay updated with AI trends, breakthroughs, and analysis. Discover how AI is transforming technology and industries worldwide.">
   <meta name="keywords"
@@ -31,7 +31,7 @@
     <section class="stage" id="stage" aria-roledescription="carousel" aria-label="Featured stories">
       <canvas id="gl" aria-hidden="true"></canvas>
       <div class="scene" id="scene"></div>
-      <div class="stage-end" id="end-marker" hidden aria-hidden="true"></div>
+      <div class="stage-end" id="end-marker" hidden aria-hidden="true"><span class="stage-end-label">Latest</span></div>
 
       <article class="card" id="card" aria-live="polite"></article>
       <div class="card measure" id="measure" aria-hidden="true"></div>
@@ -79,7 +79,7 @@
     scrollToTopButton.addEventListener('click', scrollToTop);
     scrollToTopButton.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); scrollToTop(); } });
   </script>
-  <script type="module" src="carousel-app.js?v=20260927"></script>
+  <script type="module" src="carousel-app.js?v=20260929"></script>
 </body>
 
 </html>

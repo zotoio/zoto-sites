@@ -17,6 +17,28 @@ const SLOTS = { S: [1, 0.8, 0.65, 0.52, 0.42], R: [0, 40, 40, 40, 40], Z: [0, -7
                 DIM: [1, 0.8, 0.6, 0.44, 0.3], BIAS: [0, 0.2, 0.9, 1.7, 2.4] };
 const WINDOW_RADIUS = 4;
 const isLocalDev = ['localhost', '127.0.0.1'].includes(window.location.hostname);
+const SYDNEY_TZ = 'Australia/Sydney';
+
+/** In-flight + settled JSON cache keyed by request URL (dedupes parallel fetches). */
+const jsonFlight = new Map();
+let archivePage1Flight = null;
+
+function fetchJsonMemo(url, stubUrl) {
+  if (!jsonFlight.has(url)) {
+    jsonFlight.set(url, fetchJsonWithLocalStub(url, stubUrl).catch(err => {
+      jsonFlight.delete(url);
+      throw err;
+    }));
+  }
+  return jsonFlight.get(url);
+}
+
+function fetchArchivePage1() {
+  if (!archivePage1Flight) {
+    archivePage1Flight = fetchJsonMemo('/archive?page=1', '/stubs/archive.json');
+  }
+  return archivePage1Flight;
+}
 
 let FEAT = [];   // oldest -> newest
 let active = 0;
@@ -51,26 +73,128 @@ async function fetchEditorial(cacheKey) {
   }
   let url = '/editorials';
   if (cacheKey) url += `?cacheKey=${encodeURIComponent(cacheKey)}`;
-  return fetchJsonWithLocalStub(url, stub);
+  return fetchJsonMemo(url, stub);
+}
+
+function sydneyPartsFromUtcMs(ms) {
+  const f = new Intl.DateTimeFormat('en-GB', {
+    timeZone: SYDNEY_TZ,
+    year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', hour12: false,
+  });
+  const parts = Object.fromEntries(f.formatToParts(new Date(ms)).filter(p => p.type !== 'literal').map(p => [p.type, +p.value]));
+  let h = parts.hour;
+  if (h === 24) h = 0;
+  return { y: parts.year, mo: parts.month, d: parts.day, h };
+}
+
+function sydneyWallHourToUtcMs(y, mo, d, h) {
+  for (let utc = 0; utc < 48; utc++) {
+    const ms = Date.UTC(y, mo - 1, d, utc, 0, 0);
+    const p = sydneyPartsFromUtcMs(ms);
+    if (p.y === y && p.mo === mo && p.d === d && p.h === h) return ms;
+  }
+  return Date.UTC(y, mo - 1, d, h - 10, 0, 0);
+}
+
+function utcMsToSydneyCacheKey(ms) {
+  const p = sydneyPartsFromUtcMs(ms);
+  return `${p.y}-${String(p.mo).padStart(2, '0')}-${String(p.d).padStart(2, '0')}-${String(p.h).padStart(2, '0')}`;
+}
+
+/** Next hourly editorial cache key in Australia/Sydney (23:00 rolls to next calendar day). */
+function incrementHourCacheKey(key) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})-(\d{2})$/.exec(key || '');
+  if (!m) return null;
+  const ms = sydneyWallHourToUtcMs(+m[1], +m[2], +m[3], +m[4]);
+  return utcMsToSydneyCacheKey(ms + 3600000);
+}
+if (incrementHourCacheKey('2026-09-30-23') !== '2026-10-01-00') {
+  console.warn('incrementHourCacheKey: expected 2026-09-30-23 → 2026-10-01-00 in Sydney');
+}
+
+/** Match a /editorials payload to the cache key used to store it (never from generated_at). */
+async function resolveCacheKeyForPayload(entry) {
+  const targetGen = entry.article?.generated_at;
+  const targetTitle = entry.article?.title;
+  if (!targetGen && !targetTitle) throw new Error('Cannot resolve cache key');
+
+  const candidates = [];
+  try {
+    const arch = await fetchArchivePage1();
+    const keys = (arch.editorials || []).map(e => e.cache_key).filter(Boolean);
+    if (keys[0]) {
+      candidates.push(incrementHourCacheKey(keys[0]));
+      candidates.push(...keys.slice(0, 8));
+    }
+  } catch (_) { /* archive optional for resolution */ }
+
+  const seen = new Set();
+  for (const key of candidates) {
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    try {
+      const payload = await fetchEditorial(key);
+      const row = payload[0];
+      if (!row) continue;
+      if (targetGen && row.article?.generated_at === targetGen) return key;
+      if (targetTitle && row.article?.title === targetTitle) return key;
+    } catch (_) { /* try next candidate */ }
+  }
+  throw new Error('Could not resolve editorial cache key from API');
+}
+
+function editorialAgentSuffixFromH2(h2Inner, authorAlias) {
+  const aliasPlain = (authorAlias || '').replace(/^Agent\s+/i, '').trim();
+  if (!aliasPlain) return null;
+  const patterns = [
+    new RegExp(`\\s*<(?:strong|em|span)[^>]*>\\s*Agent\\s+${aliasPlain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*<\\/(?:strong|em|span)>\\s*$`, 'i'),
+    new RegExp(`\\s*Agent\\s+${aliasPlain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i'),
+  ];
+  for (const re of patterns) {
+    if (re.test(h2Inner)) return re;
+  }
+  return null;
+}
+
+function splitTitleAndAgent(h2Inner, authorAlias) {
+  const suffixRe = editorialAgentSuffixFromH2(h2Inner, authorAlias);
+  let titleHtml = h2Inner;
+  if (suffixRe) titleHtml = h2Inner.replace(suffixRe, '');
+  else titleHtml = h2Inner.replace(/<(?:strong|em|span)[^>]*>[\s\S]*?<\/(?:strong|em|span)>/gi, ' ');
+  let title = titleHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  const agent = authorAlias || '';
+  const agentPlain = agent.replace(/^Agent\s+/i, '').trim();
+  const showAgent = !!(agentPlain && !title.toLowerCase().includes(agentPlain.toLowerCase()));
+  return { title, agent, showAgent };
+}
+
+/** Archive titles glue the agent onto the headline with no space; do not strip bare trailing "Agent". */
+function parseArchiveTileTitle(raw) {
+  const t = String(raw ?? '').trim();
+  const m = t.match(/^(.+?)(Agent\s+[A-Z][\w\s.'♟️🤖-]+)$/);
+  if (m && m[2].split(/\s+/).length >= 2) {
+    return { title: m[1].trim(), agent: m[2].trim() };
+  }
+  return { title: t, agent: '' };
 }
 
 function normalizeArticle(entry, cacheKey) {
+  if (!cacheKey) throw new Error('normalizeArticle requires an explicit cache key');
   const raw = entry.editorial || '';
   let editorial = raw.replaceAll('```html\n', '').replaceAll('\n```', '');
   editorial = editorial.replaceAll("<span style='display:none'", '<span class="byline-alias" style="display:none"');
+  editorial = editorial.replace(/<span>(Agent\s+[^<]+)<\/span>/gi, '');
   const titleMatch = editorial.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i);
-  const title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : entry.article.title;
+  const parsed = titleMatch
+    ? splitTitleAndAgent(titleMatch[1], entry.article.authorAlias)
+    : { title: entry.article.title, agent: entry.article.authorAlias || '', showAgent: !!entry.article.authorAlias };
   const bodyHtml = editorial.replace(/<h2[^>]*>[\s\S]*?<\/h2>/i, '').trim();
   const nav = entry.navigation || {};
-  const id = (cacheKey && cacheKey !== 'latest')
-    ? cacheKey
-    : (entry.article.uuid && /^\d{4}-\d{2}-\d{2}-\d{2}/.test(entry.article.uuid)
-      ? entry.article.uuid
-      : cacheKeyFromGenerated(entry.article) || cacheKey || entry.article.uuid);
   return {
-    id,
-    title,
-    agent: entry.article.authorAlias || 'AInonymous',
+    id: cacheKey,
+    title: parsed.title,
+    agent: parsed.agent || entry.article.authorAlias || '',
+    showAgent: parsed.showAgent,
     bodyHtml,
     generated: entry.article.generated_at || entry.article.published_at,
     source: entry.article.source,
@@ -87,48 +211,57 @@ function normalizeArticle(entry, cacheKey) {
   };
 }
 
-function cacheKeyFromGenerated(article) {
-  const g = article.generated_at || article.published_at || '';
-  const m = /^(\d{4}-\d{2}-\d{2})-(\d{2})/.exec(g);
-  return m ? `${m[1]}-${m[2]}` : '';
+async function buildFeaturedWindow(centerKey, opts = {}) {
+  const { anchorPayload = null, pinNewestKey = null, pinNewestPayload = null } = opts;
+  const byId = new Map();
+
+  async function add(key, payload) {
+    if (!key || byId.has(key)) return;
+    const p = payload || await fetchEditorial(key);
+    byId.set(key, normalizeArticle(p[0], key));
+  }
+
+  if (pinNewestKey && pinNewestPayload) await add(pinNewestKey, pinNewestPayload);
+  await add(centerKey, anchorPayload);
+
+  let key = centerKey;
+  for (let i = 0; i < WINDOW_RADIUS; i++) {
+    const older = byId.get(key)?.navigation.next;
+    if (!older) break;
+    await add(older);
+    key = older;
+  }
+
+  key = centerKey;
+  for (let i = 0; i < WINDOW_RADIUS; i++) {
+    const newer = byId.get(key)?.navigation.previous;
+    if (!newer) break;
+    await add(newer);
+    key = newer;
+  }
+
+  return orderFeaturedArticles(byId, pinNewestKey || centerKey);
 }
 
-async function buildFeaturedWindow(centerKey, radius = WINDOW_RADIUS) {
-  const byId = new Map();
-  async function add(key) {
-    if (!key || byId.has(key)) return;
-    const payload = await fetchEditorial(key);
-    const article = normalizeArticle(payload[0], key);
-    byId.set(key, article);
-  }
-  await add(centerKey);
-  let key = centerKey;
-  for (let i = 0; i < radius; i++) {
-    const nextOlder = byId.get(key)?.navigation.next;
-    if (!nextOlder) break;
-    await add(nextOlder);
-    key = nextOlder;
-  }
-  key = centerKey;
-  for (let i = 0; i < radius; i++) {
-    const nextNewer = byId.get(key)?.navigation.previous;
-    if (!nextNewer) break;
-    await add(nextNewer);
-    key = nextNewer;
-  }
-  let oldestKey = [...byId.values()].find(a => !a.navigation.next)?.id;
-  if (!oldestKey) {
-    const ids = new Set(byId.keys());
-    const edge = [...byId.values()].find(a => !a.navigation.next || !ids.has(a.navigation.next));
-    oldestKey = edge?.id || centerKey;
-  }
+function orderFeaturedArticles(byId, rightMostKey) {
+  const ids = new Set(byId.keys());
+  let oldestKey = [...byId.values()].find(a => !a.navigation.next || !ids.has(a.navigation.next))?.id;
+  if (!oldestKey) oldestKey = [...byId.keys()][0];
+
   const ordered = [];
-  key = oldestKey;
   const seen = new Set();
-  while (key && byId.has(key) && !seen.has(key)) {
-    seen.add(key);
-    ordered.push(byId.get(key));
-    key = byId.get(key).navigation.previous;
+  let k = oldestKey;
+  while (k && byId.has(k) && !seen.has(k)) {
+    seen.add(k);
+    ordered.push(byId.get(k));
+    k = byId.get(k).navigation.previous;
+  }
+
+  if (rightMostKey && byId.has(rightMostKey)) {
+    const lastId = ordered[ordered.length - 1]?.id;
+    if (lastId !== rightMostKey) {
+      return [...ordered.filter(a => a.id !== rightMostKey), byId.get(rightMostKey)];
+    }
   }
   return ordered;
 }
@@ -165,7 +298,7 @@ function cardHTML(a, i) {
     <img class="card-img" data-snap="img" src="${esc(a.img)}" alt="" width="340" height="340">
     <div class="card-text">
       <h2 class="card-title" data-snap="text">${esc(a.title)}</h2>
-      <p class="card-agent" data-snap="text">${esc(a.agent)}</p>
+      ${a.showAgent ? `<p class="card-agent" data-snap="text">${esc(a.agent)}</p>` : ''}
       <div class="card-paras">${a.bodyHtml}</div>
       <button type="button" class="card-read-more" hidden aria-expanded="false">Read more</button>
       <div class="card-meta">
@@ -197,7 +330,7 @@ function wireByline(el) {
   });
 }
 function updateReadMoreState(el = cardEl) {
-  const compact = window.innerHeight <= 920 || (window.innerWidth <= 1500 && window.innerHeight <= 980);
+  const compact = window.innerHeight <= 900 || (window.innerWidth <= 1500 && window.innerHeight <= 920);
   const paras = el.querySelector('.card-paras');
   const btn = el.querySelector('.card-read-more');
   if (!paras || !btn) return;
@@ -244,11 +377,12 @@ function appendArchiveTiles(items) {
     a.className = 'tile';
     a.href = `#${editorial.cache_key}`;
     a.dataset.id = editorial.cache_key;
+    const tile = parseArchiveTileTitle(editorial.title);
     a.innerHTML = `<img src="${esc(editorial.image_url)}" alt="" loading="lazy" width="400" height="400">
-      <div class="tile-body"><div class="tile-title">${esc(editorial.title)}</div><div class="tile-agent">${esc(editorial.authorAlias || '')}</div></div>`;
+      <div class="tile-body"><div class="tile-title">${esc(tile.title)}</div>${tile.agent ? `<div class="tile-agent">${esc(tile.agent)}</div>` : ''}</div>`;
     a.addEventListener('click', e => {
       e.preventDefault();
-      openStory(editorial.cache_key, true);
+      openStory(editorial.cache_key, false);
     });
     gridEl.appendChild(a);
   });
@@ -264,7 +398,7 @@ async function fetchArchive(page) {
       const response = await fetch(stub, { cache: 'no-store' });
       if (response.ok) data = await response.json();
     }
-    if (!data) data = await fetchJsonWithLocalStub(`/archive?page=${page}`, stub);
+    if (!data) data = await fetchJsonMemo(`/archive?page=${page}`, stub);
     appendArchiveTiles(data.editorials || []);
     archiveHasMore = !!data.pagination?.has_next;
     archivePage = page;
@@ -783,6 +917,33 @@ function trackPageView() {
   }
 }
 
+async function applyFeaturedState(feat, activeIndex, fromHash, { omitHash = false } = {}) {
+  if (gl?.dispose) { gl.dispose(); gl = null; }
+  FEAT = feat;
+  active = activeIndex;
+  offsets = FEAT.map((_, i) => i - active);
+  rebuildSideButtons();
+  await preloadImages();
+  if (!reduced && params.get('mode') !== 'css') gl = await initGL();
+  document.documentElement.classList.toggle('mode-gl', !!gl);
+  document.documentElement.classList.toggle('mode-css', !gl && !reduced);
+  document.documentElement.classList.toggle('mode-reduced', reduced);
+  renderCard(cardEl, active);
+  markActiveTile();
+  await relayout();
+  const id = FEAT[active]?.id;
+  if (!omitHash && id && !id.startsWith('__')) {
+    if (!fromHash) history.pushState(null, '', '#' + id);
+  } else if (!fromHash && omitHash) {
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+  document.title = id && !id.startsWith('__')
+    ? `botz.ai - GenAI News - ${id}`
+    : 'botz.ai - GenAI News';
+  if (storyAnnouncer) storyAnnouncer.textContent = FEAT[active].title;
+  trackPageView();
+}
+
 async function openStory(cacheKey, fromHash = false) {
   window.scrollTo(0, 0);
   const existing = FEAT.findIndex(a => a.id === cacheKey);
@@ -792,24 +953,15 @@ async function openStory(cacheKey, fromHash = false) {
   }
   stage.classList.add('is-loading');
   try {
-    if (gl?.dispose) { gl.dispose(); gl = null; }
-    FEAT = await buildFeaturedWindow(cacheKey);
-    active = FEAT.findIndex(a => a.id === cacheKey);
-    if (active < 0) active = Math.max(0, FEAT.length - 1);
-    offsets = FEAT.map((_, i) => i - active);
-    rebuildSideButtons();
-    await preloadImages();
-    if (!reduced && params.get('mode') !== 'css') gl = await initGL();
-    document.documentElement.classList.toggle('mode-gl', !!gl);
-    document.documentElement.classList.toggle('mode-css', !gl && !reduced);
-    document.documentElement.classList.toggle('mode-reduced', reduced);
-    renderCard(cardEl, active);
-    markActiveTile();
-    await relayout();
-    if (!fromHash) history.pushState(null, '', '#' + FEAT[active].id);
-    document.title = `botz.ai - GenAI News - ${FEAT[active].id}`;
-    if (storyAnnouncer) storyAnnouncer.textContent = FEAT[active].title;
-    trackPageView();
+    const anchorPayload = await fetchEditorial(cacheKey);
+    const feat = await buildFeaturedWindow(cacheKey, {
+      anchorPayload,
+      pinNewestKey: cacheKey,
+      pinNewestPayload: anchorPayload,
+    });
+    let activeIndex = feat.findIndex(a => a.id === cacheKey);
+    if (activeIndex < 0) activeIndex = feat.length - 1;
+    await applyFeaturedState(feat, activeIndex, fromHash);
   } catch (err) {
     console.error(err);
     toast('Could not load that story.');
@@ -819,10 +971,37 @@ async function openStory(cacheKey, fromHash = false) {
 }
 
 async function openStoryFromLatest(fromHash) {
-  const payload = await fetchEditorial();
-  const center = normalizeArticle(payload[0], null);
-  await openStory(center.id, fromHash);
-  if (!fromHash && !location.hash) history.replaceState(null, '', '/');
+  window.scrollTo(0, 0);
+  stage.classList.add('is-loading');
+  try {
+    const latestPayload = await fetchEditorial(null);
+    let latestKey = null;
+    try {
+      latestKey = await resolveCacheKeyForPayload(latestPayload[0]);
+    } catch (err) {
+      console.warn(err);
+    }
+
+    if (!latestKey) {
+      const solo = [normalizeArticle(latestPayload[0], '__live_latest__')];
+      await applyFeaturedState(solo, 0, fromHash, { omitHash: true });
+      return;
+    }
+
+    const feat = await buildFeaturedWindow(latestKey, {
+      anchorPayload: latestPayload,
+      pinNewestKey: latestKey,
+      pinNewestPayload: latestPayload,
+    });
+    const activeIndex = feat.findIndex(a => a.id === latestKey);
+    await applyFeaturedState(feat, activeIndex >= 0 ? activeIndex : feat.length - 1, fromHash, { omitHash: !fromHash });
+    if (!fromHash && !location.hash) history.replaceState(null, '', '/');
+  } catch (err) {
+    console.error(err);
+    toast('Failed to load GenAI News.');
+  } finally {
+    stage.classList.remove('is-loading');
+  }
 }
 
 /* ---------------- boot ---------------- */
@@ -841,7 +1020,10 @@ async function relayout() {
 async function boot() {
   stage.classList.add('is-loading');
   try {
-    await fetchArchive(1);
+    const arch = await fetchArchivePage1();
+    appendArchiveTiles(arch.editorials || []);
+    archivePage = 1;
+    archiveHasMore = !!arch.pagination?.has_next;
     const hashKey = decodeURIComponent(location.hash.slice(1));
     if (hashKey) await openStory(hashKey, true);
     else await openStoryFromLatest(true);

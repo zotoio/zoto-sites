@@ -304,7 +304,14 @@ const aiResponse = async (prompt, model) => {
     }
 };
 
+function applyEditorialNoStore(res) {
+    res.setHeader('Cache-Control', 'no-store, private');
+    res.setHeader('CDN-Cache-Control', 'no-store');
+    res.setHeader('Pragma', 'no-cache');
+}
+
 app.get('/editorials', async (req, res) => {
+    applyEditorialNoStore(res);
     try {
         const currentDate = new Date();
         const isAdmin = authorisedAdminRequest(req);
@@ -340,14 +347,19 @@ app.get('/editorials', async (req, res) => {
             // example valid values: 2021-09-01-09, 2021-09-01-99-1630480000000 
             const isValidCacheKey = suppliedCacheKey && /^(\d{4}-\d{2}-\d{2})(-\d{2})(-\d{13})?$/.test(suppliedCacheKey);
 
-            if (isValidCacheKey) {
-                let suppliedCacheFilePath = `${path.join(cacheDir, suppliedCacheKey)}.json`;
-                if (authorisedAdminRequest(req) || fs.existsSync(suppliedCacheFilePath)) {
-                    cacheKey = suppliedCacheKey;
-                    cacheFilePath = suppliedCacheFilePath;
-                }
+            if (!isValidCacheKey) {
+                return res.status(400).json({ message: 'Invalid cache key' });
+            }
+
+            const suppliedCacheFilePath = path.join(cacheDir, `${suppliedCacheKey}.json`);
+            if (fs.existsSync(suppliedCacheFilePath)) {
+                cacheKey = suppliedCacheKey;
+                cacheFilePath = suppliedCacheFilePath;
+            } else if (!isAdmin) {
+                return res.status(404).json({ message: 'Editorial not found' });
             } else {
-                console.log('invalid cache key supplied:', suppliedCacheKey);
+                cacheKey = suppliedCacheKey;
+                cacheFilePath = suppliedCacheFilePath;
             }
         }
 

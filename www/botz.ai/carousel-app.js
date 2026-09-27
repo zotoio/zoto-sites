@@ -17,7 +17,22 @@ const SLOTS = { S: [1, 0.8, 0.65, 0.52, 0.42], R: [0, 40, 40, 40, 40], Z: [0, -7
                 DIM: [1, 0.8, 0.6, 0.44, 0.3], BIAS: [0, 0.2, 0.9, 1.7, 2.4] };
 const WINDOW_RADIUS = 4;
 const isLocalDev = ['localhost', '127.0.0.1'].includes(window.location.hostname);
-const SYDNEY_TZ = 'Australia/Sydney';
+
+/** No-key /editorials is a dedicated LATEST slot (empty URL hash when centered). */
+const LATEST_SLOT_ID = '__latest__';
+const LATEST_PROBE_MAX = 4;
+
+let globalLatestPayload = null;
+/** Proven hourly cache key whose payload matches LATEST identity (e.g. 2026-09-27-07). */
+let globalLatestKey = null;
+/** { generated_at, headline } — never match by source article.title alone. */
+let latestIdentity = null;
+let newestArchiveKey = null;
+let newestRealHourlyKey = null;
+let latestSlotResolved = false;
+
+const knownAuthorPlain = new Set();
+const knownAuthorLabels = new Set();
 
 /** In-flight + settled JSON cache keyed by request URL (dedupes parallel fetches). */
 const jsonFlight = new Map();
@@ -65,6 +80,9 @@ async function fetchJsonWithLocalStub(url, stubUrl) {
   }
 }
 
+let editorialRequestCount = 0;
+const editorialUrlsSeen = new Set();
+
 async function fetchEditorial(cacheKey) {
   const stub = cacheKey ? `/stubs/editorials/${cacheKey}.json` : '/stubs/editorials/latest.json';
   if (isLocalDev) {
@@ -73,127 +91,252 @@ async function fetchEditorial(cacheKey) {
   }
   let url = '/editorials';
   if (cacheKey) url += `?cacheKey=${encodeURIComponent(cacheKey)}`;
+  if (!editorialUrlsSeen.has(url)) {
+    editorialUrlsSeen.add(url);
+    editorialRequestCount++;
+  }
   return fetchJsonMemo(url, stub);
 }
 
-function sydneyPartsFromUtcMs(ms) {
-  const f = new Intl.DateTimeFormat('en-GB', {
-    timeZone: SYDNEY_TZ,
-    year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', hour12: false,
-  });
-  const parts = Object.fromEntries(f.formatToParts(new Date(ms)).filter(p => p.type !== 'literal').map(p => [p.type, +p.value]));
-  let h = parts.hour;
-  if (h === 24) h = 0;
-  return { y: parts.year, mo: parts.month, d: parts.day, h };
-}
-
-function sydneyWallHourToUtcMs(y, mo, d, h) {
-  for (let utc = 0; utc < 48; utc++) {
-    const ms = Date.UTC(y, mo - 1, d, utc, 0, 0);
-    const p = sydneyPartsFromUtcMs(ms);
-    if (p.y === y && p.mo === mo && p.d === d && p.h === h) return ms;
-  }
-  return Date.UTC(y, mo - 1, d, h - 10, 0, 0);
-}
-
-function utcMsToSydneyCacheKey(ms) {
-  const p = sydneyPartsFromUtcMs(ms);
-  return `${p.y}-${String(p.mo).padStart(2, '0')}-${String(p.d).padStart(2, '0')}-${String(p.h).padStart(2, '0')}`;
-}
-
-/** Next hourly editorial cache key in Australia/Sydney (23:00 rolls to next calendar day). */
-function incrementHourCacheKey(key) {
+function cacheKeyToUtcMs(key) {
   const m = /^(\d{4})-(\d{2})-(\d{2})-(\d{2})$/.exec(key || '');
   if (!m) return null;
-  const ms = sydneyWallHourToUtcMs(+m[1], +m[2], +m[3], +m[4]);
-  return utcMsToSydneyCacheKey(ms + 3600000);
+  return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], 0, 0);
+}
+
+function utcMsToCacheKey(ms) {
+  const d = new Date(ms);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}-${String(d.getUTCHours()).padStart(2, '0')}`;
+}
+
+/** Next hourly editorial cache key in UTC (23:00 rolls to next calendar day). */
+function incrementHourCacheKey(key) {
+  const ms = cacheKeyToUtcMs(key);
+  if (ms == null) return null;
+  return utcMsToCacheKey(ms + 3600000);
+}
+
+function decrementHourCacheKey(key) {
+  const ms = cacheKeyToUtcMs(key);
+  if (ms == null) return null;
+  return utcMsToCacheKey(ms - 3600000);
 }
 if (incrementHourCacheKey('2026-09-30-23') !== '2026-10-01-00') {
-  console.warn('incrementHourCacheKey: expected 2026-09-30-23 → 2026-10-01-00 in Sydney');
+  console.warn('incrementHourCacheKey: expected 2026-09-30-23 → 2026-10-01-00 in UTC');
 }
 
-/** Match a /editorials payload to the cache key used to store it (never from generated_at). */
-async function resolveCacheKeyForPayload(entry) {
-  const targetGen = entry.article?.generated_at;
-  const targetTitle = entry.article?.title;
-  if (!targetGen && !targetTitle) throw new Error('Cannot resolve cache key');
-
-  const candidates = [];
-  try {
-    const arch = await fetchArchivePage1();
-    const keys = (arch.editorials || []).map(e => e.cache_key).filter(Boolean);
-    if (keys[0]) {
-      candidates.push(incrementHourCacheKey(keys[0]));
-      candidates.push(...keys.slice(0, 8));
-    }
-  } catch (_) { /* archive optional for resolution */ }
-
-  const seen = new Set();
-  for (const key of candidates) {
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    try {
-      const payload = await fetchEditorial(key);
-      const row = payload[0];
-      if (!row) continue;
-      if (targetGen && row.article?.generated_at === targetGen) return key;
-      if (targetTitle && row.article?.title === targetTitle) return key;
-    } catch (_) { /* try next candidate */ }
-  }
-  throw new Error('Could not resolve editorial cache key from API');
+function storyIdentity(entry) {
+  return {
+    generated_at: entry?.article?.generated_at || '',
+    headline: editorialHeadlineFromEntry(entry),
+  };
 }
 
-function editorialAgentSuffixFromH2(h2Inner, authorAlias) {
-  const aliasPlain = (authorAlias || '').replace(/^Agent\s+/i, '').trim();
-  if (!aliasPlain) return null;
+function sameStoryIdentity(a, b) {
+  return !!(a?.generated_at && b?.generated_at && a.generated_at === b.generated_at
+    && a?.headline && b?.headline && a.headline === b.headline);
+}
+
+function matchesLatestIdentity(entry) {
+  return !!(latestIdentity && entry && sameStoryIdentity(storyIdentity(entry), latestIdentity));
+}
+
+function agentFromH2Markup(h2Inner) {
+  const inner = String(h2Inner ?? '');
   const patterns = [
-    new RegExp(`\\s*<(?:strong|em|span)[^>]*>\\s*Agent\\s+${aliasPlain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*<\\/(?:strong|em|span)>\\s*$`, 'i'),
-    new RegExp(`\\s*Agent\\s+${aliasPlain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i'),
+    /<span[^>]*>\s*(<(?:strong|em)[^>]*>\s*)*(Agent\s+[^<]+)\s*(<\/(?:strong|em)>\s*)*<\/span>\s*(?:<br\s*\/?>)?\s*$/i,
+    /<span[^>]*>\s*(Agent\s+[^<]+)\s*<\/span>\s*(?:<br\s*\/?>)?\s*$/i,
+    /<(?:strong|em)[^>]*>\s*<(?:strong|em)[^>]*>\s*(Agent\s+[^<]+)\s*<\/(?:strong|em)>\s*<\/(?:strong|em)>\s*(?:<br\s*\/?>)?\s*$/i,
+    /<(?:strong|em)[^>]*>\s*<(?:strong|em)[^>]*>\s*([^<]+)\s*<\/(?:strong|em)>\s*<\/(?:strong|em)>\s*(?:<br\s*\/?>)?\s*$/i,
   ];
   for (const re of patterns) {
-    if (re.test(h2Inner)) return re;
+    const m = inner.match(re);
+    const name = m?.[2]?.trim() || m?.[1]?.trim();
+    if (name) return name.startsWith('Agent ') ? name : name;
   }
-  return null;
+  return '';
 }
 
-function splitTitleAndAgent(h2Inner, authorAlias) {
-  const suffixRe = editorialAgentSuffixFromH2(h2Inner, authorAlias);
-  let titleHtml = h2Inner;
-  if (suffixRe) titleHtml = h2Inner.replace(suffixRe, '');
-  else titleHtml = h2Inner.replace(/<(?:strong|em|span)[^>]*>[\s\S]*?<\/(?:strong|em|span)>/gi, ' ');
-  let title = titleHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-  const agent = authorAlias || '';
+function headlineFromH2Html(h2Inner) {
+  let html = String(h2Inner ?? '');
+  html = html.replace(/<span[^>]*class="[^"]*byline-alias[^"]*"[^>]*>[\s\S]*?<\/span>/gi, '');
+  const agent = agentFromH2Markup(html);
+  if (agent) {
+    const esc = agent.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    html = html
+      .replace(new RegExp(`<span[^>]*>\\s*(<(?:strong|em)[^>]*>\\s*)*${esc}\\s*(<\\/(?:strong|em)>\\s*)*<\\/span>\\s*(?:<br\\s*\\/?>)?\\s*$`, 'i'), '')
+      .replace(new RegExp(`<span[^>]*>\\s*${esc}\\s*<\\/span>\\s*(?:<br\\s*\\/?>)?\\s*$`, 'i'), '')
+      .replace(new RegExp(`<(?:strong|em)[^>]*>\\s*<(?:strong|em)[^>]*>\\s*${esc}\\s*<\\/(?:strong|em)>\\s*<\\/(?:strong|em)>\\s*(?:<br\\s*\\/?>)?\\s*$`, 'i'), '')
+      .replace(new RegExp(`\\s*${esc}\\s*$`), '');
+  }
+  return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function editorialHeadlineFromEntry(entry) {
+  const h2 = entry?.editorial?.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i)?.[1];
+  if (h2) return headlineFromH2Html(h2);
+  return entry?.article?.title || '';
+}
+
+function cardTitleAndAgent(entry) {
+  const art = entry?.article || {};
+  const h2m = entry?.editorial?.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i);
+  if (!h2m) {
+    const agent = formatDisplayAgent(art.authorAlias);
+    return { title: art.title || '', agent, showAgent: !!agent };
+  }
+  const agent = agentFromH2Markup(h2m[1]) || formatDisplayAgent(art.authorAlias);
+  const title = headlineFromH2Html(h2m[1]);
   const agentPlain = agent.replace(/^Agent\s+/i, '').trim();
   const showAgent = !!(agentPlain && !title.toLowerCase().includes(agentPlain.toLowerCase()));
   return { title, agent, showAgent };
 }
 
-/** Archive titles glue the agent onto the headline with no space; do not strip bare trailing "Agent". */
+function formatDisplayAgent(authorAlias) {
+  const raw = String(authorAlias ?? '').trim();
+  if (!raw) return '';
+  if (/^agent\s+/i.test(raw)) return raw;
+  if (raw === 'AInonymous' || /^AI/i.test(raw)) return raw;
+  if (raw.length <= 3) return '';
+  return `Agent ${raw.replace(/^Agent\s+/i, '').trim()}`;
+}
+
+async function ensureLatestSlotResolved() {
+  if (latestSlotResolved) return;
+  globalLatestPayload = await fetchEditorial(null);
+  latestIdentity = storyIdentity(globalLatestPayload[0]);
+  globalLatestKey = null;
+  try {
+    const arch = await fetchArchivePage1();
+    newestArchiveKey = arch.editorials?.[0]?.cache_key || null;
+    if (newestArchiveKey) {
+      let k = incrementHourCacheKey(newestArchiveKey);
+      let lastReal = newestArchiveKey;
+      for (let i = 0; i < LATEST_PROBE_MAX && k; i++) {
+        const payload = await fetchEditorial(k);
+        if (payload[0] && matchesLatestIdentity(payload[0])) {
+          globalLatestKey = k;
+          newestRealHourlyKey = lastReal;
+          break;
+        }
+        if (payload[0]) lastReal = k;
+        k = incrementHourCacheKey(k);
+      }
+      if (!newestRealHourlyKey) newestRealHourlyKey = lastReal;
+    }
+  } catch (err) {
+    console.warn(err);
+  }
+  latestSlotResolved = true;
+}
+
+/** Hourly slot only — returns null when the API echoes LATEST (missing hour). */
+async function fetchHourlyEditorial(cacheKey, prefetchedPayload = null) {
+  if (!cacheKey || cacheKey === LATEST_SLOT_ID) return null;
+  const payload = prefetchedPayload || await fetchEditorial(cacheKey);
+  const row = payload?.[0];
+  if (!row) return null;
+  if (matchesLatestIdentity(row)) return null;
+  return payload;
+}
+
+async function findNewestRealHourlyKey() {
+  await ensureLatestSlotResolved();
+  return newestRealHourlyKey || newestArchiveKey;
+}
+
+async function resolveNewerTarget(fromKey) {
+  if (!fromKey || fromKey === LATEST_SLOT_ID) return null;
+  await ensureLatestSlotResolved();
+  if (fromKey === newestRealHourlyKey) return LATEST_SLOT_ID;
+  let k = incrementHourCacheKey(fromKey);
+  for (let steps = 0; k && steps < 48; steps++) {
+    const payload = await fetchEditorial(k);
+    if (!payload[0]) break;
+    if (matchesLatestIdentity(payload[0])) {
+      if (globalLatestKey && k === globalLatestKey) return LATEST_SLOT_ID;
+      k = incrementHourCacheKey(k);
+      continue;
+    }
+    return k;
+  }
+  return null;
+}
+
+async function resolveOlderCacheKey(fromKey) {
+  if (!fromKey) return null;
+  if (fromKey === LATEST_SLOT_ID) return newestRealHourlyKey;
+  await ensureLatestSlotResolved();
+  let k = decrementHourCacheKey(fromKey);
+  for (let steps = 0; k && steps < 48; steps++) {
+    if (await fetchHourlyEditorial(k)) return k;
+    k = decrementHourCacheKey(k);
+  }
+  return null;
+}
+
+function registerKnownAuthor(authorAlias) {
+  const raw = String(authorAlias ?? '').trim();
+  if (!raw) return;
+  const plain = raw.replace(/^Agent\s+/i, '').trim();
+  if (plain) knownAuthorPlain.add(plain);
+  knownAuthorLabels.add(raw);
+  if (plain && !/^agent\s+/i.test(raw)) knownAuthorLabels.add(`Agent ${plain}`);
+}
+
+function registerKnownAuthorsFromEntry(entry) {
+  const { agent } = cardTitleAndAgent(entry);
+  registerKnownAuthor(agent);
+  registerKnownAuthor(entry?.article?.authorAlias);
+}
+
+/** Archive titles glue the agent onto the headline; only split when suffix matches a known author. */
 function parseArchiveTileTitle(raw) {
   const t = String(raw ?? '').trim();
-  const m = t.match(/^(.+?)(Agent\s+[A-Z][\w\s.'♟️🤖-]+)$/);
-  if (m && m[2].split(/\s+/).length >= 2) {
-    return { title: m[1].trim(), agent: m[2].trim() };
+  if (!t) return { title: t, agent: '' };
+
+  for (const label of [...knownAuthorLabels].sort((a, b) => b.length - a.length)) {
+    if (label && t.endsWith(label) && t.length > label.length) {
+      return { title: t.slice(0, -label.length).trim(), agent: label };
+    }
   }
+
+  const agentSuffix = t.match(/(Agent\s+(.+))$/);
+  if (agentSuffix) {
+    const suffix = agentSuffix[1].trim();
+    const namePart = agentSuffix[2].trim();
+    if (knownAuthorLabels.has(suffix) || knownAuthorPlain.has(namePart)) {
+      return { title: t.slice(0, -suffix.length).trim(), agent: suffix };
+    }
+  }
+
   return { title: t, agent: '' };
+}
+
+function refreshArchiveTileTitles() {
+  gridEl.querySelectorAll('.tile[data-raw-title]').forEach(a => {
+    const tile = parseArchiveTileTitle(a.dataset.rawTitle);
+    const body = a.querySelector('.tile-body');
+    if (!body) return;
+    body.innerHTML = `<div class="tile-title">${esc(tile.title)}</div>${tile.agent ? `<div class="tile-agent">${esc(tile.agent)}</div>` : ''}`;
+  });
 }
 
 function normalizeArticle(entry, cacheKey) {
   if (!cacheKey) throw new Error('normalizeArticle requires an explicit cache key');
+  const parsed = cardTitleAndAgent(entry);
+  registerKnownAuthor(parsed.agent);
+  registerKnownAuthor(entry.article?.authorAlias);
   const raw = entry.editorial || '';
   let editorial = raw.replaceAll('```html\n', '').replaceAll('\n```', '');
   editorial = editorial.replaceAll("<span style='display:none'", '<span class="byline-alias" style="display:none"');
   editorial = editorial.replace(/<span>(Agent\s+[^<]+)<\/span>/gi, '');
-  const titleMatch = editorial.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i);
-  const parsed = titleMatch
-    ? splitTitleAndAgent(titleMatch[1], entry.article.authorAlias)
-    : { title: entry.article.title, agent: entry.article.authorAlias || '', showAgent: !!entry.article.authorAlias };
   const bodyHtml = editorial.replace(/<h2[^>]*>[\s\S]*?<\/h2>/i, '').trim();
   const nav = entry.navigation || {};
   return {
     id: cacheKey,
     title: parsed.title,
-    agent: parsed.agent || entry.article.authorAlias || '',
+    agent: parsed.agent,
     showAgent: parsed.showAgent,
     bodyHtml,
     generated: entry.article.generated_at || entry.article.published_at,
@@ -211,58 +354,77 @@ function normalizeArticle(entry, cacheKey) {
   };
 }
 
+function normalizeLatestSlotArticle(entry) {
+  const a = normalizeArticle(entry, LATEST_SLOT_ID);
+  a.isLatestSlot = true;
+  return a;
+}
+
 async function buildFeaturedWindow(centerKey, opts = {}) {
-  const { anchorPayload = null, pinNewestKey = null, pinNewestPayload = null } = opts;
+  const { anchorPayload = null, centerOnLatest = false } = opts;
+  await ensureLatestSlotResolved();
   const byId = new Map();
 
-  async function add(key, payload) {
-    if (!key || byId.has(key)) return;
-    const p = payload || await fetchEditorial(key);
+  async function addHourly(key, payload) {
+    if (!key || key === LATEST_SLOT_ID || byId.has(key)) return;
+    const p = await fetchHourlyEditorial(key, payload);
+    if (!p?.[0]) return;
     byId.set(key, normalizeArticle(p[0], key));
   }
 
-  if (pinNewestKey && pinNewestPayload) await add(pinNewestKey, pinNewestPayload);
-  await add(centerKey, anchorPayload);
+  let center = centerKey;
+  if (centerOnLatest) {
+    center = await findNewestRealHourlyKey();
+    if (!center) center = newestArchiveKey;
+  }
 
-  let key = centerKey;
-  for (let i = 0; i < WINDOW_RADIUS; i++) {
-    const older = byId.get(key)?.navigation.next;
+  if (center) await addHourly(center, anchorPayload);
+
+  let   key = center;
+  for (let i = 0; i < WINDOW_RADIUS && key; i++) {
+    let older = null;
+    let probe = decrementHourCacheKey(key);
+    for (let hop = 0; probe && hop < 8; hop++) {
+      if (byId.has(probe)) { probe = decrementHourCacheKey(probe); continue; }
+      if (await fetchHourlyEditorial(probe)) { older = probe; break; }
+      probe = decrementHourCacheKey(probe);
+    }
     if (!older) break;
-    await add(older);
+    await addHourly(older);
     key = older;
   }
 
-  key = centerKey;
-  for (let i = 0; i < WINDOW_RADIUS; i++) {
-    const newer = byId.get(key)?.navigation.previous;
+  key = center;
+  for (let i = 0; i < WINDOW_RADIUS && key; i++) {
+    let newer = null;
+    let probe = incrementHourCacheKey(key);
+    for (let hop = 0; probe && hop < 8; hop++) {
+      if (byId.has(probe)) { probe = incrementHourCacheKey(probe); continue; }
+      const payload = await fetchEditorial(probe);
+      if (!payload[0]) break;
+      if (matchesLatestIdentity(payload[0])) {
+        if (globalLatestKey && probe === globalLatestKey) break;
+        probe = incrementHourCacheKey(probe);
+        continue;
+      }
+      newer = probe;
+      break;
+    }
     if (!newer) break;
-    await add(newer);
+    await addHourly(newer);
     key = newer;
   }
 
-  return orderFeaturedArticles(byId, pinNewestKey || centerKey);
+  if (globalLatestPayload?.[0]) {
+    byId.set(LATEST_SLOT_ID, normalizeLatestSlotArticle(globalLatestPayload[0]));
+  }
+  return orderFeaturedArticles(byId);
 }
 
-function orderFeaturedArticles(byId, rightMostKey) {
-  const ids = new Set(byId.keys());
-  let oldestKey = [...byId.values()].find(a => !a.navigation.next || !ids.has(a.navigation.next))?.id;
-  if (!oldestKey) oldestKey = [...byId.keys()][0];
-
-  const ordered = [];
-  const seen = new Set();
-  let k = oldestKey;
-  while (k && byId.has(k) && !seen.has(k)) {
-    seen.add(k);
-    ordered.push(byId.get(k));
-    k = byId.get(k).navigation.previous;
-  }
-
-  if (rightMostKey && byId.has(rightMostKey)) {
-    const lastId = ordered[ordered.length - 1]?.id;
-    if (lastId !== rightMostKey) {
-      return [...ordered.filter(a => a.id !== rightMostKey), byId.get(rightMostKey)];
-    }
-  }
+function orderFeaturedArticles(byId) {
+  const hourly = [...byId.keys()].filter(k => k !== LATEST_SLOT_ID).sort();
+  const ordered = hourly.map(k => byId.get(k));
+  if (byId.has(LATEST_SLOT_ID)) ordered.push(byId.get(LATEST_SLOT_ID));
   return ordered;
 }
 
@@ -283,7 +445,7 @@ function canGoOlder(i) {
 }
 function canGoNewer(i) {
   if (i < FEAT.length - 1) return true;
-  return !!FEAT[FEAT.length - 1]?.navigation?.previous;
+  return false;
 }
 function cardHTML(a, i) {
   return `
@@ -377,6 +539,7 @@ function appendArchiveTiles(items) {
     a.className = 'tile';
     a.href = `#${editorial.cache_key}`;
     a.dataset.id = editorial.cache_key;
+    a.dataset.rawTitle = editorial.title;
     const tile = parseArchiveTileTitle(editorial.title);
     a.innerHTML = `<img src="${esc(editorial.image_url)}" alt="" loading="lazy" width="400" height="400">
       <div class="tile-body"><div class="tile-title">${esc(tile.title)}</div>${tile.agent ? `<div class="tile-agent">${esc(tile.agent)}</div>` : ''}</div>`;
@@ -417,7 +580,7 @@ window.addEventListener('scroll', () => {
 });
 function updateEndMarker() {
   if (!endMarker) return;
-  const atNewest = active === FEAT.length - 1;
+  const atNewest = FEAT[active]?.id === LATEST_SLOT_ID;
   endMarker.hidden = !(geom.showSides && atNewest);
 }
 function markActiveTile() {
@@ -822,21 +985,39 @@ function snapFor(i) { renderCard(measureEl, i); measureEl.style.width = geom.car
 
 async function go(target, fromHash = false) {
   if (target === active) return;
-  if (target < 0 && FEAT[0]?.navigation?.next) {
-    await openStory(FEAT[0].navigation.next, fromHash);
+  await ensureLatestSlotResolved();
+  if (target < 0) {
+    const olderKey = await resolveOlderCacheKey(FEAT[0]?.id);
+    if (olderKey) await openStory(olderKey, fromHash);
     return;
   }
-  if (target >= FEAT.length && FEAT[FEAT.length - 1]?.navigation?.previous) {
-    await openStory(FEAT[FEAT.length - 1].navigation.previous, fromHash);
+  if (target >= FEAT.length) {
+    const newer = await resolveNewerTarget(FEAT[FEAT.length - 1]?.id);
+    if (newer === LATEST_SLOT_ID) {
+      const idx = FEAT.findIndex(a => a.id === LATEST_SLOT_ID);
+      if (idx >= 0) await go(idx, fromHash);
+      else await openLatestView(fromHash);
+    } else if (newer) await openStory(newer, fromHash);
     return;
   }
   if (target < 0 || target >= FEAT.length) return;
+  if (target > active && target < FEAT.length && FEAT[target]?.id === LATEST_SLOT_ID) {
+    const hop = await resolveNewerTarget(FEAT[active]?.id);
+    if (hop && hop !== LATEST_SLOT_ID) {
+      await openStory(hop, fromHash);
+      return;
+    }
+  }
   if (busy) { pending = target; return; }
   busy = true;
   const from = active, dir = Math.sign(target - from);
   const start = FEAT.map((_, i) => i - from), end = FEAT.map((_, i) => i - target);
   const setOff = e => { offsets = start.map((s, i) => s + (end[i] - s) * e); layoutButtons(); };
-  if (!fromHash) history.pushState(null, '', '#' + FEAT[target].id);   // updates location.hash without re-entrancy
+  if (!fromHash) {
+    const id = FEAT[target].id;
+    if (id === LATEST_SLOT_ID) history.replaceState(null, '', location.pathname + location.search);
+    else history.pushState(null, '', '#' + id);
+  }
   const hadFocus = document.activeElement && document.activeElement.closest('.side, .card-nav') ? document.activeElement : null;
 
   if (gl) {
@@ -863,7 +1044,10 @@ async function go(target, fromHash = false) {
     cardEl.classList.remove('css-flip-in');
   }
   offsets = end; layoutButtons(); markActiveTile();
-  document.title = `botz.ai - GenAI News - ${FEAT[active].id}`;
+  const activeId = FEAT[active]?.id;
+  document.title = activeId && activeId !== LATEST_SLOT_ID
+    ? `botz.ai - GenAI News - ${activeId}`
+    : 'botz.ai - GenAI News';
   if (storyAnnouncer) storyAnnouncer.textContent = FEAT[active].title;
   trackPageView();
   if (hadFocus && hadFocus.classList.contains('side')) { const nb = sideBtns[Number(hadFocus.dataset.i)]; (nb.hidden ? cardEl.querySelector('.card-title') : nb)?.focus?.(); }
@@ -932,20 +1116,44 @@ async function applyFeaturedState(feat, activeIndex, fromHash, { omitHash = fals
   markActiveTile();
   await relayout();
   const id = FEAT[active]?.id;
-  if (!omitHash && id && !id.startsWith('__')) {
+  if (id === LATEST_SLOT_ID) {
+    history.replaceState(null, '', location.pathname + location.search);
+  } else if (!omitHash && id) {
     if (!fromHash) history.pushState(null, '', '#' + id);
   } else if (!fromHash && omitHash) {
     history.replaceState(null, '', location.pathname + location.search);
   }
-  document.title = id && !id.startsWith('__')
+  document.title = id && id !== LATEST_SLOT_ID
     ? `botz.ai - GenAI News - ${id}`
     : 'botz.ai - GenAI News';
   if (storyAnnouncer) storyAnnouncer.textContent = FEAT[active].title;
   trackPageView();
+  refreshArchiveTileTitles();
+}
+
+async function openLatestView(fromHash = false) {
+  window.scrollTo(0, 0);
+  stage.classList.add('is-loading');
+  try {
+    await ensureLatestSlotResolved();
+    const feat = await buildFeaturedWindow(null, { centerOnLatest: true });
+    const idx = feat.findIndex(a => a.id === LATEST_SLOT_ID);
+    await applyFeaturedState(feat, idx >= 0 ? idx : feat.length - 1, fromHash, { omitHash: true });
+  } catch (err) {
+    console.error(err);
+    toast('Failed to load GenAI News.');
+  } finally {
+    stage.classList.remove('is-loading');
+  }
 }
 
 async function openStory(cacheKey, fromHash = false) {
   window.scrollTo(0, 0);
+  await ensureLatestSlotResolved();
+  if (!cacheKey || cacheKey === globalLatestKey) {
+    await openLatestView(fromHash);
+    return;
+  }
   const existing = FEAT.findIndex(a => a.id === cacheKey);
   if (existing >= 0) {
     if (existing !== active) await go(existing, fromHash);
@@ -954,13 +1162,13 @@ async function openStory(cacheKey, fromHash = false) {
   stage.classList.add('is-loading');
   try {
     const anchorPayload = await fetchEditorial(cacheKey);
-    const feat = await buildFeaturedWindow(cacheKey, {
-      anchorPayload,
-      pinNewestKey: cacheKey,
-      pinNewestPayload: anchorPayload,
-    });
+    if (!anchorPayload[0] || matchesLatestIdentity(anchorPayload[0])) {
+      await openLatestView(fromHash);
+      return;
+    }
+    const feat = await buildFeaturedWindow(cacheKey, { anchorPayload });
     let activeIndex = feat.findIndex(a => a.id === cacheKey);
-    if (activeIndex < 0) activeIndex = feat.length - 1;
+    if (activeIndex < 0) activeIndex = Math.max(0, feat.findIndex(a => a.id === LATEST_SLOT_ID) - 1);
     await applyFeaturedState(feat, activeIndex, fromHash);
   } catch (err) {
     console.error(err);
@@ -971,37 +1179,8 @@ async function openStory(cacheKey, fromHash = false) {
 }
 
 async function openStoryFromLatest(fromHash) {
-  window.scrollTo(0, 0);
-  stage.classList.add('is-loading');
-  try {
-    const latestPayload = await fetchEditorial(null);
-    let latestKey = null;
-    try {
-      latestKey = await resolveCacheKeyForPayload(latestPayload[0]);
-    } catch (err) {
-      console.warn(err);
-    }
-
-    if (!latestKey) {
-      const solo = [normalizeArticle(latestPayload[0], '__live_latest__')];
-      await applyFeaturedState(solo, 0, fromHash, { omitHash: true });
-      return;
-    }
-
-    const feat = await buildFeaturedWindow(latestKey, {
-      anchorPayload: latestPayload,
-      pinNewestKey: latestKey,
-      pinNewestPayload: latestPayload,
-    });
-    const activeIndex = feat.findIndex(a => a.id === latestKey);
-    await applyFeaturedState(feat, activeIndex >= 0 ? activeIndex : feat.length - 1, fromHash, { omitHash: !fromHash });
-    if (!fromHash && !location.hash) history.replaceState(null, '', '/');
-  } catch (err) {
-    console.error(err);
-    toast('Failed to load GenAI News.');
-  } finally {
-    stage.classList.remove('is-loading');
-  }
+  await openLatestView(fromHash);
+  if (!fromHash && !location.hash) history.replaceState(null, '', location.pathname + location.search);
 }
 
 /* ---------------- boot ---------------- */
@@ -1018,10 +1197,13 @@ async function relayout() {
   if (gl) { gl.resize(); gl.setFrontTexture(snapFor(active)); gl.kick(); }
 }
 async function boot() {
+  editorialRequestCount = 0;
+  editorialUrlsSeen.clear();
   stage.classList.add('is-loading');
   try {
     const arch = await fetchArchivePage1();
-    appendArchiveTiles(arch.editorials || []);
+    const archItems = arch.editorials || [];
+    appendArchiveTiles(archItems);
     archivePage = 1;
     archiveHasMore = !!arch.pagination?.has_next;
     const hashKey = decodeURIComponent(location.hash.slice(1));
@@ -1037,4 +1219,4 @@ async function boot() {
 await boot();
 let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(relayout, 120); });
 wide.addEventListener('change', relayout);
-window.__botzCarousel = { go, openStory, get active() { return active; }, get mode() { return gl ? 'webgl' : (reduced ? 'reduced' : 'css'); }, ready: true };
+window.__botzCarousel = { go, openStory, get active() { return active; }, get mode() { return gl ? 'webgl' : (reduced ? 'reduced' : 'css'); }, get editorialRequestCount() { return editorialRequestCount; }, get latestSlotId() { return LATEST_SLOT_ID; }, ready: true };

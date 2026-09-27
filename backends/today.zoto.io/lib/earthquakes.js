@@ -30,6 +30,8 @@ export async function fetchEarthquakesNear(lat, lon, radiusKm = 500) {
             place: f.properties?.place,
             time: f.properties?.time,
             distKm: Math.round(dist),
+            lat: flat,
+            lon: flon,
           };
         })
         .filter((e) => e.distKm <= radiusKm && e.mag >= 2.5)

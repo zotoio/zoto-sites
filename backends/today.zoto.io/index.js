@@ -12,6 +12,7 @@ import {
   demoEarthquakes,
   demoHolidays,
   demoIss,
+  demoIssTrack,
   demoLocation,
   demoMarine,
   demoNews,
@@ -37,7 +38,7 @@ import {
   locationFromIp,
 } from './lib/geocode.js';
 import { fetchHolidays } from './lib/holidays.js';
-import { fetchIssNow } from './lib/iss.js';
+import { fetchIssNow, fetchIssTrack } from './lib/iss.js';
 import { fetchMarine } from './lib/marine.js';
 import { fetchHackerNewsTop } from './lib/news.js';
 import { fetchNearbyTransit } from './lib/overpass.js';
@@ -45,6 +46,7 @@ import { fetchNearbyTrafficCameras } from './lib/traffic-cams.js';
 import { fetchWeather } from './lib/weather.js';
 import { fetchOnThisDay, fetchWikiNearby } from './lib/wiki.js';
 import { fetchNearbyWebcams } from './lib/webcams.js';
+import { getRadarPayload } from './lib/radar.js';
 
 dotenv.config();
 
@@ -165,9 +167,10 @@ app.get('/api/transit', async (req, res) => {
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
     return res.status(400).json({ error: 'lat and lon required' });
   }
+  const radiusM = Math.min(5000, Math.max(400, Number(req.query.radiusM) || 900));
   try {
-    const data = await fetchNearbyTransit(lat, lon);
-    return res.json(data);
+    const data = await fetchNearbyTransit(lat, lon, radiusM);
+    return res.json({ ...data, radiusM });
   } catch {
     return res.json({ source: 'overpass', stops: [] });
   }
@@ -257,6 +260,22 @@ app.get('/api/iss', async (req, res) => {
     return res.json(await fetchIssNow());
   } catch {
     return res.json(demoIss());
+  }
+});
+
+app.get('/api/radar', async (req, res) => {
+  res.set('Cache-Control', 'public, max-age=60');
+  const payload = await getRadarPayload();
+  return res.json(payload);
+});
+
+app.get('/api/iss/track', async (req, res) => {
+  const seconds = Math.min(5400, Math.max(60, Number(req.query.seconds) || 360));
+  if (isDemoRequest(req)) return res.json(demoIssTrack());
+  try {
+    return res.json(await fetchIssTrack(seconds));
+  } catch {
+    return res.json(demoIssTrack());
   }
 });
 

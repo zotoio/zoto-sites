@@ -234,10 +234,22 @@ export function demoIss() {
   };
 }
 
+export function demoIssTrack() {
+  const positions = Array.from({ length: 40 }, (_, i) => ({
+    lat: 20 + Math.sin(i / 5) * 35,
+    lon: -160 + i * 8,
+    timestamp: Date.now() - (40 - i) * 60000,
+  }));
+  return { source: 'demo', positions };
+}
+
 export function demoEarthquakes() {
   return {
     source: 'demo',
-    earthquakes: [{ mag: 2.8, place: 'Demo Bay Area', distKm: 42, time: Date.now() }],
+    earthquakes: [
+      { mag: 2.8, place: 'Demo Bay Area', distKm: 42, time: Date.now(), lat: 37.7, lon: -122.4 },
+      { mag: 3.1, place: 'Demo Coast', distKm: 88, time: Date.now(), lat: 37.2, lon: -121.9 },
+    ],
   };
 }
 
@@ -265,14 +277,21 @@ export function demoCommons() {
 export function demoBikes() {
   return {
     source: 'demo',
-    stations: [{ name: 'Demo Station A', freeBikes: 4, network: 'Demo Bikes' }],
+    stations: [
+      { name: 'Demo Station A', freeBikes: 4, network: 'Demo Bikes' },
+      { name: 'Demo Station B', freeBikes: 9, network: 'Demo Bikes' },
+      { name: 'Demo Station C', freeBikes: 2, network: 'Demo Bikes' },
+    ],
   };
 }
 
 export function demoChargers() {
   return {
     source: 'demo',
-    stations: [{ name: 'Demo EV Hub', amenity: 'charging_station' }],
+    stations: [
+      { name: 'Demo EV Hub', amenity: 'charging_station', lat: 37.78, lon: -122.42 },
+      { name: 'Demo Fuel Stop', amenity: 'fuel', lat: 37.76, lon: -122.39 },
+    ],
   };
 }
 

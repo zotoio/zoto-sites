@@ -64,9 +64,9 @@ export const WIDGET_CATALOG = {
     title: 'Transit',
     description: 'Nearby stops and lines',
     minW: 4,
-    minH: 4,
+    minH: 3,
     defaultW: 6,
-    defaultH: 6,
+    defaultH: 4,
   }),
   map: def({
     category: 'core',

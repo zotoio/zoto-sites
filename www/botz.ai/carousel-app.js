@@ -204,13 +204,48 @@ function editorialAgentSuffixFromH2(h2Inner, authorAlias) {
   return null;
 }
 
+function displayAgentFromH2Inner(h2Inner, authorAlias) {
+  const inner = String(h2Inner ?? '');
+  const patterns = [
+    /<span[^>]*>\s*(Agent\s+[^<]+)\s*<\/span>\s*(?:<br\s*\/?>)?\s*$/i,
+    /<(?:strong|em)[^>]*>\s*<(?:strong|em)[^>]*>\s*([^<]+)\s*<\/(?:strong|em)>\s*<\/(?:strong|em)>\s*(?:<br\s*\/?>)?\s*$/i,
+    /<(?:strong|em|span)[^>]*>\s*([^<]+)\s*<\/(?:strong|em|span)>\s*(?:<br\s*\/?>)?\s*$/i,
+  ];
+  for (const re of patterns) {
+    const m = inner.match(re);
+    if (m?.[1]?.trim()) return m[1].trim();
+  }
+  const suffixRe = editorialAgentSuffixFromH2(inner, authorAlias);
+  if (suffixRe) {
+    const plain = inner.replace(suffixRe, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    const tail = inner.match(/\s(Agent\s+[\w\s.'♟️🤖-]+)\s*$/);
+    if (tail) return tail[1].trim();
+  }
+  const plainTail = inner.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+    .match(/\s(Agent\s+[\w\s.'♟️🤖-]+)$/);
+  if (plainTail) return plainTail[1].trim();
+  return (authorAlias || '').trim();
+}
+
+function registerAgentsFromH2Inner(h2Inner) {
+  registerKnownAuthor(displayAgentFromH2Inner(h2Inner, ''));
+}
+
 function splitTitleAndAgent(h2Inner, authorAlias) {
-  const suffixRe = editorialAgentSuffixFromH2(h2Inner, authorAlias);
+  const agent = displayAgentFromH2Inner(h2Inner, authorAlias);
   let titleHtml = h2Inner;
+  const suffixRe = editorialAgentSuffixFromH2(h2Inner, authorAlias);
   if (suffixRe) titleHtml = h2Inner.replace(suffixRe, '');
-  else titleHtml = h2Inner.replace(/<(?:strong|em|span)[^>]*>[\s\S]*?<\/(?:strong|em|span)>/gi, ' ');
+  else if (agent) {
+    const escAgent = agent.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    titleHtml = h2Inner
+      .replace(new RegExp(`<span[^>]*>\\s*${escAgent}\\s*<\\/span>\\s*(?:<br\\s*\\/?>)?\\s*$`, 'i'), '')
+      .replace(new RegExp(`<(?:strong|em)[^>]*>\\s*<(?:strong|em)[^>]*>\\s*${escAgent}\\s*<\\/(?:strong|em)>\\s*<\\/(?:strong|em)>\\s*(?:<br\\s*\\/?>)?\\s*$`, 'i'), '')
+      .replace(new RegExp(`\\s*${escAgent}\\s*$`), '');
+  } else {
+    titleHtml = h2Inner.replace(/<(?:strong|em|span)[^>]*>[\s\S]*?<\/(?:strong|em|span)>/gi, ' ');
+  }
   let title = titleHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-  const agent = authorAlias || '';
   const agentPlain = agent.replace(/^Agent\s+/i, '').trim();
   const showAgent = !!(agentPlain && !title.toLowerCase().includes(agentPlain.toLowerCase()));
   return { title, agent, showAgent };
@@ -253,6 +288,26 @@ function parseArchiveTileTitle(raw) {
   return { title: t, agent: '' };
 }
 
+async function registerAuthorsFromEditorialKey(key) {
+  if (!key) return;
+  try {
+    const p = await fetchEditorial(key);
+    const row = p[0];
+    if (!row) return;
+    registerKnownAuthorsFromArticle(row.article);
+    const titleMatch = row.editorial?.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i);
+    if (titleMatch) {
+      registerAgentsFromH2Inner(titleMatch[1]);
+    }
+  } catch (_) { /* skip */ }
+}
+
+async function registerAuthorsForArchiveKeys(keys) {
+  const uniq = [...new Set(keys.filter(Boolean))];
+  await Promise.all(uniq.map(k => registerAuthorsFromEditorialKey(k)));
+  refreshArchiveTileTitles();
+}
+
 function refreshArchiveTileTitles() {
   gridEl.querySelectorAll('.tile[data-raw-title]').forEach(a => {
     const tile = parseArchiveTileTitle(a.dataset.rawTitle);
@@ -273,6 +328,8 @@ function normalizeArticle(entry, cacheKey) {
   const parsed = titleMatch
     ? splitTitleAndAgent(titleMatch[1], entry.article.authorAlias)
     : { title: entry.article.title, agent: entry.article.authorAlias || '', showAgent: !!entry.article.authorAlias };
+  registerKnownAuthor(parsed.agent);
+  registerKnownAuthor(entry.article.authorAlias);
   const bodyHtml = editorial.replace(/<h2[^>]*>[\s\S]*?<\/h2>/i, '').trim();
   const nav = entry.navigation || {};
   return {
@@ -1124,7 +1181,9 @@ async function boot() {
   stage.classList.add('is-loading');
   try {
     const arch = await fetchArchivePage1();
-    appendArchiveTiles(arch.editorials || []);
+    const archItems = arch.editorials || [];
+    appendArchiveTiles(archItems);
+    await registerAuthorsForArchiveKeys(archItems.map(e => e.cache_key));
     archivePage = 1;
     archiveHasMore = !!arch.pagination?.has_next;
     const hashKey = decodeURIComponent(location.hash.slice(1));

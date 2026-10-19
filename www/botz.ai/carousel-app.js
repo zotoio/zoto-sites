@@ -47,7 +47,7 @@ let showLatestSlot = false;
 let latestSlotResolved = false;
 let archivePagesLoaded = 0;
 const ARCHIVE_PAGE_SEARCH_CAP = 8;
-/** @type {Record<number, string[]>} */
+/** Keys of the first grid batch (newest stories); later batches are not kept here. */
 const archiveKeysByPage = {};
 
 const knownAuthorPlain = new Set();
@@ -67,11 +67,6 @@ function seedStaticAuthors() {
   STATIC_AUTHOR_SEED.forEach(registerKnownAuthor);
 }
 
-function rebuildArchiveKeysChrono(extraKeys = []) {
-  const fromPages = Object.values(archiveKeysByPage).flat();
-  archiveKeysChrono = [...new Set([...fromPages, ...extraKeys])].sort();
-}
-
 function authorSuffixAllowed(suffix) {
   if (!suffix) return false;
   if (STATIC_AUTHOR_SEED.includes(suffix)) return true;
@@ -85,15 +80,40 @@ function titleEndsWithBareAgent(title) {
   return /\bAgent\s*$/i.test(String(title ?? '').trim());
 }
 
-/** In-flight + settled JSON cache keyed by request URL (dedupes parallel fetches). */
+/** Small LRU map (Map insertion order = recency). `keep(k, v)` pins entries during a trim; onEvict releases them. */
+class Lru {
+  constructor(max, onEvict = null) { this.max = max; this.onEvict = onEvict; this.m = new Map(); }
+  get size() { return this.m.size; }
+  has(k) { return this.m.has(k); }
+  get(k) { if (!this.m.has(k)) return undefined; const v = this.m.get(k); this.m.delete(k); this.m.set(k, v); return v; }
+  peek(k) { return this.m.get(k); }
+  set(k, v, keep) { const old = this.m.get(k); this.m.delete(k); this.m.set(k, v); if (old !== undefined && old !== v) this.onEvict?.(k, old); this.trim(keep); return this; }
+  delete(k) { if (!this.m.has(k)) return false; const v = this.m.get(k); this.m.delete(k); this.onEvict?.(k, v); return true; }
+  trim(keep, max = this.max) {
+    if (this.m.size <= max) return;
+    for (const [k, v] of this.m) {
+      if (this.m.size <= max) break;
+      if (keep?.(k, v)) continue;
+      this.m.delete(k); this.onEvict?.(k, v);
+    }
+  }
+  keys() { return this.m.keys(); }
+  values() { return this.m.values(); }
+  entries() { return this.m.entries(); }
+  clear() { for (const [k, v] of [...this.m]) { this.m.delete(k); this.onEvict?.(k, v); } }
+}
+/** Give the browser a chance to paint / handle input between chunks of work (INP). */
+const yieldToMain = () => (globalThis.scheduler?.yield ? globalThis.scheduler.yield() : new Promise(r => setTimeout(r, 0)));
+const nextFrame = () => new Promise(r => requestAnimationFrame(() => r()));
+
+/** In-flight JSON requests keyed by URL (dedupes parallel fetches). Settled bodies live in the day store, not here. */
 const jsonFlight = new Map();
 
 function fetchJsonMemo(url, stubUrl) {
   if (!jsonFlight.has(url)) {
-    jsonFlight.set(url, fetchJsonWithLocalStub(url, stubUrl).catch(err => {
-      jsonFlight.delete(url);
-      throw err;
-    }));
+    const p = fetchJsonWithLocalStub(url, stubUrl);
+    jsonFlight.set(url, p);
+    p.then(() => jsonFlight.delete(url), () => jsonFlight.delete(url));
   }
   return jsonFlight.get(url);
 }
@@ -103,12 +123,12 @@ let active = 0;
 let offsets = [];
 let busy = false;
 let navQueue = 0;
-let archiveKeysChrono = [];
 window.__navLog = [];
 
 function logCenteredKey() {
   const id = FEAT[active]?.id || LATEST_SLOT_ID;
   window.__navLog.push(id);
+  if (window.__navLog.length > 400) window.__navLog.splice(0, window.__navLog.length - 200);   // bounded test log
   console.debug('[nav]', id);
 }
 let geom = { W: 0, H: 0, cx: 0, cy: 0, cardW: 0, cardH: 0, k: 1, sideW: 0, sideH: 0, floorY: 0, showSides: true };
@@ -144,9 +164,14 @@ let editorialRequestCount = 0;            // archive JSON requests issued (index
 const archiveUrlsSeen = new Set();
 let archiveIndex = null;                  // { total, days: [{ date, count }], start: number[], dayPos: Map }
 let archiveIndexFlight = null;
-const dayData = new Map();                // date -> day JSON
-const dayFlight = new Map();              // date -> Promise<day JSON | null>
-const storyEntries = new Map();           // cache key -> { article, editorial }
+const dayData = new Lru(Infinity);        // date -> day JSON; trimmed by story count (DAY_STORE_MAX_STORIES)
+const dayFlight = new Map();              // date -> Promise<day JSON | null> (in flight)
+const storyEntries = new Map();           // cache key -> { article, editorial } for the days held in dayData
+/** The store holds whole days, newest-used first, up to this many stories. Days around the carousel position and
+ *  the newest day are pinned; an evicted day is simply fetched again (past days are immutable and HTTP-cached). */
+const DAY_STORE_MAX_STORIES = Math.max(50, Number(params.get('daystore')) || 600);   // ?daystore= lowers it for tests
+let dayStoreStories = 0;
+const dayStoreStats = { evictedDays: 0 };
 
 function keyDate(key) {
   return /^(\d{4}-\d{2}-\d{2})-\d{2}(?:-\d{13})?$/.exec(key || '')?.[1] || null;
@@ -156,10 +181,39 @@ function archiveJson(url, stubUrl) {
   if (!archiveUrlsSeen.has(url)) { archiveUrlsSeen.add(url); editorialRequestCount++; }
   return fetchJsonMemo(url, stubUrl);
 }
+function dropDay(date, day) {
+  dayStoreStories -= day?.editorials?.length || 0;
+  for (const it of day?.editorials || []) if (it?.cache_key) storyEntries.delete(it.cache_key);
+  dayStoreStats.evictedDays++;
+}
+dayData.onEvict = dropDay;
+/** Dates that must stay in the store: the newest day, and the days around the carousel centre and buffer. */
+function pinnedDays() {
+  const pins = new Set();
+  if (archiveIndex?.days[0]) pins.add(archiveIndex.days[0].date);
+  if (archiveIndex && ringPos >= 0 && ringTotal) {
+    const reach = RING_KEEP + RING_PAGE_AHEAD;
+    for (let d = -reach; d <= reach; d++) { const r = ringWrap(ringPos + d); if (r < ringTotal) pins.add(ringDayDate(ringDayOf(r))); }
+  }
+  for (const a of FEAT) { const dt = keyDate(a.key || a.id); if (dt) pins.add(dt); }
+  return pins;
+}
+function trimDayStore() {
+  if (dayStoreStories <= DAY_STORE_MAX_STORIES) return;
+  const pins = pinnedDays();
+  for (const [date, day] of [...dayData.entries()]) {
+    if (dayStoreStories <= DAY_STORE_MAX_STORIES) break;
+    if (!pins.has(date)) dayData.delete(date);
+  }
+}
 function ingestDay(day) {
   if (!day?.date || !Array.isArray(day.editorials)) return null;
+  const old = dayData.peek(day.date);
+  if (old) { dayStoreStories -= old.editorials.length; dayData.m.delete(day.date); }
   dayData.set(day.date, day);
+  dayStoreStories += day.editorials.length;
   for (const it of day.editorials) if (it?.cache_key && it.entry) storyEntries.set(it.cache_key, it.entry);
+  trimDayStore();
   return day;
 }
 let latestFlight = null;
@@ -210,15 +264,24 @@ function dayIndexForOffset(d) {
 function loadDay(date) {
   if (dayData.has(date)) return Promise.resolve(dayData.get(date));
   if (!dayFlight.has(date)) {
-    dayFlight.set(date, ensureArchiveIndex().then(ix => {
+    const p = ensureArchiveIndex().then(ix => {
       const i = ix.dayPos.get(date);
       if (i == null) return null;   // no stories that day: nothing to fetch
       return archiveJson(`/archive/day/${date}?n=${ix.days[i].count}`, `/stubs/archive/day/${date}.json`).then(ingestDay);
-    }).catch(err => { dayFlight.delete(date); throw err; }));
+    });
+    dayFlight.set(date, p);
+    p.then(() => dayFlight.delete(date), () => dayFlight.delete(date));   // settled: the day lives in dayData
   }
   return dayFlight.get(date);
 }
-const dayKeysOf = date => (dayData.get(date)?.editorials || []).map(e => e.cache_key).filter(Boolean);
+const dayKeysMemo = new WeakMap();   // day object -> its cache keys (ringKeyAt runs in hot loops)
+function dayKeysOf(date) {
+  const day = dayData.peek(date);
+  if (!day) return [];
+  let keys = dayKeysMemo.get(day);
+  if (!keys) { keys = (day.editorials || []).map(e => e.cache_key).filter(Boolean); dayKeysMemo.set(day, keys); }
+  return keys;
+}
 
 /** [entry] for a story (the newest story when no key), straight from the shared day store. */
 async function fetchStoryPayload(cacheKey) {
@@ -410,8 +473,7 @@ async function loadArchivePageIntoGrid(page) {
     for (let i = gridNextDay, n = 0; i < ix.days.length && n < GRID_BATCH; i++) { dates.push(ix.days[i].date); n += ix.days[i].count; }
     const days = await Promise.all(dates.map(d => loadDay(d).catch(err => { console.warn(err); return null; })));
     const items = days.flatMap(d => d?.editorials || []);
-    archiveKeysByPage[page] = items.map(e => e.cache_key).filter(Boolean);
-    rebuildArchiveKeysChrono();
+    if (page === 1) archiveKeysByPage[1] = items.map(e => e.cache_key).filter(Boolean);
     appendArchiveTiles(items);
     refreshArchiveTileTitles();
     hideRepeatedFirstTile();
@@ -459,12 +521,11 @@ const RING_PAGE_AHEAD = 6;   // also fetch the archive page holding positions th
 const RING_KEEP = 12;        // loaded stories further than this from the centre are evicted
 const RING_CONCURRENCY = 4;  // parallel story prefetches
 let ringTotal = 0, ringReady = false, ringInitFlight = null;
-const ringStories = new Map();      // cache key -> { r, article, failed, promise }
+const ringStories = new Map();      // cache key -> { r, text, article, failed, promise } (bounded by RING_KEEP)
 let ringPos = -1;                   // chrono position of the centred story
 let wrapCrossed = false;            // seam cards stay skeletons until the user has flicked across the wrap point
 let ringQueue = [], ringInflight = 0, ringOpenSeq = 0;
-const sideTexCache = new Map();
-const ringStats = { storyLoads: 0, pageLoads: 0, evicted: 0, skeletonCentres: 0, fedFromGrid: 0 };
+const ringStats = { storyLoads: 0, pageLoads: 0, evicted: 0, skeletonCentres: 0, fedFromGrid: 0, centreFirstOpens: 0 };
 
 function ringLen() { return ringTotal + (showLatestSlot && globalLatestPayload?.[0] ? 1 : 0); }
 function ringWrap(r) { const n = ringLen(); return n ? ((r % n) + n) % n : 0; }
@@ -519,24 +580,19 @@ async function ringLocate(key) {
 }
 function loadStoryImage(a) {
   return new Promise(res => {
-    if (!a.img) { imgs[a.id] = null; res(); return; }
-    if (imgs[a.id]?.complete && imgs[a.id].src) { res(); return; }
-    const im = new Image();
+    if (!a.img) { imgs.set(a.id, null, keepImg); res(); return; }
+    const have = imgs.get(a.id);
+    if (have?.complete && have.src) { res(); return; }
     const done = () => { clearTimeout(t); res(); };
     const t = setTimeout(done, 4000);
-    im.onload = im.onerror = done; im.decoding = 'async'; im.src = a.img; imgs[a.id] = im;
+    imgs.set(a.id, loadTextureImage(a.img, done), keepImg);
   });
 }
-async function loadRingArticle(key) {
-  let a;
-  if (key === LATEST_SLOT_ID) a = normalizeLatestSlotArticle(globalLatestPayload[0]);
-  else {
-    const p = await fetchStoryPayload(key);   // from the shared day store (no per-story request)
-    if (!p[0]) throw new Error(`story ${key} unavailable`);
-    a = normalizeArticle(p[0], key);
-  }
-  await loadStoryImage(a);   // buffered = text + image, so a flick never lands on a half-drawn card
-  return a;
+async function loadRingText(key) {
+  if (key === LATEST_SLOT_ID) return normalizeLatestSlotArticle(globalLatestPayload[0]);
+  const p = await fetchStoryPayload(key);   // from the shared day store (no per-story request)
+  if (!p[0]) throw new Error(`story ${key} unavailable`);
+  return normalizeArticle(p[0], key);
 }
 function unavailableArticle(key) {
   return { id: key, title: 'Story unavailable', agent: '', showAgent: false, bodyHtml: '<p>This story could not be loaded. Try Older or Newer.</p>',
@@ -547,13 +603,29 @@ function ringEnsureStory(r) {
   if (!key) return Promise.resolve(null);
   let st = ringStories.get(key);
   if (st) { st.r = r; return st.promise; }
-  st = { r, article: null, failed: false, promise: null };
+  st = { r, text: null, article: null, failed: false, promise: null, textPromise: null };
   ringStories.set(key, st);
   ringStats.storyLoads++;
-  st.promise = loadRingArticle(key)
-    .then(a => { if (ringStories.get(key) === st) { st.article = a; ringStoryArrived(key); } return a; })
+  // text first (the centre card paints from it), then the image: side cards wait for both, so a flick never
+  // lands on a half-drawn side card
+  st.textPromise = loadRingText(key).then(a => { if (ringStories.get(key) === st) st.text = a; return a; });
+  st.promise = st.textPromise
+    .then(async a => { await loadStoryImage(a); return a; })
+    .then(a => {
+      if (ringStories.get(key) === st) { st.article = a; ringStoryArrived(key); if (FEAT[active] === a) centreImageArrived(a); }
+      return a;
+    })
     .catch(err => { console.warn(err); if (ringStories.get(key) === st) { st.failed = true; ringStoryArrived(key); } return null; });
+  st.textPromise.catch(() => {});
   return st.promise;
+}
+/** Resolves once the story at r has its text (or failed); does not wait for its image. */
+function ringEnsureText(r) {
+  const key = ringKeyAt(r);
+  if (!key) return Promise.resolve(null);
+  if (!ringStories.has(key)) ringEnsureStory(r);
+  const st = ringStories.get(key);
+  return st.textPromise.catch(() => null);
 }
 /** Rolling buffer: centre first, then +-1, +-2 ... +-RING_BUFFER (wrapping). Re-run on every move. */
 function ringSchedule() {
@@ -589,9 +661,9 @@ function ringEvict() {
   for (const [key, st] of ringStories) {
     if (ringDist(st.r, ringPos) <= RING_KEEP || FEAT.some(a => a.id === key)) continue;
     ringStories.delete(key);
-    // story data stays in storyEntries (cheap, shared with the grid); only the image and textures go
-    delete imgs[key];
-    for (const k of [...sideTexCache.keys()]) if (k.startsWith(key + '|')) sideTexCache.delete(k);
+    // the day store keeps (or evicts) the text on its own terms; the image and its GPU texture go now
+    imgs.delete(key);
+    gl?.evictStory(key);
     ringStats.evicted++;
   }
 }
@@ -606,7 +678,9 @@ function ringEntry(o) {
   const r = ringWrap(ringPos + o), key = ringKeyAt(r);
   const st = key ? ringStories.get(key) : null;
   const masked = o !== 0 && ringSeamMasked(o);
-  if (!masked && st?.article) { st.article.ringIndex = r; return st.article; }
+  // the centre shows as soon as its text is in (its <img> loads on its own); side cards wait for the image too
+  const ready = st?.article || (o === 0 ? st?.text : null);
+  if (!masked && ready) { ready.ringIndex = r; return ready; }
   if (!masked && st?.failed) { const u = unavailableArticle(key); u.ringIndex = r; return u; }
   return { id: key || `__pending__${r}`, key, placeholder: true, seam: masked, ringIndex: r, title: '', agent: '', img: '' };
 }
@@ -637,11 +711,25 @@ function ringRefresh() {
   }
   fixCardHeight({ sticky: true }); computeGeom(); layoutButtons(); updateReadMoreState();
   if (focusSide != null) (sideBtns[Number(focusSide)] && !sideBtns[Number(focusSide)].hidden ? sideBtns[Number(focusSide)] : cardEl.querySelector('.card-title'))?.focus?.();
-  if (gl) { gl.resize(); gl.setFrontTexture(snapFor(active)); gl.kick(); }
+  if (gl) {
+    gl.resize();
+    // only re-snapshot the flip front when the centred story or the card size changed (a finished flip already
+    // left the right front texture; side cards arriving do not change it)
+    if (centreChanged || gl.frontStale()) { gl.setFrontTexture(snapFor(active)); frontStale = false; }
+    gl.kick();
+  }
   markActiveTile();
 }
+let applyingWindow = false, arrivalsPending = false;
+/** Stories that landed while a move or a window build was in progress: refresh once it is done. */
+function flushRingArrivals() {
+  if (!arrivalsPending || busy || applyingWindow || mobileMode || ringPos < 0 || !FEAT.length) return;
+  arrivalsPending = false;
+  ringRefresh();
+}
 function ringStoryArrived(key) {
-  if (mobileMode || ringPos < 0 || !FEAT.length || busy) return;   // a move in progress re-centres when it lands
+  if (mobileMode || ringPos < 0 || !FEAT.length) return;
+  if (busy || applyingWindow) { arrivalsPending = true; return; }   // re-centred when the move/build finishes
   const i = FEAT.findIndex(a => a.placeholder && !a.seam && a.key === key);
   if (i < 0) return;
   ringRefresh();
@@ -662,11 +750,12 @@ async function ringMove(delta, fromHash = false, { instant = false } = {}) {
   const crossing = ringPos + delta >= n || ringPos + delta < 0;
   const key = ringKeyAt(newPos);
   const st = key ? ringStories.get(key) : null;
+  const ready = st?.article || st?.text;
   // intermediate steps of a fast flick don't fetch; the landing story is requested first (ringSchedule)
-  if (!st?.article && !st?.failed && navQueue === 0) { ringStats.skeletonCentres++; ringEnsureStory(newPos); }
+  if (!ready && !st?.failed && navQueue === 0) { ringStats.skeletonCentres++; ringEnsureStory(newPos); }
   const target = active + delta;
   if (target >= 0 && target < FEAT.length) {
-    if (FEAT[target].placeholder && st?.article) { st.article.ringIndex = newPos; FEAT[target] = st.article; }   // seam card becomes the centre
+    if (FEAT[target].placeholder && ready) { ready.ringIndex = newPos; FEAT[target] = ready; }   // seam/unbuffered card becomes the centre
     await goToIndex(target, fromHash, { instant });
     if (mobileMode || layoutIsStale(epoch)) return;
   } else if (!fromHash && key && key !== LATEST_SLOT_ID) history.pushState(null, '', '#' + key);
@@ -691,11 +780,13 @@ async function ringOpen(key, fromHash = false, { omitHash = false } = {}) {
   ringSchedule();
   const [L, R] = ringRadii(), days = new Set();
   for (let o = -L; o <= R; o++) { const rr = ringWrap(r + o); if (rr < ringTotal) days.add(ringDayOf(rr)); }
-  await Promise.all([...days].map(i => ringLoadDay(i).catch(() => [])));
-  const around = [];
-  for (let o = -L; o <= R; o++) if (o && !ringSeamMasked(o)) around.push(ringEnsureStory(ringWrap(r + o)));
-  await ringEnsureStory(r);
-  await Promise.race([Promise.all(around), wait(2500)]);
+  // only the centre's day is needed to paint; neighbours' days and stories (and every image) fill in afterwards
+  const centreDay = r < ringTotal ? ringDayOf(r) : null;
+  if (centreDay != null) await ringLoadDay(centreDay).catch(() => []);
+  for (const i of days) if (i !== centreDay) ringLoadDay(i).catch(() => []);
+  for (let o = -L; o <= R; o++) if (o && !ringSeamMasked(o)) ringEnsureStory(ringWrap(r + o));
+  await ringEnsureText(r);
+  ringStats.centreFirstOpens++;
   if (mobileMode || layoutIsStale(epoch) || seq !== ringOpenSeq) return;
   const w = buildRingWindow();
   await applyFeaturedState(w.feat, w.active, fromHash, { omitHash: omitHash || !key, epoch });
@@ -780,13 +871,15 @@ function tileBodyHTML(rawTitle, { author = '', generatedAt = '', publishedAt = '
   return `<div class="tile-title">${esc(tile.title)}</div>${meta}`;
 }
 
+/** Only legacy tiles (no `author` from the API) depend on the known-author list; others never change. */
 function refreshArchiveTileTitles() {
-  gridEl.querySelectorAll('.tile[data-raw-title]').forEach(a => {
+  gridEl.querySelectorAll('.tile[data-raw-title][data-author=""]').forEach(a => {
+    const html = tileBodyHTML(a.dataset.rawTitle, { author: '', generatedAt: a.dataset.generatedAt, publishedAt: a.dataset.publishedAt });
+    if (html === a._bodyHtml) return;
     const body = a.querySelector('.tile-body');
     if (!body) return;
-    body.innerHTML = tileBodyHTML(a.dataset.rawTitle, {
-      author: a.dataset.author, generatedAt: a.dataset.generatedAt, publishedAt: a.dataset.publishedAt,
-    });
+    a._bodyHtml = html;
+    body.innerHTML = html;
   });
 }
 
@@ -831,15 +924,106 @@ function normalizeLatestSlotArticle(entry) {
   return a;
 }
 
-/* ---------------- images ---------------- */
-const imgs = {};
+/* ---------------- images: resized WebP variants, PNG master as the fallback ----------------
+ * Story images are /cache/images/<name>.png. The server writes <name>-480w.webp, -768w.webp and -1024w.webp next to
+ * each PNG (older stories get them from a backfill), so the page derives the variant URLs from the PNG path:
+ * <picture> + srcset for the card, tiles and mobile view, and the 768 variant for WebGL textures. When a variant
+ * is missing (404), the <source> is dropped and the PNG loads instead. */
+const VARIANT_WIDTHS = [480, 768, 1024];
+const TEX_WIDTH = 768;
+const PNG_IMAGE_RE = /^(\/cache\/images\/[A-Za-z0-9][A-Za-z0-9._-]*)\.png$/;
+const variantMisses = new Lru(300);   // PNG bases whose variants 404'd this session: use the PNG directly
+const imageStats = { fallbacks: 0, texFallbacks: 0 };
+const imageSizes = {
+  card: '(max-width: 960px) calc(100vw - 64px), 430px',
+  tile: '(max-width: 760px) calc(100vw - 32px), 400px',
+  mobile: 'calc(100vw - 32px)',
+};
+function variantBase(png) {
+  const m = PNG_IMAGE_RE.exec(png || '');
+  return m && !variantMisses.has(m[1]) ? m[1] : null;
+}
+function variantUrl(png, w) { const b = variantBase(png); return b ? `${b}-${w}w.webp` : png; }
+function variantSrcset(png) { const b = variantBase(png); return b ? VARIANT_WIDTHS.map(w => `${b}-${w}w.webp ${w}w`).join(', ') : ''; }
+/** <picture> with the WebP srcset and the PNG <img> (also the fallback). `attrs` is trusted markup. */
+function pictureHTML(png, attrs, sizes) {
+  const img = `<img src="${esc(png)}" data-png="${esc(png)}" ${attrs}>`;
+  const srcset = variantSrcset(png);
+  return srcset ? `<picture><source type="image/webp" srcset="${esc(srcset)}" sizes="${sizes}">${img}</picture>` : img;
+}
+// a variant that is not there yet: fall back to the PNG (capture phase: image errors do not bubble)
+document.addEventListener('error', e => {
+  const im = e.target;
+  if (!(im instanceof HTMLImageElement) || !im.dataset.png || im.dataset.fellBack) return;
+  const png = im.dataset.png;
+  const pic = im.parentElement?.tagName === 'PICTURE' ? im.parentElement : null;
+  if (!pic && !/-\d+w\.webp$/.test(im.getAttribute('src') || '')) return;   // the PNG itself failed: nothing to fall back to
+  const base = PNG_IMAGE_RE.exec(png)?.[1];
+  if (base) variantMisses.set(base, true);
+  // every copy of this image on the page (card, tile, side card) switches to the PNG: one 404, not one per copy
+  for (const el of document.querySelectorAll(`img[data-png="${CSS.escape(png)}"]`)) {
+    if (el.dataset.fellBack) continue;
+    el.dataset.fellBack = '1';
+    if (el.parentElement?.tagName === 'PICTURE') el.parentElement.querySelectorAll('source').forEach(n => n.remove());
+    if (el.getAttribute('src') !== png) el.setAttribute('src', png);
+    else if (el === im) el.src = png;   // same attribute value: re-assign so the PNG request starts
+    imageStats.fallbacks++;
+  }
+}, true);
+/** Image for canvas/WebGL use: the 768 WebP, retried as the PNG when the variant is missing. */
+function loadTextureImage(png, done) {
+  const im = new Image();
+  im.decoding = 'async';
+  im.onload = () => done?.();
+  im.onerror = () => {
+    const want = new URL(png, location.href).href;
+    if (im.src !== want) {
+      const base = PNG_IMAGE_RE.exec(png)?.[1];
+      if (base) variantMisses.set(base, true);
+      imageStats.texFallbacks++;
+      im.src = png;
+    } else done?.();
+  };
+  im.src = variantUrl(png, TEX_WIDTH);
+  return im;
+}
+/** Decoded story images for snapshots/textures: bounded, the current carousel window is never evicted. */
+const IMG_CACHE_MAX = 40;
+const keepImg = id => ringStories.has(id) || FEAT.some(a => a.id === id);
+const imgs = new Lru(IMG_CACHE_MAX);
+/** Background image loads for the window (never awaited before the centre card paints). */
 function preloadImages() {
-  return Promise.all(FEAT.map(a => new Promise(res => {
-    if (a.placeholder) { res(); return; }
-    if (imgs[a.id]?.complete && imgs[a.id].src === a.img) { res(); return; }
-    if (!a.img) { imgs[a.id] = null; res(); return; }
-    const im = new Image(); im.onload = im.onerror = () => res(); im.src = a.img; imgs[a.id] = im;
-  })));
+  for (const a of FEAT) {
+    if (a.placeholder || !a.img) continue;
+    const have = imgs.get(a.id);
+    if (have?.complete && have.naturalWidth) continue;
+    if (have && !have.complete) continue;   // already loading
+    imgs.set(a.id, loadTextureImage(a.img, () => imageArrived(a)), keepImg);
+  }
+}
+/** A window image finished loading: refresh what was drawn without it (side textures, the flip front). */
+function imageArrived(a) {
+  if (FEAT[active] === a) centreImageArrived(a);
+  else if (FEAT.includes(a)) scheduleSideRefresh();
+}
+let sideRefreshQueued = false;
+function scheduleSideRefresh() {
+  if (sideRefreshQueued) return;
+  sideRefreshQueued = true;
+  requestAnimationFrame(() => { sideRefreshQueued = false; if (gl && !busy && !mobileMode) gl.rebuildSideMeshes(); });
+}
+let frontStale = false;
+function centreImageArrived(a) {
+  if (!gl || mobileMode || FEAT[active] !== a) return;
+  frontStale = true;
+  // re-snapshot the flip surface off the input path, when the main thread is idle
+  (window.requestIdleCallback || (f => setTimeout(f, 50)))(() => refreshFrontIfStale(), { timeout: 500 });
+}
+function refreshFrontIfStale() {
+  if (!frontStale || !gl || busy || mobileMode || FEAT[active]?.placeholder) return;
+  frontStale = false;
+  gl.setFrontTexture(snapFor(active));
+  gl.kick();
 }
 
 /* ---------------- DOM rendering ---------------- */
@@ -847,7 +1031,7 @@ const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '
 /** The desktop ring wraps, so Older/Newer are only disabled when there is a single story. */
 function canGoOlder() { return ringLen() > 1; }
 function canGoNewer() { return ringLen() > 1; }
-function cardHTML(a, i) {
+function cardHTML(a, i, { measure = false } = {}) {
   const n = ringLen() || FEAT.length, pos = (a.ringIndex ?? i);
   const olderLabel = pos === 0 ? 'Older story (wraps around to the newest)' : 'Older story';
   const newerLabel = pos === n - 1 ? 'Newer story (wraps around to the oldest)' : 'Newer story';
@@ -862,8 +1046,11 @@ function cardHTML(a, i) {
     <button type="button" data-snap="button" data-nav="1" ${canGoNewer(i) ? '' : 'disabled'} aria-label="${newerLabel}">Newer ›</button>
   </nav>`;
   if (a.placeholder) return `${head}<span class="sr-only">Loading story</span>${CARD_SKELETON_BODY}${foot}`;
-  const img = a.img
-    ? `<button type="button" class="card-img-btn" aria-haspopup="dialog" aria-label="Enlarge image${a.title ? `: ${esc(a.title)}` : ''}"><img class="card-img" data-snap="img" src="${esc(a.img)}" alt="" width="340" height="340"></button>`
+  // off-screen measuring/snapshot copies keep the same box but load nothing (snapshots draw the decoded texture image)
+  const img = a.img && measure
+    ? `<button type="button" class="card-img-btn" tabindex="-1"><img class="card-img" data-snap="img" alt="" width="340" height="340"></button>`
+    : a.img
+    ? `<button type="button" class="card-img-btn" aria-haspopup="dialog" aria-label="Enlarge image${a.title ? `: ${esc(a.title)}` : ''}">${pictureHTML(a.img, 'class="card-img" data-snap="img" alt="" width="340" height="340"', imageSizes.card)}</button>`
     : `<img class="card-img" data-snap="img" src="" alt="" width="340" height="340">`;
   return `${head}
   <div class="card-body">
@@ -901,7 +1088,7 @@ function cardMetaHTML(a) {
 function mobileArticleHTML(a) {
   return `
   <div class="card-body">
-    ${a.img ? `<img class="card-img" src="${esc(a.img)}" alt="" width="400" height="400">` : ''}
+    ${a.img ? pictureHTML(a.img, 'class="card-img" alt="" width="400" height="400"', imageSizes.mobile) : ''}
     <div class="card-text">
       <h2 class="card-title">${esc(a.title)}</h2>
       ${cardBylineHTML(a, false)}
@@ -916,7 +1103,7 @@ function renderCard(el, i) {
     clearArticleSkeletonState();
     if (FEAT[i].placeholder) el.setAttribute('aria-busy', 'true'); else el.removeAttribute('aria-busy');
   }
-  el.innerHTML = cardHTML(FEAT[i], i);
+  el.innerHTML = cardHTML(FEAT[i], i, { measure: el !== cardEl });
   el.dataset.id = FEAT[i].id;
   el.querySelectorAll('.card-paras p, .card-paras li').forEach(n => { n.dataset.snap = 'text'; });
   wireByline(el);
@@ -957,9 +1144,11 @@ function updateReadMoreState(el = cardEl) {
 }
 function sizeExpandedCard() {
   if (!readMoreExpanded()) return;
-  cardEl.style.setProperty('--card-top', cardSpacer.offsetTop + 'px');
+  // reads first, then writes (one layout)
+  const offTop = cardSpacer.offsetTop, spacerH = cardSpacer.offsetHeight;
   const top = Math.max(0, cardSpacer.getBoundingClientRect().top);
-  cardEl.style.maxHeight = Math.max(cardSpacer.offsetHeight, window.innerHeight - top - 16) + 'px';
+  cardEl.style.setProperty('--card-top', offTop + 'px');
+  cardEl.style.maxHeight = Math.max(spacerH, window.innerHeight - top - 16) + 'px';
 }
 function expandReadMore() {
   if (mobileMode || readMoreExpanded() || !cardEl.querySelector('.card-read-more')) return;
@@ -1001,27 +1190,39 @@ document.addEventListener('pointerdown', e => {
 });
 window.addEventListener('resize', () => sizeExpandedCard());
 
+const SIDE_SKEL_HTML = '<div class="skel side-skel-img"></div><div class="side-skel-txt"><div class="skel skel-line"></div><div class="skel skel-line skel-w60"></div></div>';
+/** Side cards: nodes are reused by story (a flick only re-orders them), listeners are delegated on the scene. */
 function rebuildSideButtons() {
-  scene.innerHTML = '';
+  const reuse = new Map();
+  for (const n of scene.children) if (n._storyId && !reuse.has(n._storyId)) reuse.set(n._storyId, n);
   sideBtns = FEAT.map((a, i) => {
     if (a.placeholder) {
       // not loaded yet, or across the wrap point while the latest story is centred: faint CSS skeleton card
       const d = document.createElement('div');
       d.className = 'side side-skel'; d.dataset.i = String(i); d.setAttribute('aria-hidden', 'true');
-      d.innerHTML = '<div class="skel side-skel-img"></div><div class="side-skel-txt"><div class="skel skel-line"></div><div class="skel skel-line skel-w60"></div></div>';
-      scene.appendChild(d);
+      d.innerHTML = SIDE_SKEL_HTML;
       return d;
     }
-    const b = document.createElement('button');
-    b.type = 'button'; b.className = 'side'; b.dataset.i = String(i);
-    b.innerHTML = `<img class="side-img" src="${esc(a.img)}" alt=""><span class="side-txt"><span class="side-t">${esc(a.title)}</span><span class="side-a">${esc(a.agent)}</span></span>`;
-    b.addEventListener('click', () => go(i));
-    b.addEventListener('focus', () => { gl && gl.setHighlight(i, 1); });
-    b.addEventListener('blur', () => { gl && gl.setHighlight(i, 0); });
-    scene.appendChild(b);
+    let b = reuse.get(a.id);
+    if (b && b._story === a) reuse.delete(a.id);
+    else {
+      b = document.createElement('button');
+      b.type = 'button'; b.className = 'side';
+      // the 768 WebP is the same URL the WebGL texture uses (one download); the PNG is the fallback
+      b.innerHTML = `<img class="side-img" src="${esc(variantUrl(a.img, TEX_WIDTH))}" data-png="${esc(a.img)}" alt="" decoding="async"><span class="side-txt"><span class="side-t">${esc(a.title)}</span><span class="side-a">${esc(a.agent)}</span></span>`;
+      b._storyId = a.id; b._story = a;
+    }
+    b.dataset.i = String(i);
     return b;
   });
+  scene.replaceChildren(...sideBtns);
 }
+scene.addEventListener('click', e => {
+  const b = e.target.closest?.('button.side[data-i]');
+  if (b && scene.contains(b)) go(Number(b.dataset.i));
+});
+scene.addEventListener('focusin', e => { const b = e.target.closest?.('button.side[data-i]'); if (b) gl?.setHighlight(Number(b.dataset.i), 1); });
+scene.addEventListener('focusout', e => { const b = e.target.closest?.('button.side[data-i]'); if (b) gl?.setHighlight(Number(b.dataset.i), 0); });
 
 /* ---------------- browse grid (archive) ---------------- */
 /* ---------------- skeleton placeholders (pure CSS shimmer; JS only inserts/removes the markup) ---------------- */
@@ -1077,11 +1278,14 @@ function removeTileSkeletons() {
   gridEl.removeAttribute('aria-busy');
 }
 
+const tileIds = new Set();
 function appendArchiveTiles(items) {
   // during first load the static skeleton row stays until the top story is known (see revealGrid)
   if (!browseEl?.classList.contains('awaiting-top')) removeTileSkeletons();
+  const frag = document.createDocumentFragment();
   items.forEach(editorial => {
-    if (gridEl.querySelector(`[data-id="${editorial.cache_key}"]`)) return;
+    if (!editorial?.cache_key || tileIds.has(editorial.cache_key)) return;
+    tileIds.add(editorial.cache_key);
     const a = document.createElement('a');
     a.className = 'tile';
     a.href = `#${editorial.cache_key}`;
@@ -1090,15 +1294,20 @@ function appendArchiveTiles(items) {
     a.dataset.author = editorial.author || '';
     a.dataset.generatedAt = editorial.generated_at || '';
     a.dataset.publishedAt = editorial.published_at || '';
-    a.innerHTML = `<img src="${esc(editorial.image_url)}" alt="" loading="lazy" width="400" height="400">
-      <div class="tile-body">${tileBodyHTML(a.dataset.rawTitle, { author: a.dataset.author, generatedAt: a.dataset.generatedAt, publishedAt: a.dataset.publishedAt })}</div>`;
-    a.addEventListener('click', e => {
-      e.preventDefault();
-      openStory(editorial.cache_key, false);
-    });
-    gridEl.appendChild(a);
+    const body = tileBodyHTML(a.dataset.rawTitle, { author: a.dataset.author, generatedAt: a.dataset.generatedAt, publishedAt: a.dataset.publishedAt });
+    a._bodyHtml = body;
+    a.innerHTML = `${pictureHTML(editorial.image_url || '', 'alt="" loading="lazy" decoding="async" width="400" height="400"', imageSizes.tile)}
+      <div class="tile-body">${body}</div>`;
+    frag.appendChild(a);
   });
+  gridEl.appendChild(frag);   // one DOM write per batch
 }
+gridEl.addEventListener('click', e => {
+  const a = e.target.closest?.('a.tile[data-id]');
+  if (!a) return;
+  e.preventDefault();
+  openStory(a.dataset.id, false);
+});
 async function fetchArchive(page) {
   if (archiveLoading || !archiveHasMore) return;
   showTileSkeletons(tileSkeletonCount());
@@ -1108,12 +1317,23 @@ async function fetchArchive(page) {
     removeTileSkeletons();
   }
 }
-function isBottomOfPage() {
-  return (window.innerHeight + window.scrollY) >= document.body.offsetHeight - 700;
+/* infinite scroll: a sentinel under the grid, watched by an IntersectionObserver (no layout reads on scroll) */
+const gridSentinel = document.createElement('div');
+gridSentinel.className = 'grid-sentinel';
+gridSentinel.setAttribute('aria-hidden', 'true');
+gridEl.after(gridSentinel);
+let sentinelVisible = false;
+const sentinelIO = new IntersectionObserver(entries => {
+  sentinelVisible = entries[entries.length - 1].isIntersecting;
+  if (sentinelVisible) loadMoreIfNeeded();
+}, { rootMargin: '0px 0px 700px 0px' });
+sentinelIO.observe(gridSentinel);
+async function loadMoreIfNeeded() {
+  if (archiveLoading || !archiveHasMore || !sentinelVisible) return;
+  await fetchArchive(archivePage + 1);
+  // still in view after the batch landed (tall screens): observe again, which reports the current state
+  sentinelIO.unobserve(gridSentinel); sentinelIO.observe(gridSentinel);
 }
-window.addEventListener('scroll', () => {
-  if (isBottomOfPage() && !archiveLoading && archiveHasMore) fetchArchive(archivePage + 1);
-});
 function updateEndMarker() {
   if (!endMarker) return;
   const atNewest = ringPos >= 0 && ringPos === ringLen() - 1 && FEAT[active]?.id === LATEST_SLOT_ID;
@@ -1124,9 +1344,11 @@ function updateEndMarker() {
   endMarker.setAttribute('role', atNewest ? 'button' : 'presentation');
   endMarker.tabIndex = atNewest ? 0 : -1;
 }
+let activeTileEl = null;
 function markActiveTile() {
   const cur = FEAT[active];
-  document.querySelectorAll('.tile').forEach(t => t.classList.toggle('is-active', t.dataset.id === cur?.id));
+  const t = cur?.id ? gridEl.querySelector(`.tile[data-id="${CSS.escape(cur.id)}"]`) : null;
+  if (t !== activeTileEl) { activeTileEl?.classList.remove('is-active'); t?.classList.add('is-active'); activeTileEl = t; }
   hideRepeatedFirstTile();
 }
 /** The newest archive tile usually repeats the story shown at the top; hide it while that story is showing. */
@@ -1213,12 +1435,16 @@ function layoutButtons() {
     const vis = g.showSides && a > 0.5 && a < 3.5 && L.alpha > 0.02;
     if (b.hidden === vis) b.hidden = !vis;
     if (!vis) return;
-    b.style.width = g.sideW + 'px'; b.style.height = g.sideH + 'px';
-    b.style.left = g.cx + 'px'; b.style.top = g.cy + 'px';
-    b.style.margin = `${-g.sideH / 2}px 0 0 ${-g.sideW / 2}px`;
-    b.style.setProperty('--sw', g.sideW + 'px');
-    b.style.setProperty('--fs1', (g.sideW * 0.058) + 'px');
-    b.style.setProperty('--fs2', (g.sideW * 0.044) + 'px');
+    const sig = `${g.sideW}|${g.sideH}|${g.cx}|${g.cy}`;
+    if (b._sig !== sig) {   // size/anchor only change on resize: per-frame updates below are transform/opacity only
+      b._sig = sig;
+      b.style.width = g.sideW + 'px'; b.style.height = g.sideH + 'px';
+      b.style.left = g.cx + 'px'; b.style.top = g.cy + 'px';
+      b.style.margin = `${-g.sideH / 2}px 0 0 ${-g.sideW / 2}px`;
+      b.style.setProperty('--sw', g.sideW + 'px');
+      b.style.setProperty('--fs1', (g.sideW * 0.058) + 'px');
+      b.style.setProperty('--fs2', (g.sideW * 0.044) + 'px');
+    }
     // CSS y is down; rotateY sign matches three.js rotation.y
     b.style.transform = `translate3d(${L.x}px, ${-L.y}px, ${L.z}px) rotateY(${L.rot}deg) scale(${L.S})`;
     b.style.zIndex = String(100 - Math.round(a * 10));
@@ -1226,13 +1452,16 @@ function layoutButtons() {
     b.style.opacity = gl ? '' : String(L.alpha);
     b.style.filter = gl ? '' : `brightness(${L.dim})`;
     const rel = o < 0 ? 'Older' : 'Newer';
-    b.setAttribute('aria-label', `${rel} story (${Math.round(a)} ${Math.round(a) === 1 ? 'step' : 'steps'} away): ${FEAT[i].title} — ${FEAT[i].agent}`);
+    const label = `${rel} story (${Math.round(a)} ${Math.round(a) === 1 ? 'step' : 'steps'} away): ${FEAT[i].title} — ${FEAT[i].agent}`;
+    if (b._label !== label) { b._label = label; b.setAttribute('aria-label', label); }
   });
   updateEndMarker();
 }
 
 /* ---------------- card snapshot -> canvas (texture for the WebGL flip surface) ---------------- */
+const snapStats = { count: 0 };
 function snapshot(el, i, dpr = 1.5) {
+  snapStats.count++;
   const a = FEAT[i], r0 = el.getBoundingClientRect();
   const w = Math.round(r0.width), h = Math.round(Math.max(r0.height, geom.cardH || r0.height));
   const cv = document.createElement('canvas'); cv.width = w * dpr; cv.height = h * dpr;
@@ -1271,7 +1500,7 @@ function snapshot(el, i, dpr = 1.5) {
       ctx.restore(); return;
     }
     if (kind === 'img') {
-      const im = imgs[a.id]; ctx.save(); rr(ctx, x, y, r.width, r.height, 10); ctx.clip();
+      const im = imgs.peek(a.id); ctx.save(); rr(ctx, x, y, r.width, r.height, 10); ctx.clip();
       ctx.fillStyle = '#1a1d1b'; ctx.fillRect(x, y, r.width, r.height);
       if (im && im.naturalWidth) ctx.drawImage(im, x, y, r.width, r.height); ctx.restore(); return;
     }
@@ -1304,17 +1533,20 @@ function wrap(ctx, text, maxW) {
 }
 function rr(ctx, x, y, w, h, r) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
 
+/** Cache key of a side card's texture: story, whether its image was drawn, and the title. */
+function sideTextureKey(i) {
+  const a = FEAT[i];
+  return a.placeholder ? '' : `${a.id}|${imgs.peek(a.id)?.naturalWidth ? 1 : 0}|${a.title}`;
+}
+/** Draws a side card (image + title + agent) into a new 512x704 canvas; WebGL caches the uploaded texture by key. */
 function sideTexture(i) {
   const a = FEAT[i];
   if (a.placeholder) { const blank = document.createElement('canvas'); blank.width = blank.height = 2; return blank; }
-  const ck = `${a.id}|${imgs[a.id]?.naturalWidth ? 1 : 0}|${a.title}`;
-  if (sideTexCache.has(ck)) return sideTexCache.get(ck);
   const W = 512, H = 704, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
-  sideTexCache.set(ck, cv);
   const ctx = cv.getContext('2d');
   ctx.save(); rr(ctx, 0, 0, W, H, 22); ctx.clip();
   ctx.fillStyle = '#101311'; ctx.fillRect(0, 0, W, H);
-  const im = imgs[a.id]; if (im && im.naturalWidth) ctx.drawImage(im, 0, 0, W, W);
+  const im = imgs.peek(a.id); if (im && im.naturalWidth) ctx.drawImage(im, 0, 0, W, W);
   const g = ctx.createLinearGradient(0, W - 60, 0, W); g.addColorStop(0, 'rgba(16,19,17,0)'); g.addColorStop(1, 'rgba(16,19,17,.9)');
   ctx.fillStyle = g; ctx.fillRect(0, W - 60, W, 60);
   ctx.fillStyle = '#eef1ee'; ctx.font = 'bold 31px Arial, sans-serif'; ctx.textBaseline = 'top';
@@ -1327,24 +1559,38 @@ function sideTexture(i) {
   return cv;
 }
 
-/* ---------------- WebGL renderer ---------------- */
+/* ---------------- WebGL renderer ----------------
+ * One renderer for the life of the page (created on first desktop use, kept across story opens and layout changes).
+ * GPU resources are bounded: side-card textures are cached by story in a small LRU and disposed on eviction, the
+ * side materials are a fixed pool that only swaps textures, and the flip surface owns exactly two textures (front
+ * and back) at any time. The render loop only runs while something moves; it stops when idle, when the tab is
+ * hidden, or when the stage is scrolled out of view. */
 let gl = null;
+let glFlight = null;
+const glStats = { renderersCreated: 0 };
+function ensureGL() {
+  if (reduced || params.get('mode') === 'css') return Promise.resolve(null);
+  if (!glFlight) glFlight = initGL().then(g => { if (!g) glFlight = null; return g; });
+  return glFlight;
+}
 async function initGL() {
-  if (reduced || params.get('mode') === 'css') return null;
   let THREE;
   try { THREE = await import('./vendor/three.module.min.js'); } catch (e) { console.warn('three.js failed', e); return null; }
   let renderer;
   try {
     renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, premultipliedAlpha: false });
   } catch (e) { console.warn('WebGL unavailable, CSS fallback', e); return null; }
+  glStats.renderersCreated++;
   renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 1.5));
   renderer.setClearColor(0x000000, 0);
   const s3 = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(30, 1, 10, 20000);
   const sideGroup = new THREE.Group(); s3.add(sideGroup);
   const maxAniso = renderer.capabilities.getMaxAnisotropy();
+  const texStats = { created: 0, disposed: 0, sideHits: 0, sideMisses: 0, frames: 0 };
   const mkTex = cv => { const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.NoColorSpace; t.anisotropy = maxAniso;
-    t.minFilter = THREE.LinearMipmapLinearFilter; t.generateMipmaps = true; return t; };
+    t.minFilter = THREE.LinearMipmapLinearFilter; t.generateMipmaps = true; texStats.created++; return t; };
+  const disposeTex = t => { if (t && !t.__disposed) { t.__disposed = true; t.dispose(); texStats.disposed++; } };
 
   const reflectVS = `
     uniform float uReflect, uFloorY, uReflLen;
@@ -1374,16 +1620,36 @@ async function initGL() {
     }`;
   const common = () => ({ uReflect: { value: 0 }, uFloorY: { value: 0 }, uReflLen: { value: 260 } });
   const plane = new THREE.PlaneGeometry(1, 1);
-  const sides = FEAT.map((a, i) => {
-    const tex = mkTex(sideTexture(i));
-    const mk = refl => {
-      const m = new THREE.ShaderMaterial({ vertexShader: sideVS, fragmentShader: sideFS, transparent: true, side: THREE.DoubleSide, depthWrite: !refl,
-        uniforms: { ...common(), uTex: { value: tex }, uDim: { value: 1 }, uAlpha: { value: 1 }, uBias: { value: 0 }, uHi: { value: 0 } } });
-      m.uniforms.uReflect.value = refl ? 1 : 0;
-      const mesh = new THREE.Mesh(plane, m); mesh.frustumCulled = false; sideGroup.add(mesh); return mesh;
-    };
-    return { main: mk(false), refl: mk(true), hi: 0, hiT: 0 };
-  });
+  const blank = mkTex(document.createElement('canvas'));
+  // side-card textures by sideTextureKey(); in-use textures are never evicted, evicted ones are disposed
+  const SIDE_TEX_MAX = 24;
+  const inUse = new Set();
+  const sideTex = new Lru(SIDE_TEX_MAX, (k, t) => disposeTex(t));
+  const keepSide = k => inUse.has(k);
+  function sideTextureFor(i) {
+    const k = sideTextureKey(i);
+    if (!k) return { k, tex: blank };
+    let t = sideTex.get(k);
+    if (t) texStats.sideHits++;
+    else { t = mkTex(sideTexture(i)); texStats.sideMisses++; sideTex.set(k, t, keepSide); }
+    return { k, tex: t };
+  }
+  const pool = [];   // side mesh pairs, reused across rebuilds (materials are never recreated)
+  const sides = [];
+  function sideSlot(j) {
+    if (!pool[j]) {
+      const mk = refl => {
+        const m = new THREE.ShaderMaterial({ vertexShader: sideVS, fragmentShader: sideFS, transparent: true, side: THREE.DoubleSide, depthWrite: !refl,
+          uniforms: { ...common(), uTex: { value: blank }, uDim: { value: 1 }, uAlpha: { value: 1 }, uBias: { value: 0 }, uHi: { value: 0 } } });
+        m.uniforms.uReflect.value = refl ? 1 : 0;
+        const mesh = new THREE.Mesh(plane, m); mesh.frustumCulled = false; mesh.visible = false; sideGroup.add(mesh); return mesh;
+      };
+      pool[j] = { main: mk(false), refl: mk(true), hi: 0, hiT: 0, key: '' };
+      const fu = flip.material.uniforms;   // same floor/reflection as the meshes resize() already set up
+      [pool[j].main, pool[j].refl].forEach(m => { m.material.uniforms.uFloorY.value = fu.uFloorY.value; m.material.uniforms.uReflLen.value = fu.uReflLen.value; });
+    }
+    return pool[j];
+  }
 
   // --- centre flip surface: bent plane, front = current article, back = destination ---
   const flipVS = reflectVS + `
@@ -1420,7 +1686,6 @@ async function initGL() {
       gl_FragColor = vec4(c.rgb, a);
     }`;
   const flipGeo = new THREE.PlaneGeometry(1, 1, 80, 1);
-  const blank = mkTex(document.createElement('canvas'));
   const mkFlip = refl => {
     const m = new THREE.ShaderMaterial({ vertexShader: flipVS, fragmentShader: flipFS, transparent: true, side: THREE.DoubleSide, depthWrite: !refl,
       uniforms: { ...common(), uFront: { value: blank }, uBack: { value: blank }, uSize: { value: new THREE.Vector2(1, 1) },
@@ -1441,13 +1706,17 @@ async function initGL() {
   floor.rotation.x = -Math.PI / 2; floor.renderOrder = -10; s3.add(floor);
 
   let frontSnap = null, needs = true, mouse = { x: 0, y: 0, tx: 0, ty: 0 };
-  function setFrontTexture(snap) {
+  /** The flip surface's front: a new snapshot texture (or the finished flip's back texture); the old front is freed. */
+  function setFrontTexture(snap, tex = null) {
     const old = flip.material.uniforms.uFront.value;
-    const t = mkTex(snap.canvas);
+    const t = tex || mkTex(snap.canvas);
     [flip, flipRefl].forEach(m => { m.material.uniforms.uFront.value = t; m.material.uniforms.uSize.value.set(snap.w, snap.h); });
-    if (old !== blank && old !== flip.material.uniforms.uBack.value) old.dispose();
+    if (old !== blank && old !== t) disposeTex(old);
     frontSnap = snap;
+    frontKey = snapKey();
   }
+  let frontKey = '';
+  const snapKey = () => `${FEAT[active]?.id}|${FEAT[active]?.placeholder ? 1 : 0}|${geom.cardW}|${geom.cardH}`;
   function resize() {
     const g = geom, pr = renderer.getPixelRatio();
     renderer.setSize(g.W, g.H, false);
@@ -1457,13 +1726,14 @@ async function initGL() {
     camera.setViewOffset(fullW, fullH, fullW / 2 - g.cx, fullH / 2 - g.cy, g.W, g.H);
     camera.updateProjectionMatrix();
     floor.scale.set(g.W * 1.6, 2400, 1); floor.position.set(0, g.floorY, -1200 + 1);
-    const all = [...sides.flatMap(s => [s.main, s.refl]), flip, flipRefl];
+    const all = [...pool.flatMap(s => [s.main, s.refl]), flip, flipRefl];
     all.forEach(m => { m.material.uniforms.uFloorY.value = g.floorY; m.material.uniforms.uReflLen.value = Math.min(240, g.H - g.cy - g.cardH / 2 - 20); });
     [flip, flipRefl].forEach(m => { m.material.uniforms.uTopY.value = g.cardH / 2; });
     needs = true;
   }
   function update() {
     const g = geom;
+    texStats.frames++;
     sides.forEach((s, i) => {
       const L = slot(offsets[i]), vis = g.showSides && !FEAT[i]?.placeholder && L.alpha > 0.004 && Math.abs(offsets[i]) > 0.02;
       s.hi += (s.hiT - s.hi) * 0.25;
@@ -1481,58 +1751,113 @@ async function initGL() {
     sideGroup.position.x = mouse.x * -14;
     renderer.render(s3, camera);
   }
-  let raf = 0;
+  // render loop: one frame per kick, more only while something is still easing; never while hidden/off-screen
+  let raf = 0, hidden = document.visibilityState === 'hidden', offscreen = false, contextLost = false, suspended = false;
+  const loopStats = { starts: 0, stops: 0, running: false };
   function loop() {
-    raf = 0; update();
-    const moving = Math.abs(mouse.tx - mouse.x) > 0.001 || Math.abs(mouse.ty - mouse.y) > 0.001 || busy || sides.some(s => Math.abs(s.hiT - s.hi) > 0.01);
-    if (moving || needs) { needs = false; kick(); }
+    raf = 0;
+    if (hidden || offscreen || contextLost || suspended) { loopStats.running = false; loopStats.stops++; return; }
+    update();
+    const moving = Math.abs(mouse.tx - mouse.x) > 0.001 || Math.abs(mouse.ty - mouse.y) > 0.001 || sides.some(s => Math.abs(s.hiT - s.hi) > 0.01);
+    if (moving || needs) { needs = false; raf = requestAnimationFrame(loop); }
+    else { loopStats.running = false; loopStats.stops++; }   // idle: no frames until the next kick
   }
-  function kick() { if (!raf) raf = requestAnimationFrame(loop); }
+  function kick() {
+    if (raf) return;
+    if (hidden || offscreen || contextLost || suspended) { needs = true; return; }   // drawn once it is visible again
+    if (!loopStats.running) { loopStats.running = true; loopStats.starts++; }
+    raf = requestAnimationFrame(loop);
+  }
+  function halt() { if (raf) { cancelAnimationFrame(raf); raf = 0; } if (loopStats.running) { loopStats.running = false; loopStats.stops++; } needs = true; }
+  let pmQueued = false, pmX = 0, pmY = 0;
   stage.addEventListener('pointermove', e => {
-    const r = stage.getBoundingClientRect();
-    mouse.tx = ((e.clientX - r.left) / r.width - 0.5) * 2; mouse.ty = ((e.clientY - r.top) / r.height - 0.5) * 2; kick();
-  });
+    pmX = e.clientX; pmY = e.clientY;
+    if (pmQueued) return;
+    pmQueued = true;
+    requestAnimationFrame(() => {   // one stage rect read per frame, not per pointer event
+      pmQueued = false;
+      const r = stage.getBoundingClientRect();
+      mouse.tx = ((pmX - r.left) / r.width - 0.5) * 2; mouse.ty = ((pmY - r.top) / r.height - 0.5) * 2; kick();
+    });
+  }, { passive: true });
   stage.addEventListener('pointerleave', () => { mouse.tx = 0; mouse.ty = 0; kick(); });
+  document.addEventListener('visibilitychange', () => {
+    hidden = document.visibilityState === 'hidden';
+    if (hidden) halt(); else kick();
+  });
+  const stageIO = new IntersectionObserver(entries => {
+    offscreen = !entries[entries.length - 1].isIntersecting;
+    if (offscreen) halt(); else kick();
+  });
+  stageIO.observe(stage);
+  canvas.addEventListener('webglcontextlost', e => { e.preventDefault(); contextLost = true; halt(); });
+  canvas.addEventListener('webglcontextrestored', () => { contextLost = false; needs = true; kick(); });
+  function bindSides() {
+    // point the mesh pool at the current window's textures; textures that dropped out stay cached (LRU)
+    sides.length = 0;
+    inUse.clear();
+    FEAT.forEach((a, i) => {
+      const s = sideSlot(i), { k, tex } = sideTextureFor(i);
+      if (k) inUse.add(k);
+      s.key = k; s.hi = 0; s.hiT = 0;
+      [s.main, s.refl].forEach(m => { m.material.uniforms.uTex.value = tex; });
+      sides.push(s);
+    });
+    for (let j = FEAT.length; j < pool.length; j++) {
+      [pool[j].main, pool[j].refl].forEach(m => { m.visible = false; m.material.uniforms.uTex.value = blank; });
+      pool[j].key = '';
+    }
+    sideTex.trim(keepSide);
+  }
 
   return {
     resize, kick, setFrontTexture,
+    /** True when the flip front no longer matches the centred story or the card size. */
+    frontStale() { return !frontSnap || frontKey !== snapKey(); },
     setHighlight(i, v) { if (sides[i]) { sides[i].hiT = v; kick(); } },
-    rebuildSideMeshes() {
-      sides.forEach(s => {
-        [s.main, s.refl].forEach(m => {
-          m.material.uniforms.uTex.value.dispose();
-          m.material.dispose();
-          sideGroup.remove(m);
-        });
-      });
+    rebuildSideMeshes() { bindSides(); needs = true; kick(); },
+    /** A story left the carousel buffer: drop its cached side textures (unless on screen). */
+    evictStory(id) { for (const k of [...sideTex.keys()]) if (k.startsWith(id + '|') && !inUse.has(k)) sideTex.delete(k); },
+    /** Small screens: keep the renderer, free the textures and stop drawing. */
+    suspend() {
+      suspended = true; halt();
+      inUse.clear();
+      for (const s of pool) [s.main, s.refl].forEach(m => { m.visible = false; m.material.uniforms.uTex.value = blank; });
       sides.length = 0;
-      FEAT.forEach((a, i) => {
-        const tex = mkTex(sideTexture(i));
-        const mk = refl => {
-          const m = new THREE.ShaderMaterial({ vertexShader: sideVS, fragmentShader: sideFS, transparent: true, side: THREE.DoubleSide, depthWrite: !refl,
-            uniforms: { ...common(), uTex: { value: tex }, uDim: { value: 1 }, uAlpha: { value: 1 }, uBias: { value: 0 }, uHi: { value: 0 } } });
-          m.uniforms.uReflect.value = refl ? 1 : 0;
-          const mesh = new THREE.Mesh(plane, m); mesh.frustumCulled = false; sideGroup.add(mesh); return mesh;
-        };
-        sides.push({ main: mk(false), refl: mk(true), hi: 0, hiT: 0 });
-      });
-      kick();
+      sideTex.clear();
+      const front = flip.material.uniforms.uFront.value, back = flip.material.uniforms.uBack.value;
+      [flip, flipRefl].forEach(m => { m.material.uniforms.uFront.value = blank; m.material.uniforms.uBack.value = blank; });
+      if (front !== blank) disposeTex(front);
+      if (back !== blank && back !== front) disposeTex(back);
+      frontSnap = null; frontKey = '';
+      renderer.clear();
+    },
+    resume() { suspended = false; needs = true; },
+    stats() {
+      const info = renderer.info;
+      return { textures: info.memory.textures, geometries: info.memory.geometries, programs: info.programs?.length ?? null,
+        sideTexturesCached: sideTex.size, sideTexturesInUse: inUse.size, sideMeshPool: pool.length, ...texStats,
+        loop: { ...loopStats, hidden, offscreen, suspended, contextLost, rafPending: !!raf } };
     },
     dispose() {
-      cancelAnimationFrame(raf);
-      sides.forEach(s => {
-        [s.main, s.refl].forEach(m => {
-          m.material.uniforms.uTex.value.dispose();
-          m.material.dispose();
-          m.geometry.dispose();
-        });
-      });
-      [flip, flipRefl].forEach(m => { m.material.dispose(); m.geometry.dispose(); });
+      halt();
+      stageIO.disconnect();
+      sideTex.clear();
+      for (const s of pool) [s.main, s.refl].forEach(m => { m.material.dispose(); sideGroup.remove(m); });
+      plane.dispose();
+      const front = flip.material.uniforms.uFront.value, back = flip.material.uniforms.uBack.value;
+      if (front !== blank) disposeTex(front);
+      if (back !== blank && back !== front) disposeTex(back);
+      disposeTex(blank);
+      [flip, flipRefl].forEach(m => m.material.dispose());
+      flipGeo.dispose();
       floor.geometry.dispose(); floor.material.dispose();
       renderer.dispose();
     },
     // flip from current card to card `to`; returns promise resolved at the end
     flipTo(to, dir, backSnap, onProgress) {
+      const prevBack = flip.material.uniforms.uBack.value;
+      if (prevBack !== blank && prevBack !== flip.material.uniforms.uFront.value) disposeTex(prevBack);   // an interrupted flip's back
       const back = mkTex(backSnap.canvas);
       [flip, flipRefl].forEach(m => { const u = m.material.uniforms; u.uBack.value = back; u.uDir.value = dir; u.uProg.value = 0;
         u.uSize.value.set(Math.max(frontSnap.w, backSnap.w), Math.max(frontSnap.h, backSnap.h)); });
@@ -1553,8 +1878,10 @@ async function initGL() {
     },
     endFlip(backSnap) {
       flip.visible = false;
-      [flip, flipRefl].forEach(m => m.material.uniforms.uProg.value = 0);
-      setFrontTexture(backSnap); kick();
+      const back = flip.material.uniforms.uBack.value;
+      [flip, flipRefl].forEach(m => { m.material.uniforms.uProg.value = 0; m.material.uniforms.uBack.value = blank; });
+      setFrontTexture(backSnap, back !== blank ? back : null);   // the back texture becomes the front (no re-upload, no leak)
+      kick();
     },
     get renderer() { return renderer; }
   };
@@ -1625,9 +1952,12 @@ async function pumpNavQueue(fromHash = false) {
   while (!busy && navQueue !== 0) {
     const delta = Math.sign(navQueue);
     navQueue -= delta;
-    const instant = navQueue !== 0;
     busy = true;
     try {
+      // INP: return to the browser first, so the input's own frame paints before the snapshot/render work, and
+      // fast flicks are processed one step per task instead of one long task
+      await yieldToMain();
+      const instant = navQueue !== 0;
       await ringMove(delta, fromHash, { instant });
     } catch (err) {
       console.error(err);
@@ -1635,6 +1965,7 @@ async function pumpNavQueue(fromHash = false) {
       busy = false;
     }
   }
+  flushRingArrivals();
 }
 
 async function goToIndex(target, fromHash = false, { instant = false } = {}) {
@@ -1651,6 +1982,7 @@ async function goToIndex(target, fromHash = false, { instant = false } = {}) {
   const hadFocus = document.activeElement && document.activeElement.closest('.side, .card-nav') ? document.activeElement : null;
 
   if (gl && !instant && !reduced) {
+    if (frontStale || gl.frontStale()) { gl.setFrontTexture(snapFor(active)); frontStale = false; }
     const backSnap = snapFor(target);
     cardEl.style.opacity = '0';
     await gl.flipTo(target, dir, backSnap, setOff);
@@ -1702,6 +2034,7 @@ async function go(target, fromHash = false) {
   } finally {
     busy = false;
   }
+  flushRingArrivals();
   await pumpNavQueue();
 }
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -1774,26 +2107,39 @@ function trackPageView() {
   }
 }
 
-async function applyFeaturedState(feat, activeIndex, fromHash, { omitHash = false, epoch = layoutEpoch } = {}) {
+async function applyFeaturedState(feat, activeIndex, fromHash, opts = {}) {
+  applyingWindow = true;
+  try {
+    return await applyFeaturedStateInner(feat, activeIndex, fromHash, opts);
+  } finally {
+    applyingWindow = false;
+    flushRingArrivals();
+  }
+}
+async function applyFeaturedStateInner(feat, activeIndex, fromHash, { omitHash = false, epoch = layoutEpoch } = {}) {
   if (mobileMode || layoutIsStale(epoch)) return false;
-  if (gl?.dispose) { gl.dispose(); gl = null; }
   document.documentElement.classList.remove('mode-mobile');
   FEAT = feat;
   active = activeIndex;
   offsets = FEAT.map((_, i) => i - active);
-  rebuildSideButtons();
-  await preloadImages();
+  // centre card first: it paints from the story text alone (its <img> streams in); images and WebGL follow
+  renderCard(cardEl, active);
+  fixCardHeight(); updateReadMoreState();
+  markActiveTile();
+  paintStats.centreAt = paintStats.centreAt || Math.round(performance.now());
+  preloadImages();
+  const glReady = ensureGL();
+  await yieldToMain();
+  const nextGl = await glReady;
   if (mobileMode || layoutIsStale(epoch)) return false;
-  if (!reduced && params.get('mode') !== 'css') {
-    const nextGl = await initGL();
-    if (mobileMode || layoutIsStale(epoch)) { nextGl?.dispose?.(); return false; }
-    gl = nextGl;
-  }
+  gl = nextGl;
+  gl?.resume();
   document.documentElement.classList.toggle('mode-gl', !!gl);
   document.documentElement.classList.toggle('mode-css', !gl && !reduced);
   document.documentElement.classList.toggle('mode-reduced', reduced);
-  renderCard(cardEl, active);
-  markActiveTile();
+  rebuildSideButtons();
+  gl?.rebuildSideMeshes();
+  paintStats.sidesAt = paintStats.sidesAt || Math.round(performance.now());
   await relayout();
   logCenteredKey();
   const id = FEAT[active]?.id;
@@ -1841,6 +2187,7 @@ async function openStory(cacheKey, fromHash = false) {
       if (busy) { navQueue += existing - active; return; }
       busy = true;
       try { await ringMove(existing - active, fromHash, { instant: navQueue !== 0 }); } finally { busy = false; }
+      flushRingArrivals();
     }
     return;
   }
@@ -1861,6 +2208,7 @@ async function openStory(cacheKey, fromHash = false) {
     if (!FEAT[active]?.placeholder) cardEl.removeAttribute('aria-busy');
     if (ownedBusy) busy = false;
     if (!layoutIsStale(epoch) && pendingDesktopKey === cacheKey) pendingDesktopKey = null;
+    flushRingArrivals();
     await pumpNavQueue(fromHash);
   }
 }
@@ -1876,7 +2224,7 @@ let mobileLoadingId = null;
 
 function enterMobileLayout() {
   collapseReadMore();
-  if (gl?.dispose) { gl.dispose(); gl = null; }
+  gl?.suspend();   // the renderer is kept for a return to desktop; its textures are freed and nothing draws
   scene.innerHTML = '';
   sideBtns = [];
   const root = document.documentElement;
@@ -1959,21 +2307,49 @@ function revealGrid() {
   gridEl.removeAttribute('aria-busy');
 }
 let stickyCardH = 0;
+/** Measured card heights by story and width: a flick only measures the story that just entered the window. */
+const cardHeightCache = new Lru(64);
+const measureStats = { measured: 0, cached: 0 };
 function fixCardHeight({ sticky = false } = {}) {
   // equalise card height across the visible stories so the floor/reflections do not jump between stories;
   // while flicking (sticky) it only grows, so the grid below never shifts per step
   cardEl.style.minHeight = '';
-  measureEl.style.width = cardEl.getBoundingClientRect().width + 'px';
+  const width = cardEl.getBoundingClientRect().width;   // the one read before the batch of writes below
   let maxH = sticky ? stickyCardH : 0;
-  FEAT.forEach((a, i) => { if (a.placeholder) return; renderCard(measureEl, i); maxH = Math.max(maxH, measureEl.getBoundingClientRect().height); });
+  const todo = [];
+  FEAT.forEach((a, i) => {
+    if (a.placeholder) return;
+    const h = cardHeightCache.get(`${a.id}|${a.title}|${width}`);
+    if (h != null) { maxH = Math.max(maxH, h); measureStats.cached++; } else todo.push(i);
+  });
+  if (todo.length) {
+    // write every unmeasured card into its own measuring clone, then read all heights: one layout, not one per card
+    const clones = todo.map(i => {
+      const el = measureEl.cloneNode(false);
+      el.removeAttribute('id');
+      el.style.width = width + 'px';
+      renderCard(el, i);
+      return el;
+    });
+    measureEl.after(...clones);
+    clones.forEach((el, k) => {
+      const a = FEAT[todo[k]], h = el.getBoundingClientRect().height;
+      cardHeightCache.set(`${a.id}|${a.title}|${width}`, h);
+      maxH = Math.max(maxH, h);
+      measureStats.measured++;
+    });
+    clones.forEach(el => el.remove());
+  }
+  measureEl.style.width = width + 'px';
   stickyCardH = maxH;
   if (maxH) cardEl.style.minHeight = maxH + 'px';   // exact (the card has one fixed height now; rounding up would nudge the grid)
 }
+const paintStats = { centreAt: 0, sidesAt: 0 };
 async function relayout() {
   if (mobileMode) return;
   fixCardHeight(); computeGeom(); layoutButtons();
   updateReadMoreState();
-  if (gl) { gl.resize(); gl.setFrontTexture(snapFor(active)); gl.kick(); }
+  if (gl) { gl.resize(); gl.setFrontTexture(snapFor(active)); frontStale = false; gl.kick(); }
 }
 async function boot() {
   editorialRequestCount = 0;
@@ -1983,6 +2359,7 @@ async function boot() {
   showSideSkeletons(true);   // the ring has neighbours both ways (right-hand ones stay skeletons on the latest story)
   // deep link: start the linked story's request alongside the story list instead of after it (memoised, so reused)
   if (hashKey) fetchValidatedEditorial(hashKey).catch(() => {});
+  if (!mobileMode) ensureGL();   // three.js loads alongside the story data; never awaited before the centre paints
   try {
     await Promise.all([
       ensureArchivePageLoaded(1),
@@ -2037,4 +2414,4 @@ small.addEventListener('change', async () => {
   if (id) await openStory(id, true);
   else await openLatestView(true);
 });
-window.__botzCarousel = { go, navRelative, openStory, get active() { return active; }, get busy() { return busy; }, get navQueue() { return navQueue; }, get navLog() { return window.__navLog; }, get centerKey() { return FEAT[active]?.id; }, get featIds() { return FEAT.map(a => a.id); }, get feat() { return FEAT.map((a, i) => ({ id: a.key || a.id, offset: i - active, placeholder: !!a.placeholder, seam: !!a.seam, ring: a.ringIndex })); }, get ring() { return { pos: ringPos, len: ringLen(), total: ringTotal, days: archiveIndex?.days.length || 0, wrapCrossed, pages: [...dayData.keys()].sort(), loaded: [...ringStories.values()].filter(x => x.article).length, cached: ringStories.size, keyAt: r => ringKeyAt(r), ...ringStats }; }, get modalOpen() { return imageModalOpen(); }, get readMore() { return { expanded: readMoreExpanded(), ...readMoreStats }; }, get showLatestSlot() { return showLatestSlot; }, get latestIsArchiveTop() { return latestIsArchiveTop; }, get newestArchiveKey() { return newestArchiveKey; }, get mode() { return gl ? 'webgl' : (reduced ? 'reduced' : 'css'); }, get editorialRequestCount() { return editorialRequestCount; }, get store() { return { days: dayData.size, stories: storyEntries.size, urls: [...archiveUrlsSeen] }; }, get latestSlotId() { return LATEST_SLOT_ID; }, get mobileMode() { return mobileMode; }, ready: true };
+window.__botzCarousel = { go, navRelative, openStory, get active() { return active; }, get busy() { return busy; }, get navQueue() { return navQueue; }, get navLog() { return window.__navLog; }, get centerKey() { return FEAT[active]?.id; }, get featIds() { return FEAT.map(a => a.id); }, get feat() { return FEAT.map((a, i) => ({ id: a.key || a.id, offset: i - active, placeholder: !!a.placeholder, seam: !!a.seam, ring: a.ringIndex })); }, get ring() { return { pos: ringPos, len: ringLen(), total: ringTotal, days: archiveIndex?.days.length || 0, wrapCrossed, pages: [...dayData.keys()].sort(), loaded: [...ringStories.values()].filter(x => x.article).length, cached: ringStories.size, keyAt: r => ringKeyAt(r), ...ringStats }; }, get modalOpen() { return imageModalOpen(); }, get readMore() { return { expanded: readMoreExpanded(), ...readMoreStats }; }, get showLatestSlot() { return showLatestSlot; }, get latestIsArchiveTop() { return latestIsArchiveTop; }, get newestArchiveKey() { return newestArchiveKey; }, get mode() { return gl ? 'webgl' : (reduced ? 'reduced' : 'css'); }, get editorialRequestCount() { return editorialRequestCount; }, get store() { return { days: dayData.size, stories: storyEntries.size, urls: [...archiveUrlsSeen], storyCount: dayStoreStories, max: DAY_STORE_MAX_STORIES, inFlight: jsonFlight.size, ...dayStoreStats }; }, get perf() { return { gl: gl?.stats() || null, renderersCreated: glStats.renderersCreated, imgs: imgs.size, imgMax: IMG_CACHE_MAX, ringStories: ringStories.size, cardHeights: cardHeightCache.size, measure: { ...measureStats }, snapshots: snapStats.count, images: { ...imageStats, variantMisses: variantMisses.size }, paint: { ...paintStats }, navLog: window.__navLog.length, tiles: tileIds.size }; }, get latestSlotId() { return LATEST_SLOT_ID; }, get mobileMode() { return mobileMode; }, ready: true };

@@ -122,20 +122,53 @@ When adding a site, create the DNS record in Cloudflare **before** expecting tra
 
 **Static sites** (`zoto.io`, `halt.sh`, etc.): default Cloudflare caching is generally fine for HTML/CSS/JS. Purge cache in Cloudflare after deploy if you need instant updates.
 
-**botz.ai — do not cache these at the CDN edge:**
+**botz.ai archive API: date-paged and cacheable.** The site (grid and desktop carousel alike) reads the archive one
+calendar day at a time. Each day's JSON carries the full stories, so there are no per-story requests. The botz API sets
+these headers, and nginx passes them through unchanged (`location /archive` proxies every `/archive/...` path to
+`botz:3000` and sets no cache headers of its own):
 
-| Path | Why |
+| URL | Body | `Cache-Control` |
+| --- | --- | --- |
+| `/archive/index` | `{ total, days: [{ date, count }] }`, newest day first | `public, max-age=60, s-maxage=60, stale-while-revalidate=300` |
+| `/archive/latest` | Same body as `/archive/day/<newest date>` | `public, max-age=60, s-maxage=60, stale-while-revalidate=300` |
+| `/archive/day/YYYY-MM-DD?n=<count>` (day ended 2+ days ago, `n` = that day's story count) | `{ date, count, older, editorials: [{ cache_key, title, image_url, generated_at, published_at, author, entry: { article, editorial } }] }` | `public, max-age=31536000, s-maxage=31536000, immutable` |
+| `/archive/day/YYYY-MM-DD` (today, yesterday, no `n`, or `n` ≠ count) | Same | `public, max-age=60, s-maxage=60, stale-while-revalidate=300` |
+| `/archive/day/<no stories>` → 404; `/archive/day/<invalid>` → 400 | — | 404: short TTL above; 400: `no-store` |
+| `/archive?page=N` (legacy, no longer used by the site) | Unchanged page-number listing; the final partial page is served | `public, max-age=60, s-maxage=60, stale-while-revalidate=300` (was `no-store`) |
+| `/editorials`, `/editorials?cacheKey=` (legacy and admin generation) | Unchanged | `no-store, private` (unchanged; the site no longer calls it) |
+
+How the `n` works: clients copy `n` from `/archive/index` into the day URL. An `asOf` backfill that adds a story to a past
+day changes that day's count, which gives a new URL, so a stale immutable copy is never requested again and nothing has
+to be purged. "Past" means the date ended at least ~36 hours ago on the server clock, which is the clock the cache keys
+are named with. After a new story is published, the botz purge (when `CF_*` is set) also purges `/archive/index`,
+`/archive/latest` and `/archive/day/<date>` (with and without `?n=`), on top of the legacy URLs.
+
+All of these endpoints only list and read the cache directory. Cache JSON and images are never written, moved or
+deleted by them.
+
+**Cloudflare cache rules for zone `botz.ai` (to change by hand; not changed by this repo or by CI):**
+
+1. **Replace** the old "Bypass cache for `/archive*`" rule with a rule that matches
+   `starts_with(http.request.uri.path, "/archive")`:
+   - Cache eligibility: **Eligible for cache** (Cloudflare does not cache JSON by default)
+   - Edge TTL: **Use cache-control header if present** (bypass if missing)
+   - Browser TTL: **Respect origin**
+   - Cache key: **include the full query string**, because `?n=` and the legacy `?page=` are part of the identity
+2. **Keep bypass** for `/editorials*`. Those responses carry per-request navigation/random data, and admin generation
+   goes through that path.
+3. Optional: **bypass** any request carrying an `x-shared-secret` header, so an admin call routed through Cloudflare
+   can never be answered from cache.
+
+Until rule 1 is changed, the edge keeps bypassing `/archive*`. Browsers still cache using the headers above, so the
+change is safe to deploy before the Cloudflare rule is updated.
+
+| Path | Edge |
 | --- | --- |
-| `/editorials` | Generated per-request or per-cache-key; stale edge cache would serve wrong editorials |
-| `/archive` | Paginated, changes as new editorials are created |
-| `/cache/images/*` | Served via botz API; content updates when new images are generated |
+| `/editorials*` | Bypass (unchanged) |
+| `/archive*` | Cache, honouring origin `Cache-Control` (rule 1) |
+| `/cache/images/*` | Served by nginx from the read-only cache mount; default caching is fine |
 
-Recommended Cloudflare **Cache Rules** (or Page Rules on older plans) for zone `botz.ai`:
-
-- **Bypass cache** for path `/editorials*` and `/archive*`
-- Optionally bypass or short TTL for `/cache/*` if images change frequently
-
-The botz backend can purge Cloudflare after publishing when `CF_ZONE_ID` and `CF_API_TOKEN` are set in `backends/botz.ai/.env` (see `.env.example`). That complements — does not replace — bypass rules for dynamic API paths.
+The botz backend can purge Cloudflare after publishing when `CF_ZONE_ID` and `CF_API_TOKEN` are set in `backends/botz.ai/.env` (see `.env.example`).
 
 Static assets on botz.ai (`/`, `/index.html`, CSS, JS under `/`) may be cached at the edge; purge after frontend deploys if needed.
 
@@ -317,7 +350,7 @@ docker compose logs discord
 | --- | --- |
 | **502 on /editorials** | botz container down or missing `.env` |
 | **525 / SSL handshake failed** (Cloudflare) | Origin cert missing/expired — run `sync-ssl.sh`, check `ssl/*.pem` |
-| **Stale editorials at edge** | CDN caching `/editorials` — add bypass rule; optional `CF_*` purge in botz |
+| **Stale editorials at edge** | CDN caching `/editorials` — add bypass rule; optional `CF_*` purge in botz. `/archive*` is meant to be cached (see Caching above): past days are immutable per `?n=` and the index/latest TTL is 60 s |
 | **Stale nginx config** | Run `node scripts/generate-nginx.js` before deploy |
 | **Redirect loops** | Cloudflare SSL mode set to Flexible while origin requires HTTPS |
 

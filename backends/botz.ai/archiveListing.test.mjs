@@ -103,3 +103,6 @@ test('archivePageWindow serves the final partial page and reports totals', async
     assert.equal(archivePageWindow(0, 1, NaN).valid, false);
     assert.equal(archivePageWindow(5, NaN, NaN).pagination.page, 1);
 });
+
+// date-paged archive tests live alongside; imported here so the existing test script runs them
+import './archiveDays.test.mjs';

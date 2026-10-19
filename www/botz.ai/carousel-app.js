@@ -10,6 +10,13 @@ const loadingEl = $('#loading');
 const params = new URLSearchParams(location.search);
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches || params.get('mode') === 'reduced';
 const wide = matchMedia('(min-width: 1600px)');
+/**
+ * Small screens use the earlier (pre-carousel, eded488) single-story flow: the full editorial renders
+ * inline at the top of the page and tapping an archive tile loads that story there. No Older/Newer card
+ * navigation, no "Read more" clamp, no WebGL/side cards, no swipe.
+ */
+const small = matchMedia('(max-width: 760px)');
+let mobileMode = small.matches;
 const FLIP_MS = 520;
 const PERSP = 2200;
 const SIDE_W0 = 440, SIDE_ASPECT = 704 / 512;
@@ -515,12 +522,44 @@ function parseArchiveTileTitle(raw) {
   return { title: t, agent: '' };
 }
 
+/** Archive tiles: headline + author; uses the API `author` field when present, else the legacy glued-title parse. */
+function tileHeadlineAndAuthor(rawTitle, author) {
+  const raw = String(rawTitle ?? '').trim();
+  const by = String(author ?? '').trim();
+  if (!by) return parseArchiveTileTitle(raw);
+  registerKnownAuthor(by);
+  const title = raw.length > by.length && raw.endsWith(by) ? raw.slice(0, -by.length).trim() : raw;
+  return { title, agent: by };
+}
+
+const tileDateFmt = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+const tileDateTitleFmt = new Intl.DateTimeFormat(undefined, { dateStyle: 'full', timeStyle: 'short' });
+
+/** Story publish time: generated_at (UTC "YYYY-MM-DD-HH-MM-SS", when botz.ai published it), else source published_at. */
+function archiveItemDate(generatedAt, publishedAt) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})-(\d{2})-(\d{2})-(\d{2})/.exec(String(generatedAt ?? ''));
+  let ms = m ? Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : NaN;
+  if (!Number.isFinite(ms) && publishedAt) ms = Date.parse(publishedAt);
+  return Number.isFinite(ms) ? new Date(ms) : null;
+}
+
+function tileBodyHTML(rawTitle, { author = '', generatedAt = '', publishedAt = '' } = {}) {
+  const tile = tileHeadlineAndAuthor(rawTitle, author);
+  const date = archiveItemDate(generatedAt, publishedAt);
+  const parts = [];
+  if (tile.agent) parts.push(`<span class="tile-agent">${esc(tile.agent)}</span>`);
+  if (date) parts.push(`<time class="tile-date" datetime="${esc(date.toISOString())}" title="${esc(tileDateTitleFmt.format(date))}">${esc(tileDateFmt.format(date))}</time>`);
+  const meta = parts.length ? `<div class="tile-meta">${parts.join('<span class="tile-sep" aria-hidden="true">·</span>')}</div>` : '';
+  return `<div class="tile-title">${esc(tile.title)}</div>${meta}`;
+}
+
 function refreshArchiveTileTitles() {
   gridEl.querySelectorAll('.tile[data-raw-title]').forEach(a => {
-    const tile = parseArchiveTileTitle(a.dataset.rawTitle);
     const body = a.querySelector('.tile-body');
     if (!body) return;
-    body.innerHTML = `<div class="tile-title">${esc(tile.title)}</div>${tile.agent ? `<div class="tile-agent">${esc(tile.agent)}</div>` : ''}`;
+    body.innerHTML = tileBodyHTML(a.dataset.rawTitle, {
+      author: a.dataset.author, generatedAt: a.dataset.generatedAt, publishedAt: a.dataset.publishedAt,
+    });
   });
 }
 
@@ -666,12 +705,28 @@ function cardHTML(a, i) {
       ${a.showAgent ? `<p class="card-agent" data-snap="text">${esc(a.agent)}</p>` : ''}
       <div class="card-paras">${a.bodyHtml}</div>
       <button type="button" class="card-read-more" hidden aria-expanded="false">Read more</button>
-      <div class="card-meta">
+      ${cardMetaHTML(a)}
+    </div>
+  </div>`;
+}
+function cardMetaHTML(a) {
+  return `<div class="card-meta">
         <div data-snap="text">Generated: ${esc(a.generated)}</div>
         <div data-snap="text">Original source: ${esc(a.source)} | ${esc(a.published)}</div>
         <div data-snap="text">Original title: ${esc(a.origTitle)}</div>
         <div><a href="${esc(a.url)}" data-snap="text" target="_blank" rel="noopener">Read original article</a>${a.hn ? ` <span class="sep" data-snap="text">·</span> <a href="${esc(a.hn)}" data-snap="text" target="_blank" rel="noopener">Hacker News discussion</a>` : ''}</div>
-      </div>
+      </div>`;
+}
+/** Small screens: the whole story inline (earlier flow) — no Older/Newer header, no Read more clamp. */
+function mobileArticleHTML(a) {
+  return `
+  <div class="card-body">
+    ${a.img ? `<img class="card-img" src="${esc(a.img)}" alt="" width="400" height="400">` : ''}
+    <div class="card-text">
+      <h2 class="card-title">${esc(a.title)}</h2>
+      ${a.showAgent ? `<p class="card-agent">${esc(a.agent)}</p>` : ''}
+      <div class="card-paras">${a.bodyHtml}</div>
+      ${cardMetaHTML(a)}
     </div>
   </div>`;
 }
@@ -743,10 +798,12 @@ function appendArchiveTiles(items) {
     a.className = 'tile';
     a.href = `#${editorial.cache_key}`;
     a.dataset.id = editorial.cache_key;
-    a.dataset.rawTitle = editorial.title;
-    const tile = parseArchiveTileTitle(editorial.title);
+    a.dataset.rawTitle = editorial.title ?? '';
+    a.dataset.author = editorial.author || '';
+    a.dataset.generatedAt = editorial.generated_at || '';
+    a.dataset.publishedAt = editorial.published_at || '';
     a.innerHTML = `<img src="${esc(editorial.image_url)}" alt="" loading="lazy" width="400" height="400">
-      <div class="tile-body"><div class="tile-title">${esc(tile.title)}</div>${tile.agent ? `<div class="tile-agent">${esc(tile.agent)}</div>` : ''}</div>`;
+      <div class="tile-body">${tileBodyHTML(a.dataset.rawTitle, { author: a.dataset.author, generatedAt: a.dataset.generatedAt, publishedAt: a.dataset.publishedAt })}</div>`;
     a.addEventListener('click', e => {
       e.preventDefault();
       openStory(editorial.cache_key, false);
@@ -1181,7 +1238,7 @@ function indexFromHash() { const id = decodeURIComponent(location.hash.slice(1))
 function snapFor(i) { renderCard(measureEl, i); measureEl.style.width = geom.cardW + 'px'; return snapshot(measureEl, i); }
 
 async function navRelative(delta, fromHash = false) {
-  if (!delta) return;
+  if (!delta || mobileMode) return;
   navQueue += delta;
   if (busy) return;
   await pumpNavQueue(fromHash);
@@ -1345,6 +1402,7 @@ function trackPageView() {
 
 async function applyFeaturedState(feat, activeIndex, fromHash, { omitHash = false } = {}) {
   if (gl?.dispose) { gl.dispose(); gl = null; }
+  document.documentElement.classList.remove('mode-mobile');
   FEAT = feat;
   active = activeIndex;
   offsets = FEAT.map((_, i) => i - active);
@@ -1375,6 +1433,7 @@ async function applyFeaturedState(feat, activeIndex, fromHash, { omitHash = fals
 }
 
 async function openLatestView(fromHash = false) {
+  if (mobileMode) return openStoryMobile(null, fromHash);
   window.scrollTo(0, 0);
   stage.classList.add('is-loading');
   try {
@@ -1399,6 +1458,7 @@ async function openLatestView(fromHash = false) {
 }
 
 async function openStory(cacheKey, fromHash = false) {
+  if (mobileMode) return openStoryMobile(cacheKey, fromHash);
   window.scrollTo(0, 0);
   await ensureLatestSlotResolved();
   if (!cacheKey) {
@@ -1464,6 +1524,89 @@ async function openStoryFromLatest(fromHash) {
   if (!fromHash && !location.hash) history.replaceState(null, '', location.pathname + location.search);
 }
 
+/* ---------------- small screens: earlier inline single-story flow (pre-carousel, eded488) ---------------- */
+let mobileLoadSeq = 0;
+let mobileLoadingId = null;
+
+function enterMobileLayout() {
+  if (gl?.dispose) { gl.dispose(); gl = null; }
+  scene.innerHTML = '';
+  sideBtns = [];
+  const root = document.documentElement;
+  root.classList.add('mode-mobile');
+  root.classList.remove('mode-gl', 'mode-css', 'mode-reduced');
+  cardEl.style.minHeight = '';
+  cardEl.style.opacity = '1';
+  cardEl.style.transform = '';
+  cardEl.classList.remove('has-read-more', 'is-expanded', 'card-loading', 'css-flip-out', 'css-flip-in', 'fade-out', 'fade-in');
+  if (endMarker) endMarker.hidden = true;
+}
+
+async function fetchStoryForMobile(cacheKey) {
+  if (!cacheKey) return fetchLatestEditorial();
+  const validated = await fetchValidatedEditorial(cacheKey);
+  if (validated[0]) return validated;
+  // earlier flow: render whatever /editorials?cacheKey= returns (also covers timestamp-suffixed keys)
+  return fetchEditorialOnce(cacheKey);
+}
+
+async function openStoryMobile(cacheKey, fromHash = false) {
+  const key = cacheKey || null;
+  const id = key || LATEST_SLOT_ID;
+  const root = document.documentElement;
+  if (mobileLoadingId === id) return;
+  if (!mobileLoadingId && root.classList.contains('mode-mobile') && FEAT.length === 1 && FEAT[0].id === id) {
+    window.scrollTo(0, 0);
+    return;
+  }
+  enterMobileLayout();
+  window.scrollTo(0, 0);
+  const seq = ++mobileLoadSeq;
+  mobileLoadingId = id;
+  if (!fromHash) {
+    if (key) history.pushState(null, '', '#' + key);
+    else history.replaceState(null, '', location.pathname + location.search);
+  }
+  cardEl.setAttribute('aria-busy', 'true');
+  cardEl.dataset.id = '';
+  cardEl.innerHTML = '<div class="spinner" role="status" aria-label="Loading story"><div class="bounce1"></div><div class="bounce2"></div></div>';
+  try {
+    let payload = await fetchStoryForMobile(key);
+    if (seq !== mobileLoadSeq) return;
+    let shownId = id;
+    if (!payload?.[0] && key) {
+      toast('Could not load that story.');
+      payload = await fetchLatestEditorial();
+      if (seq !== mobileLoadSeq) return;
+      shownId = LATEST_SLOT_ID;
+      history.replaceState(null, '', location.pathname + location.search);
+    }
+    if (!payload?.[0]) throw new Error('No editorial returned');
+    const art = normalizeArticle(payload[0], shownId);
+    if (shownId === LATEST_SLOT_ID) art.isLatestSlot = true;
+    FEAT = [art];
+    active = 0;
+    offsets = [0];
+    cardEl.innerHTML = mobileArticleHTML(art);
+    cardEl.dataset.id = art.id;
+    wireByline(cardEl);
+    markActiveTile();
+    document.title = shownId !== LATEST_SLOT_ID ? `botz.ai - GenAI News - ${shownId}` : 'botz.ai - GenAI News';
+    if (storyAnnouncer) storyAnnouncer.textContent = art.title;
+    trackPageView();
+    logCenteredKey();
+    refreshArchiveTileTitles();
+  } catch (err) {
+    console.error(err);
+    if (seq === mobileLoadSeq) cardEl.innerHTML = '<p class="mobile-error">Failed to load articles</p>';
+  } finally {
+    if (seq === mobileLoadSeq) {
+      mobileLoadingId = null;
+      cardEl.removeAttribute('aria-busy');
+    }
+  }
+}
+
 /* ---------------- boot ---------------- */
 function fixCardHeight() {
   // equalise card height across the featured set so the floor/reflections do not jump between stories
@@ -1473,6 +1616,7 @@ function fixCardHeight() {
   cardEl.style.minHeight = Math.ceil(maxH) + 'px';
 }
 async function relayout() {
+  if (mobileMode) return;
   fixCardHeight(); computeGeom(); layoutButtons();
   updateReadMoreState();
   if (gl) { gl.resize(); gl.setFrontTexture(snapFor(active)); gl.kick(); }
@@ -1504,4 +1648,19 @@ endMarker?.addEventListener('keydown', e => {
 });
 let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(relayout, 120); });
 wide.addEventListener('change', relayout);
-window.__botzCarousel = { go, navRelative, openStory, get active() { return active; }, get busy() { return busy; }, get navQueue() { return navQueue; }, get navLog() { return window.__navLog; }, get centerKey() { return FEAT[active]?.id; }, get featIds() { return FEAT.map(a => a.id); }, get showLatestSlot() { return showLatestSlot; }, get latestIsArchiveTop() { return latestIsArchiveTop; }, get newestArchiveKey() { return newestArchiveKey; }, get mode() { return gl ? 'webgl' : (reduced ? 'reduced' : 'css'); }, get editorialRequestCount() { return editorialRequestCount; }, get latestSlotId() { return LATEST_SLOT_ID; }, ready: true };
+small.addEventListener('change', async () => {
+  if (mobileMode === small.matches) return;
+  mobileMode = small.matches;
+  const id = decodeURIComponent(location.hash.slice(1)) || null;
+  if (mobileMode) {
+    await openStoryMobile(id, true);
+    return;
+  }
+  // back to the desktop/tablet carousel: rebuild the featured window around the current story
+  document.documentElement.classList.remove('mode-mobile');
+  FEAT = [];
+  active = 0;
+  if (id) await openStory(id, true);
+  else await openLatestView(true);
+});
+window.__botzCarousel = { go, navRelative, openStory, get active() { return active; }, get busy() { return busy; }, get navQueue() { return navQueue; }, get navLog() { return window.__navLog; }, get centerKey() { return FEAT[active]?.id; }, get featIds() { return FEAT.map(a => a.id); }, get showLatestSlot() { return showLatestSlot; }, get latestIsArchiveTop() { return latestIsArchiveTop; }, get newestArchiveKey() { return newestArchiveKey; }, get mode() { return gl ? 'webgl' : (reduced ? 'reduced' : 'css'); }, get editorialRequestCount() { return editorialRequestCount; }, get latestSlotId() { return LATEST_SLOT_ID; }, get mobileMode() { return mobileMode; }, ready: true };

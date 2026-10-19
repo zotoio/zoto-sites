@@ -742,6 +742,7 @@ function ringStoryArrived(key) {
 /** Step the ring by delta (|delta| <= visible radius animates, larger jumps re-centre). Never waits on the network:
  *  an unbuffered centre shows the skeleton card until its story lands. */
 async function ringMove(delta, fromHash = false, { instant = false } = {}) {
+  const replace = autoplayHistoryReplace; autoplayHistoryReplace = false;   // an autoplay step must not grow history
   const n = ringLen();
   if (n <= 1 || !delta || ringPos < 0 || mobileMode) return;
   collapseReadMore();   // every way of moving (buttons, keys, swipe, side cards, tiles, history) lands collapsed
@@ -756,9 +757,9 @@ async function ringMove(delta, fromHash = false, { instant = false } = {}) {
   const target = active + delta;
   if (target >= 0 && target < FEAT.length) {
     if (FEAT[target].placeholder && ready) { ready.ringIndex = newPos; FEAT[target] = ready; }   // seam/unbuffered card becomes the centre
-    await goToIndex(target, fromHash, { instant });
+    await goToIndex(target, fromHash, { instant, replace });
     if (mobileMode || layoutIsStale(epoch)) return;
-  } else if (!fromHash && key && key !== LATEST_SLOT_ID) history.pushState(null, '', '#' + key);
+  } else if (!fromHash && key && key !== LATEST_SLOT_ID) history[replace ? 'replaceState' : 'pushState'](null, '', '#' + key);
   if (crossing) wrapCrossed = true;
   ringPos = newPos;
   ringRefresh();
@@ -1967,10 +1968,11 @@ async function pumpNavQueue(fromHash = false) {
       busy = false;
     }
   }
+  autoplayHistoryReplace = false;
   flushRingArrivals();
 }
 
-async function goToIndex(target, fromHash = false, { instant = false } = {}) {
+async function goToIndex(target, fromHash = false, { instant = false, replace = false } = {}) {
   if (mobileMode || target === active || target < 0 || target >= FEAT.length) return;
   const epoch = layoutEpoch;
   const from = active, dir = Math.sign(target - from);
@@ -1979,7 +1981,7 @@ async function goToIndex(target, fromHash = false, { instant = false } = {}) {
   if (!fromHash && !(FEAT[target].placeholder && !FEAT[target].key)) {
     const id = FEAT[target].key || FEAT[target].id;
     if (id === LATEST_SLOT_ID) history.replaceState(null, '', location.pathname + location.search);
-    else history.pushState(null, '', '#' + id);
+    else history[replace ? 'replaceState' : 'pushState'](null, '', '#' + id);
   }
   const hadFocus = document.activeElement && document.activeElement.closest('.side, .card-nav') ? document.activeElement : null;
 
@@ -2438,4 +2440,27 @@ small.addEventListener('change', async () => {
   if (id) await openStory(id, true);
   else await openLatestView(true);
 });
+/* idle autoplay (desktop only; ./autoplay.js, loaded on the desktop layout unless reduced motion or ?autoplay=0):
+   after AUTOPLAY_IDLE_MS without input, one step towards older stories every AUTOPLAY_STEP_MS through navRelative(-1),
+   the same path as ArrowLeft, so wrap-around, prefetch and the day JSON behave as usual */
+let autoplayHistoryReplace = false;
+let autoplayLoad = null;
+function autoplayBlocked() {
+  if (mobileMode) return 'mobile';
+  if (readMoreExpanded()) return 'read-more';
+  if (imageModalOpen()) return 'modal';
+  if (window.__botzDice && window.__botzDice.phase !== 'idle') return 'dice';
+  if (busy || navQueue || applyingWindow) return 'busy';
+  if (ringPos < 0 || ringLen() <= 1) return 'not-ready';
+  return '';
+}
+function maybeStartAutoplay() {
+  if (autoplayLoad || reduced || params.get('autoplay') === '0' || small.matches) return;
+  autoplayLoad = import('./autoplay.js?v=20261019p').then(m => m.startAutoplay({
+    params, stage, small, blocked: autoplayBlocked,
+    step: () => { autoplayHistoryReplace = true; navRelative(-1); },
+  })).catch(err => { console.warn('autoplay', err); });
+}
+small.addEventListener('change', maybeStartAutoplay);
+maybeStartAutoplay();
 window.__botzCarousel = { go, navRelative, openStory, get active() { return active; }, get busy() { return busy; }, get navQueue() { return navQueue; }, get navLog() { return window.__navLog; }, get centerKey() { return FEAT[active]?.id; }, get featIds() { return FEAT.map(a => a.id); }, get feat() { return FEAT.map((a, i) => ({ id: a.key || a.id, offset: i - active, placeholder: !!a.placeholder, seam: !!a.seam, ring: a.ringIndex })); }, get ring() { return { pos: ringPos, len: ringLen(), total: ringTotal, days: archiveIndex?.days.length || 0, wrapCrossed, pages: [...dayData.keys()].sort(), loaded: [...ringStories.values()].filter(x => x.article).length, cached: ringStories.size, keyAt: r => ringKeyAt(r), ...ringStats }; }, get modalOpen() { return imageModalOpen(); }, get readMore() { return { expanded: readMoreExpanded(), ...readMoreStats }; }, get showLatestSlot() { return showLatestSlot; }, get latestIsArchiveTop() { return latestIsArchiveTop; }, get newestArchiveKey() { return newestArchiveKey; }, get mode() { return gl ? 'webgl' : (reduced ? 'reduced' : 'css'); }, get editorialRequestCount() { return editorialRequestCount; }, get store() { return { days: dayData.size, stories: storyEntries.size, urls: [...archiveUrlsSeen], storyCount: dayStoreStories, max: DAY_STORE_MAX_STORIES, inFlight: jsonFlight.size, ...dayStoreStats }; }, get perf() { return { gl: gl?.stats() || null, renderersCreated: glStats.renderersCreated, imgs: imgs.size, imgMax: IMG_CACHE_MAX, ringStories: ringStories.size, cardHeights: cardHeightCache.size, measure: { ...measureStats }, snapshots: snapStats.count, images: { ...imageStats, variantMisses: variantMisses.size }, paint: { ...paintStats }, navLog: window.__navLog.length, tiles: tileIds.size }; }, get latestSlotId() { return LATEST_SLOT_ID; }, get mobileMode() { return mobileMode; }, ready: true };

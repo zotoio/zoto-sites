@@ -88,5 +88,8 @@ jobs:
           yarn --cwd backends/botz.ai install --frozen-lockfile
           yarn --cwd backends/botz.ai test
 
+      - name: botz.ai idle autoplay tests
+        run: node --test scripts/botz-autoplay.test.mjs
+
       - name: Verify botz Docker image includes runtime modules
         run: bash scripts/verify-botz-docker-image.sh

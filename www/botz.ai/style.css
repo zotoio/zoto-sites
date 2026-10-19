@@ -278,11 +278,11 @@ a:hover{color:var(--green-hi)}
 }
 /* reserve the carousel card's typical footprint while loading (calibrated against the live card at
    1280x800, 1920x1080, 2560x1080 and 3440x1440) so the grid below doesn't jump when the story lands */
-@media (min-width:961px){ .card.is-skeleton{min-height:924px} }
-@media (min-width:2200px){ .card.is-skeleton{min-height:805px} }
-@media (min-width:3000px){ .card.is-skeleton{min-height:981px} }
+@media (min-width:961px){ .card.is-skeleton{min-height:976px} }
+@media (min-width:2200px){ .card.is-skeleton{min-height:858px} }
+@media (min-width:3000px){ .card.is-skeleton{min-height:1035px} }
 @media (min-width:961px) and (max-height:900px), (min-width:961px) and (max-width:1500px) and (max-height:920px){
-  .card.is-skeleton{min-height:601px}
+  .card.is-skeleton{min-height:644px}
 }
 /* card skeleton when a flick outruns the prefetch buffer */
 .card.is-story-loading .card-text{width:100%}
@@ -302,3 +302,13 @@ html.modal-open{overflow:hidden}
 .img-modal-close:hover{background:var(--btn-hi)}
 .img-modal-close:focus-visible{outline:3px solid var(--green-hi); outline-offset:3px}
 @media (prefers-reduced-motion: reduce){ .img-modal, .img-modal-img{transition:none} .img-modal-img{transform:none} }
+/* article nav (desktop card): Older/Newer at the bottom of the article, Read more right-aligned */
+.card-foot{display:flex; justify-content:space-between; align-items:center; gap:16px; margin-top:16px; padding-top:14px; border-top:1px solid var(--line)}
+.card-head{min-height:calc(var(--fs-ui) * 1.4)}
+.card-read-more:not([hidden]){display:block; margin:12px 0 0 auto}
+.skel-readmore{margin-left:auto}
+.skel-foot .skel-btn{width:6.4em}
+/* touch/pen swipes on the stage (including the card) are handled in JS; vertical panning still scrolls */
+@media (min-width:761px){ .stage{touch-action:pan-y pinch-zoom} }
+@media (max-height:920px){ .card-foot{margin-top:12px; padding-top:10px} }
+@media (max-width:760px){ .skel-foot{display:none !important} }

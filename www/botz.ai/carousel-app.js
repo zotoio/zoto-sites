@@ -861,12 +861,14 @@ function cardHTML(a, i) {
   const head = `
   <header class="card-head">
     <span class="kicker" data-snap="text">Featured <b>${pos + 1}</b> of ${n} · newest on the right</span>
-    <div class="card-nav">
-      <button type="button" data-snap="button" data-nav="-1" ${canGoOlder(i) ? '' : 'disabled'} aria-label="${olderLabel}">‹ Older</button>
-      <button type="button" data-snap="button" data-nav="1" ${canGoNewer(i) ? '' : 'disabled'} aria-label="${newerLabel}">Newer ›</button>
-    </div>
   </header>`;
-  if (a.placeholder) return `${head}<span class="sr-only">Loading story</span>${CARD_SKELETON_BODY}`;
+  // Older/Newer sit at the bottom of the article (below the text, Read more and source details)
+  const foot = `
+  <nav class="card-foot card-nav" aria-label="Story navigation">
+    <button type="button" data-snap="button" data-nav="-1" ${canGoOlder(i) ? '' : 'disabled'} aria-label="${olderLabel}">‹ Older</button>
+    <button type="button" data-snap="button" data-nav="1" ${canGoNewer(i) ? '' : 'disabled'} aria-label="${newerLabel}">Newer ›</button>
+  </nav>`;
+  if (a.placeholder) return `${head}<span class="sr-only">Loading story</span>${CARD_SKELETON_BODY}${foot}`;
   const img = a.img
     ? `<button type="button" class="card-img-btn" aria-haspopup="dialog" aria-label="Enlarge image${a.title ? `: ${esc(a.title)}` : ''}"><img class="card-img" data-snap="img" src="${esc(a.img)}" alt="" width="340" height="340"></button>`
     : `<img class="card-img" data-snap="img" src="" alt="" width="340" height="340">`;
@@ -880,7 +882,7 @@ function cardHTML(a, i) {
       <button type="button" class="card-read-more" data-snap="button" hidden aria-expanded="false">Read more</button>
       ${cardMetaHTML(a)}
     </div>
-  </div>`;
+  </div>${foot}`;
 }
 /** Article view byline: "Agent ChatGPT · 19 Oct 2026" — same date source/format as the grid tiles; missing parts omitted. */
 function cardBylineHTML(a, snap) {
@@ -1204,7 +1206,7 @@ function snapshot(el, i, dpr = 1.5) {
   const grd = ctx.createLinearGradient(0, 0, 0, h); grd.addColorStop(0, '#151916'); grd.addColorStop(1, '#0f1210');
   ctx.fillStyle = grd; ctx.fill(); ctx.strokeStyle = 'rgba(255,255,255,.09)'; ctx.lineWidth = 1; ctx.stroke(); ctx.restore();
   // divider lines
-  el.querySelectorAll('.card-head, .card-meta').forEach(d => {
+  el.querySelectorAll('.card-head, .card-meta, .card-foot').forEach(d => {
     const r = d.getBoundingClientRect(), cs2 = getComputedStyle(d);
     ctx.fillStyle = 'rgba(255,255,255,.09)';
     if (d.classList.contains('card-head')) ctx.fillRect(r.left - r0.left, r.bottom - r0.top - 1, r.width, 1);
@@ -1693,11 +1695,24 @@ window.addEventListener('popstate', () => {
 });
 // swipe (touch/pen anywhere on the stage; mouse drags only outside the text card so text stays selectable)
 let sw = null;
-stage.addEventListener('pointerdown', e => { if (imageModalOpen() || (e.pointerType === 'mouse' && e.target.closest('.card'))) return; sw = { x: e.clientX, y: e.clientY }; });
-stage.addEventListener('pointerup', e => {
-  if (!sw || imageModalOpen()) { sw = null; return; } const dx = e.clientX - sw.x, dy = e.clientY - sw.y; sw = null;
-  if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.3) navRelative(dx < 0 ? 1 : -1);
+// Touch and pen swipe anywhere on the stage, including the article card; mouse drags only outside the card so
+// text stays selectable. Right-to-left = Newer, left-to-right = Older (newer cards sit on the right).
+let swipedAt = 0;
+stage.addEventListener('pointerdown', e => {
+  if (mobileMode || imageModalOpen() || !e.isPrimary || (e.pointerType === 'mouse' && e.target.closest('.card'))) return;
+  sw = { x: e.clientX, y: e.clientY, id: e.pointerId };
 });
+stage.addEventListener('pointercancel', () => { sw = null; });
+stage.addEventListener('pointerup', e => {
+  if (!sw || sw.id !== e.pointerId || imageModalOpen()) { sw = null; return; }
+  const dx = e.clientX - sw.x, dy = e.clientY - sw.y; sw = null;
+  if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.3) {
+    swipedAt = performance.now();
+    navRelative(dx < 0 ? 1 : -1);
+  }
+});
+// a swipe that ends on a link, button or the image must not also activate it
+stage.addEventListener('click', e => { if (performance.now() - swipedAt < 400) { e.preventDefault(); e.stopPropagation(); } }, true);
 $('.random-link')?.addEventListener('click', async e => {
   e.preventDefault();
   const rnd = FEAT[active]?.navigation?.random;

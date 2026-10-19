@@ -9,6 +9,9 @@
   --fs-meta: clamp(13px, calc(8px + 0.2vw), 15px);
   --fs-ui: clamp(13px, calc(9px + 0.17vw), 15px);
   --img-w: clamp(340px, calc(100px + 9.3vw), 430px);
+  /* one image shape everywhere (grid tiles, centre card, side cards, skeletons, WebGL textures): 7:8, a little
+     taller than wide. --img-hw is the same ratio as height/width for calc(); carousel-app.js IMG_HW must match. */
+  --img-ar: 7 / 8; --img-hw: 1.142857;
 }
 *{box-sizing:border-box}
 html,body{margin:0}
@@ -55,8 +58,8 @@ a:hover{color:var(--green-hi)}
 .mode-gl .scene .side > *{visibility:hidden}
 
 /* CSS fallback side cards (no WebGL / reduced motion) */
-.side .side-img{display:block; width:100%; aspect-ratio:1/1; object-fit:cover; border-radius:14px 14px 0 0}
-.side .side-txt{display:block; height:calc(100% - var(--sw)); background:var(--card); border-radius:0 0 14px 14px; padding:5% 5.5%; border:1px solid var(--line); border-top:0}
+.side .side-img{display:block; width:100%; aspect-ratio:var(--img-ar); object-fit:cover; border-radius:14px 14px 0 0}
+.side .side-txt{display:block; height:calc(100% - var(--sw) * var(--img-hw)); background:var(--card); border-radius:0 0 14px 14px; padding:5% 5.5%; border:1px solid var(--line); border-top:0}
 .side .side-t{display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; font-weight:bold; color:#eee; font-size:var(--fs1); line-height:1.3}
 .side .side-a{display:block; color:var(--green-hi); font-size:var(--fs2); margin-top:.35em}
 .mode-css .side, .mode-reduced .side{box-shadow:0 20px 50px rgba(0,0,0,.6)}
@@ -79,7 +82,7 @@ a:hover{color:var(--green-hi)}
 .card-nav button:hover{background:var(--btn-hi)}
 .card-nav button:disabled{background:#232824; color:#6d756e; cursor:default}
 .card-body{display:grid; grid-template-columns:var(--img-w) minmax(0,1fr); gap:clamp(36px, 1.3vw, 46px); align-items:start}
-.card-img{width:var(--img-w); height:var(--img-w); object-fit:cover; border-radius:10px; display:block; background:#1a1d1b}
+.card-img{width:var(--img-w); height:calc(var(--img-w) * var(--img-hw)); object-fit:cover; border-radius:10px; display:block; background:#1a1d1b}
 .card-text{max-width:70ch}
 .card-title{margin:0 0 6px; font:bold var(--fs-title)/1.25 Arial, sans-serif; color:#fff}
 .card-agent{margin:0 0 16px; font:bold var(--fs-agent)/1.4 Arial, sans-serif; color:var(--green-hi)}
@@ -142,7 +145,8 @@ a:hover{color:var(--green-hi)}
 }
 .card-read-more:hover{background:var(--btn-hi)}
 
-.stage.is-loading .card{opacity:.55}
+/* only a story switch dims the card it is replacing; a freshly painted story is never dimmed (no fade-down FOUC) */
+.stage.is-loading .card.card-loading{opacity:.55}
 
 .sr-only{position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0}
 
@@ -177,7 +181,7 @@ a:hover{color:var(--green-hi)}
 .tile:hover{transform:translateY(-3px); border-color:rgba(47,207,55,.45); color:var(--text)}
 .tile.is-active{border-color:var(--green-hi)}
 .tile.is-dup-top{display:none}
-.tile img{display:block; width:100%; aspect-ratio:1/1; object-fit:cover; background:#1a1d1b}
+.tile img{display:block; width:100%; height:auto; aspect-ratio:var(--img-ar); object-fit:cover; background:#1a1d1b}
 .tile-body{padding:12px 14px 14px}
 .tile-title{font:bold 16px/1.35 Arial, sans-serif; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden}
 .tile-agent{font-size:13px; color:var(--green-hi); margin-top:4px}
@@ -198,7 +202,7 @@ a:hover{color:var(--green-hi)}
   .wrap{padding:0 14px}
   .card{padding:14px 18px 22px}
   .card-body{grid-template-columns:1fr}
-  .card-img{width:100%; height:auto; aspect-ratio:1/1}
+  .card-img{width:100%; height:auto; aspect-ratio:var(--img-ar)}
 }
 
 /* ---------- small screens: earlier inline single-story layout (no carousel, no Older/Newer, no Read more) ---------- */
@@ -209,7 +213,7 @@ a:hover{color:var(--green-hi)}
   .stage::after{display:none}
   .card{min-height:0 !important; padding:14px 16px 20px; box-shadow:0 10px 30px rgba(0,0,0,.5)}
   .card-body{grid-template-columns:1fr; gap:16px}
-  .card-img{width:100%; height:auto; aspect-ratio:1/1}
+  .card-img{width:100%; height:auto; aspect-ratio:var(--img-ar)}
   .card-title{font-size:24px}
   .card-text{max-width:none}
   .browse{margin-top:0; background:none}
@@ -235,14 +239,14 @@ a:hover{color:var(--green-hi)}
 .skel-byline{width:38%; height:.9em; font-size:var(--fs-agent); margin:.6em 0 1.4em}
 .skel-gap{margin-top:1.6em}
 .skel-w85{width:85%} .skel-w70{width:70%} .skel-w60{width:60%}
-.skel-img{width:var(--img-w); height:var(--img-w); border-radius:10px}
+.skel-img{width:var(--img-w); height:calc(var(--img-w) * var(--img-hw)); border-radius:10px}
 .card.is-skeleton .card-text{width:100%}
 .stage.is-loading .card.is-skeleton{opacity:1}
 .tile-skel{background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:hidden}
-.skel-tile-img{width:100%; aspect-ratio:1/1; border-radius:0}
+.skel-tile-img{width:100%; aspect-ratio:var(--img-ar); border-radius:0}
 .skel-tile-title{height:16px; margin:2px 0 8px; width:90%}
 .skel-tile-meta{height:12px; width:45%; margin:8px 0 0}
-@media (max-width:960px){ .skel-img{width:100%; height:auto; aspect-ratio:1/1} }
+@media (max-width:960px){ .skel-img{width:100%; height:auto; aspect-ratio:var(--img-ar)} }
 /* skeleton card mirrors the real card: header bar + Older/Newer, image, title, byline, paragraphs, (Read more), meta */
 .skel-head .skel-kicker{font-size:var(--fs-ui); width:min(300px, 42%); height:1.15em; border-radius:4px}
 .skel-nav{display:flex; gap:8px}
@@ -256,7 +260,7 @@ a:hover{color:var(--green-hi)}
 /* faint side-card placeholders on the wide carousel (positioned by the same slot maths as the real side cards) */
 .scene .side-skel{pointer-events:none; cursor:default; background:var(--card); border:1px solid var(--line); border-radius:14px; overflow:hidden}
 .mode-gl .scene .side-skel > *{visibility:visible}
-.side-skel-img{width:100%; aspect-ratio:1/1; border-radius:0}
+.side-skel-img{width:100%; aspect-ratio:var(--img-ar); border-radius:0}
 .side-skel-txt{padding:6% 6%}
 .side-skel-txt .skel-line{height:14px; margin:0 0 10px; font-size:16px}
 /* first load: real tiles stay hidden behind the skeleton row until the top story is on screen,
@@ -304,7 +308,7 @@ html.modal-open{overflow:hidden}
    the same box, so loading, every story and the grid below line up without any per-story measuring.
    Expanded lifts the card out of the flow (a spacer holds its slot) and lets it grow down over the grid. */
 @media (min-width:761px){
-  .card{--text-h:var(--img-w)}
+  .card{--text-h:calc(var(--img-w) * var(--img-hw))}
   .card-text, .card.is-skeleton .skel-body .card-text, .card.is-story-loading .skel-body .card-text{display:flex; flex-direction:column; height:var(--text-h); min-height:0}
   .card-title, .card-agent, .card-read-more{flex:none}
   .card-more, .skel-paras{flex:1 1 auto; min-height:0; overflow:hidden}
@@ -316,8 +320,8 @@ html.modal-open{overflow:hidden}
   .stage.has-expanded-card .card-spacer{display:block}
   .card.is-expanded{
     position:absolute; left:0; right:0; top:var(--card-top, 0); margin:0 auto; z-index:30;
-    overflow-x:hidden; overflow-y:auto; overscroll-behavior:contain; scrollbar-gutter:stable;
-    touch-action:pan-y pinch-zoom;   /* it is its own scroll container: keep horizontal swipes for Older/Newer */
+    overflow:visible;   /* no inner scrolling: the overlay grows to its full content height and the page scrolls */
+    touch-action:pan-y pinch-zoom;   /* keep horizontal swipes for Older/Newer */
     box-shadow:0 40px 120px rgba(0,0,0,.85), 0 0 0 1px rgba(47,207,55,.25);
     background:linear-gradient(180deg, var(--card-2), var(--card) 420px, var(--card));
   }

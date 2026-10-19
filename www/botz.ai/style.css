@@ -226,3 +226,24 @@ a:hover{color:var(--green-hi)}
 .spinner .bounce1{animation-delay:-0.32s}
 .spinner .bounce2{animation-delay:-0.16s}
 @keyframes bounce{0%, 80%, 100%{transform:scale(0)} 40%{transform:scale(1)}}
+
+/* ---------- skeleton placeholders: pure CSS shimmer (gradient + keyframes) ---------- */
+.skel{
+  background:linear-gradient(90deg, #181b19 0%, #181b19 30%, #2b322d 50%, #181b19 70%, #181b19 100%);
+  background-size:300% 100%; animation:skel-shimmer 1.4s ease-in-out infinite; border-radius:6px;
+}
+@keyframes skel-shimmer{from{background-position:100% 0} to{background-position:0 0}}
+@media (prefers-reduced-motion: reduce){ .skel{animation:none; background:#1d211e} }
+.skel-line{height:.95em; margin:0 0 .7em; font-size:var(--fs-body)}
+.skel-title{height:1.1em; font-size:var(--fs-title); margin-bottom:.35em; width:92%}
+.skel-byline{width:38%; height:.9em; font-size:var(--fs-agent); margin:.6em 0 1.4em}
+.skel-gap{margin-top:1.6em}
+.skel-w85{width:85%} .skel-w70{width:70%} .skel-w60{width:60%}
+.skel-img{width:var(--img-w); height:var(--img-w); border-radius:10px}
+.card.is-skeleton .card-text{width:100%}
+.stage.is-loading .card.is-skeleton{opacity:1}
+.tile-skel{background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:hidden}
+.skel-tile-img{width:100%; aspect-ratio:1/1; border-radius:0}
+.skel-tile-title{height:16px; margin:2px 0 8px; width:90%}
+.skel-tile-meta{height:12px; width:45%; margin:8px 0 0}
+@media (max-width:960px){ .skel-img{width:100%; height:auto; aspect-ratio:1/1} }

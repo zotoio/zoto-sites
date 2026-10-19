@@ -748,6 +748,7 @@ function mobileArticleHTML(a) {
   </div>`;
 }
 function renderCard(el, i) {
+  if (el === cardEl) { clearArticleSkeletonState(); el.removeAttribute('aria-busy'); }
   el.innerHTML = cardHTML(FEAT[i], i);
   el.dataset.id = FEAT[i].id;
   el.querySelectorAll('.card-paras p, .card-paras li').forEach(n => { n.dataset.snap = 'text'; });
@@ -808,7 +809,46 @@ function rebuildSideButtons() {
 }
 
 /* ---------------- browse grid (archive) ---------------- */
+/* ---------------- skeleton placeholders (pure CSS shimmer; JS only inserts/removes the markup) ---------------- */
+const ARTICLE_SKELETON_HTML = `
+  <div class="card-body skel-body" aria-hidden="true">
+    <div class="skel skel-img"></div>
+    <div class="card-text">
+      <div class="skel skel-line skel-title"></div>
+      <div class="skel skel-line skel-title skel-w60"></div>
+      <div class="skel skel-line skel-byline"></div>
+      <div class="skel skel-line"></div><div class="skel skel-line"></div><div class="skel skel-line skel-w85"></div>
+      <div class="skel skel-line skel-gap"></div><div class="skel skel-line"></div><div class="skel skel-line skel-w70"></div>
+    </div>
+  </div>`;
+function showArticleSkeleton() {
+  cardEl.dataset.id = '';
+  cardEl.classList.add('is-skeleton');
+  cardEl.setAttribute('aria-busy', 'true');
+  cardEl.innerHTML = `<span class="sr-only" role="status">Loading story</span>${ARTICLE_SKELETON_HTML}`;
+}
+function clearArticleSkeletonState() {
+  cardEl.classList.remove('is-skeleton');
+}
+const TILE_SKELETON_HTML = '<div class="tile-skel" aria-hidden="true"><div class="skel skel-tile-img"></div><div class="tile-body"><div class="skel skel-line skel-tile-title"></div><div class="skel skel-line skel-tile-title skel-w60"></div><div class="skel skel-line skel-tile-meta"></div></div></div>';
+function showTileSkeletons(count) {
+  removeTileSkeletons();
+  gridEl.insertAdjacentHTML('beforeend', TILE_SKELETON_HTML.repeat(count));
+  gridEl.setAttribute('aria-busy', 'true');
+}
+/** One full row of placeholders (two on small screens) so ultrawide grids are not half empty. */
+function tileSkeletonCount() {
+  if (mobileMode) return 2;
+  const cols = Math.floor(((gridEl.clientWidth || window.innerWidth) + 20) / 320);
+  return Math.max(3, Math.min(12, cols));
+}
+function removeTileSkeletons() {
+  gridEl.querySelectorAll('.tile-skel').forEach(n => n.remove());
+  gridEl.removeAttribute('aria-busy');
+}
+
 function appendArchiveTiles(items) {
+  removeTileSkeletons();
   items.forEach(editorial => {
     if (gridEl.querySelector(`[data-id="${editorial.cache_key}"]`)) return;
     const a = document.createElement('a');
@@ -830,11 +870,11 @@ function appendArchiveTiles(items) {
 }
 async function fetchArchive(page) {
   if (archiveLoading || !archiveHasMore) return;
-  if (loadingEl) loadingEl.style.display = 'block';
+  showTileSkeletons(tileSkeletonCount());
   try {
     await ensureArchivePageLoaded(page);
   } finally {
-    if (loadingEl) loadingEl.style.display = 'none';
+    removeTileSkeletons();
   }
 }
 function isBottomOfPage() {
@@ -1614,9 +1654,7 @@ async function openStoryMobile(cacheKey, fromHash = false) {
     if (key) history.pushState(null, '', '#' + key);
     else history.replaceState(null, '', location.pathname + location.search);
   }
-  cardEl.setAttribute('aria-busy', 'true');
-  cardEl.dataset.id = '';
-  cardEl.innerHTML = '<div class="spinner" role="status" aria-label="Loading story"><div class="bounce1"></div><div class="bounce2"></div></div>';
+  showArticleSkeleton();
   try {
     let payload = await fetchStoryForMobile(key);
     if (seq !== mobileLoadSeq || !mobileMode) return;
@@ -1634,6 +1672,7 @@ async function openStoryMobile(cacheKey, fromHash = false) {
     FEAT = [art];
     active = 0;
     offsets = [0];
+    clearArticleSkeletonState();
     cardEl.innerHTML = mobileArticleHTML(art);
     cardEl.dataset.id = art.id;
     wireByline(cardEl);
@@ -1645,7 +1684,7 @@ async function openStoryMobile(cacheKey, fromHash = false) {
     refreshArchiveTileTitles();
   } catch (err) {
     console.error(err);
-    if (seq === mobileLoadSeq && mobileMode) cardEl.innerHTML = '<p class="mobile-error">Failed to load articles</p>';
+    if (seq === mobileLoadSeq && mobileMode) { clearArticleSkeletonState(); cardEl.innerHTML = '<p class="mobile-error">Failed to load articles</p>'; }
   } finally {
     if (seq === mobileLoadSeq) {
       mobileLoadingId = null;
@@ -1673,6 +1712,8 @@ async function boot() {
   editorialUrlsSeen.clear();
   seedStaticAuthors();
   stage.classList.add('is-loading');
+  showArticleSkeleton();
+  showTileSkeletons(tileSkeletonCount());
   try {
     await ensureArchivePageLoaded(1);
     const hashKey = decodeURIComponent(location.hash.slice(1));
@@ -1683,6 +1724,12 @@ async function boot() {
     toast('Failed to load GenAI News.');
   } finally {
     stage.classList.remove('is-loading');
+    removeTileSkeletons();
+    if (cardEl.classList.contains('is-skeleton')) {
+      clearArticleSkeletonState();
+      cardEl.removeAttribute('aria-busy');
+      cardEl.innerHTML = '<p class="mobile-error">Failed to load articles</p>';
+    }
   }
 }
 await boot();

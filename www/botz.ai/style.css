@@ -43,7 +43,7 @@ a:hover{color:var(--green-hi)}
 .wrap{max-width:3000px; margin:0 auto; padding:0 32px}
 
 /* ---------- stage ---------- */
-.stage{position:relative; padding:clamp(40px, 1.9vw, 64px) 0 clamp(96px, 9vh, 128px); min-height:640px; isolation:isolate}
+.stage{--stage-pt:clamp(40px, 1.9vw, 64px); position:relative; padding:var(--stage-pt) 0 clamp(96px, 9vh, 128px); min-height:640px; isolation:isolate}
 /* canvas + hit-target layer overhang the stage (under header / grid) so the lifted flip never clips */
 #gl{position:absolute; left:50%; top:-64px; width:100vw; height:calc(100% + 124px); transform:translateX(-50%); z-index:0; display:block; pointer-events:none}
 .scene{position:absolute; left:50%; top:-64px; width:100vw; height:calc(100% + 124px); transform:translateX(-50%); z-index:1; pointer-events:none}
@@ -75,12 +75,6 @@ a:hover{color:var(--green-hi)}
 .card-head{display:flex; align-items:center; justify-content:space-between; gap:16px; padding-bottom:14px; margin-bottom:22px; border-bottom:1px solid var(--line)}
 .kicker{font-size:var(--fs-ui); color:var(--muted); letter-spacing:.02em}
 .kicker b{color:var(--text); font-weight:bold}
-.card-nav{display:flex; gap:8px}
-.card-nav button{
-  background:var(--btn); color:#fff; border:0; border-radius:6px; padding:6px 14px; font:bold var(--fs-ui)/1.4 Arial, sans-serif; cursor:pointer;
-}
-.card-nav button:hover{background:var(--btn-hi)}
-.card-nav button:disabled{background:#232824; color:#6d756e; cursor:default}
 .card-body{display:grid; grid-template-columns:var(--img-w) minmax(0,1fr); gap:clamp(36px, 1.3vw, 46px); align-items:start}
 .card-img{width:var(--img-w); height:calc(var(--img-w) * var(--img-hw)); object-fit:cover; border-radius:10px; display:block; background:#1a1d1b}
 .card-text{max-width:70ch}
@@ -170,7 +164,7 @@ a:hover{color:var(--green-hi)}
 .browse{padding:4px 0 48px; margin-top:-88px; position:relative; z-index:4; background:linear-gradient(to bottom, transparent 0, var(--bg) 28px); isolation:isolate}
 .tile-agent:empty{display:none}
 @media (max-height: 920px) {
-  .stage{min-height:520px; padding:clamp(28px, 1.4vw, 48px) 0 clamp(56px, 6vh, 72px)}
+  .stage{--stage-pt:clamp(28px, 1.4vw, 48px); min-height:520px; padding:var(--stage-pt) 0 clamp(56px, 6vh, 72px)}
   .browse{margin-top:-104px}
   .card-head{margin-bottom:14px; padding-bottom:10px}
   .card-agent{margin-bottom:10px}
@@ -289,16 +283,11 @@ html.modal-open{overflow:hidden}
 .img-modal-close:hover{background:var(--btn-hi)}
 .img-modal-close:focus-visible{outline:3px solid var(--green-hi); outline-offset:3px}
 @media (prefers-reduced-motion: reduce){ .img-modal, .img-modal-img{transition:none} .img-modal-img{transform:none} }
-/* article nav (desktop card): Older/Newer at the bottom of the article, Read more right-aligned */
-.card-foot{display:flex; justify-content:space-between; align-items:center; gap:16px; margin-top:16px; padding-top:14px; border-top:1px solid var(--line)}
 .card-head{min-height:calc(var(--fs-ui) * 1.4)}
 .card-read-more:not([hidden]){display:block; margin:12px 0 0 auto}
 .skel-readmore{margin-left:auto}
-.skel-foot .skel-btn{width:6.4em}
 /* touch/pen swipes on the stage (including the card) are handled in JS; vertical panning still scrolls */
 @media (min-width:761px){ .stage{touch-action:pan-y pinch-zoom} }
-@media (max-height:920px){ .card-foot{margin-top:12px; padding-top:10px} }
-@media (max-width:760px){ .skel-foot{display:none !important} }
 .site-head h1 img.site-logo{background:#2a2f2b}
 
 .card-spacer{display:none}
@@ -341,3 +330,35 @@ html.modal-open{overflow:hidden}
 picture{display:contents}
 picture > source{display:none}
 .grid-sentinel{height:1px; margin-top:-1px; pointer-events:none}
+/* ---------- Older / Newer arrows (desktop, above 760px) ----------
+   Translucent circles centred exactly on the centre card's left/right edges (half over the card, half outside),
+   vertically centred on the COLLAPSED card. They live outside the card (not in its flip / opacity / snapshot) and
+   carousel-app.js pins --arrow-y to the collapsed card, so Read more expanding never moves them. Left = Older,
+   right = Newer (newest is on the right, like the side cards, ArrowLeft/ArrowRight and swipes). */
+.stage-arrows{
+  --arrow-d:52px; --wrap-pad:32px;
+  --arrow-x:max(calc(var(--arrow-d) / 2 - var(--wrap-pad)), calc(50% - min(var(--card-w), 100%) / 2));
+  /* first-paint estimate of the collapsed card centre (padding + header + 7:8 image row); JS replaces it with the measured value */
+  --card-h0:calc(2px + 18px + var(--fs-ui) * 1.4 + 14px + 1px + 22px + var(--img-w) * var(--img-hw) + 30px);
+  position:absolute; left:0; right:0; height:0; z-index:35; pointer-events:none;
+  top:var(--arrow-y, calc(var(--stage-pt) + var(--card-h0) / 2));
+}
+.nav-arrow{
+  position:absolute; top:calc(var(--arrow-d) / -2); width:var(--arrow-d); height:var(--arrow-d);
+  display:grid; place-items:center; margin:0; padding:0; border-radius:50%; cursor:pointer; pointer-events:auto;
+  color:#f4f7f4; background:rgba(10,13,11,.55); border:1px solid rgba(255,255,255,.3);
+  -webkit-backdrop-filter:blur(6px) saturate(1.15); backdrop-filter:blur(6px) saturate(1.15);
+  box-shadow:0 6px 20px rgba(0,0,0,.5), inset 0 0 0 1px rgba(0,0,0,.25);
+  transition:background-color .15s ease, border-color .15s ease, color .15s ease, scale .15s ease;
+}
+.nav-arrow svg{width:26px; height:26px; fill:none; stroke:currentColor; stroke-width:2.6; stroke-linecap:round; stroke-linejoin:round; filter:drop-shadow(0 1px 1px rgba(0,0,0,.65))}
+.nav-arrow-older{left:var(--arrow-x); transform:translateX(-50%)}
+.nav-arrow-newer{right:var(--arrow-x); transform:translateX(50%)}
+.nav-arrow:hover:not(:disabled){background:rgba(17,139,25,.78); border-color:rgba(47,207,55,.9); scale:1.06}
+.nav-arrow:active:not(:disabled){scale:.96}
+.nav-arrow:focus-visible{outline:3px solid var(--green-hi); outline-offset:3px; border-radius:50%}
+.nav-arrow:disabled{opacity:.35; cursor:default}
+@media (max-height:920px){ .stage-arrows{--card-h0:calc(2px + 18px + var(--fs-ui) * 1.4 + 10px + 1px + 14px + var(--img-w) * var(--img-hw) + 30px)} }
+@media (max-width:960px){ .stage-arrows{--arrow-d:44px; --wrap-pad:14px} }
+@media (max-width:760px){ .stage-arrows{display:none} }   /* mobile keeps its inline story flow (no Older/Newer) */
+@media (prefers-reduced-motion: reduce){ .nav-arrow{transition:none} }

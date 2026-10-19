@@ -94,5 +94,8 @@ jobs:
       - name: botz.ai carousel polish guards (image shape, Read more, loading FOUC)
         run: node --test scripts/botz-carousel-polish.test.mjs
 
+      - name: botz.ai arrow navigation guards
+        run: node --test scripts/botz-arrow-nav.test.mjs
+
       - name: Verify botz Docker image includes runtime modules
         run: bash scripts/verify-botz-docker-image.sh

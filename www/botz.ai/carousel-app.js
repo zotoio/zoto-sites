@@ -963,7 +963,7 @@ function sizeExpandedCard() {
 }
 function expandReadMore() {
   if (mobileMode || readMoreExpanded() || !cardEl.querySelector('.card-read-more')) return;
-  cardSpacer.style.height = cardEl.offsetHeight + 'px';
+  cardSpacer.style.height = cardEl.getBoundingClientRect().height + 'px';   // fractional: offsetHeight rounds and would nudge the grid
   stage.classList.add('has-expanded-card');
   cardEl.classList.add('is-expanded');
   sizeExpandedCard();

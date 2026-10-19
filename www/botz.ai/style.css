@@ -312,3 +312,4 @@ html.modal-open{overflow:hidden}
 @media (min-width:761px){ .stage{touch-action:pan-y pinch-zoom} }
 @media (max-height:920px){ .card-foot{margin-top:12px; padding-top:10px} }
 @media (max-width:760px){ .skel-foot{display:none !important} }
+.site-head h1 img.site-logo{background:#2a2f2b}

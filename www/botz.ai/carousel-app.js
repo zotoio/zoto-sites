@@ -571,15 +571,18 @@ function ringEnsureStory(r) {
 function ringSchedule() {
   const n = ringLen();
   if (!n || ringPos < 0 || mobileMode) return;
-  const order = [ringPos], seen = new Set(order);
-  for (let d = 1; d <= RING_BUFFER; d++) for (const sgn of [1, -1]) {
-    const r = ringWrap(ringPos + sgn * d);
+  // during fast flicks the queue centres on where the queued steps will land, so that story loads first
+  const focus = ringWrap(ringPos + navQueue);
+  const order = [focus], seen = new Set(order);
+  for (let d = 1; d <= RING_BUFFER; d++) for (const sgn of [Math.sign(navQueue) || 1, -(Math.sign(navQueue) || 1)]) {
+    const r = ringWrap(focus + sgn * d);
     if (!seen.has(r)) { seen.add(r); order.push(r); }
   }
   ringQueue = order;   // replaces the old queue: positions the user has left behind are dropped before they start
+  if (ringKeyAt(focus) && !ringStories.has(ringKeyAt(focus))) ringEnsureStory(focus);   // landing story first, outside the concurrency limit
   const pages = new Set();
   for (let d = 0; d <= RING_BUFFER + RING_PAGE_AHEAD; d++) for (const sgn of [1, -1]) {
-    const r = ringWrap(ringPos + sgn * d);
+    const r = ringWrap(focus + sgn * d);
     if (r < ringTotal) pages.add(ringPageOf(r));
   }
   for (const p of pages) if (!ringPages.has(p) && !ringPageFlights.has(p)) ringLoadPage(p).then(() => ringSchedule(), err => console.warn(err));
@@ -671,7 +674,8 @@ async function ringMove(delta, fromHash = false, { instant = false } = {}) {
   const crossing = ringPos + delta >= n || ringPos + delta < 0;
   const key = ringKeyAt(newPos);
   const st = key ? ringStories.get(key) : null;
-  if (!st?.article && !st?.failed) { ringStats.skeletonCentres++; ringEnsureStory(newPos); }
+  // intermediate steps of a fast flick don't fetch; the landing story is requested first (ringSchedule)
+  if (!st?.article && !st?.failed && navQueue === 0) { ringStats.skeletonCentres++; ringEnsureStory(newPos); }
   const target = active + delta;
   if (target >= 0 && target < FEAT.length) {
     if (FEAT[target].placeholder && st?.article) { st.article.ringIndex = newPos; FEAT[target] = st.article; }   // seam card becomes the centre
@@ -916,9 +920,9 @@ function mobileArticleHTML(a) {
   </div>`;
 }
 function renderCard(el, i) {
+  el.classList.toggle('is-story-loading', !!FEAT[i].placeholder);
   if (el === cardEl) {
     clearArticleSkeletonState();
-    el.classList.toggle('is-story-loading', !!FEAT[i].placeholder);
     if (FEAT[i].placeholder) el.setAttribute('aria-busy', 'true'); else el.removeAttribute('aria-busy');
   }
   el.innerHTML = cardHTML(FEAT[i], i);
@@ -1211,6 +1215,12 @@ function snapshot(el, i, dpr = 1.5) {
     ctx.fillStyle = 'rgba(255,255,255,.09)';
     if (d.classList.contains('card-head')) ctx.fillRect(r.left - r0.left, r.bottom - r0.top - 1, r.width, 1);
     else ctx.fillRect(r.left - r0.left, r.top - r0.top, r.width, 1);
+  });
+  // skeleton blocks: a flip onto a story that is still loading shows the skeleton, never a blank card
+  el.querySelectorAll('.skel').forEach(n => {
+    const r = n.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    ctx.fillStyle = '#20251f'; rr(ctx, r.left - r0.left, r.top - r0.top, r.width, r.height, 6); ctx.fill();
   });
   // clamped paragraphs (Read more on short viewports) are clipped in the flip texture just like on the card
   const parasEl = el.classList.contains('has-read-more') && !el.classList.contains('is-expanded') ? el.querySelector('.card-paras') : null;
@@ -1573,6 +1583,7 @@ function snapFor(i) { renderCard(measureEl, i); measureEl.style.width = geom.car
 async function navRelative(delta, fromHash = false) {
   if (!delta || mobileMode || imageModalOpen()) return;
   navQueue = Math.max(-12, Math.min(12, navQueue + delta));   // fast repeated flicks queue up (bounded)
+  if (busy) ringSchedule();   // re-aim the prefetch at where the queued flicks will land
   if (busy) return;
   await pumpNavQueue(fromHash);
 }

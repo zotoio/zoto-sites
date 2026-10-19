@@ -32,6 +32,7 @@ import {
     listPublicEditorialCacheFileNames,
 } from './cacheListing.js';
 import { stripPrivateEditorialFields, writeEditorialUsageRecord } from './editorialUsageStore.js';
+import { buildArchiveListItem, formatEditorialByline } from './archiveListing.js';
 import { buildRelevanceScoringPrompt } from './storySelection.js';
 import { assertNewsSourceEnv, parseNewsSource } from './newsSourceConfig.js';
 import { readRecentLiveStoryIdentifiers } from './liveStoryDedup.js';
@@ -412,6 +413,7 @@ app.get('/editorials', async (req, res) => {
                 console.warn('Editorial saved without generated image (image generation failed or was skipped).');
             }
             article.authorAlias = author.alias;
+            article.author = formatEditorialByline(author.name);
             const now = new Date();
             if (asOfDate) {
                 const hour = generationContext.cacheKeyHour ?? '12';
@@ -877,11 +879,10 @@ app.get('/archive', async (req, res) => {
                     data = JSON.parse(data)[0];
                     const $ = cheerio.load(data.editorial);
                     const cacheKey = file.split('/').pop().replace('.json', '');
+                    // title stays cheerio h2 text (existing contract); author/published_at added for archive tiles
                     const result = {
-                        cache_key: cacheKey,
+                        ...buildArchiveListItem(cacheKey, data),
                         title: $('h2').text(),
-                        image_url: data.article.image_url,
-                        generated_at: data.article.generated_at,
                     };
                     resolve(result); // Parse JSON data
                 }

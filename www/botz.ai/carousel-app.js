@@ -2107,8 +2107,15 @@ stage.addEventListener('pointerup', e => {
 });
 // a swipe that ends on a link, button or the image must not also activate it
 stage.addEventListener('click', e => { if (performance.now() - swipedAt < 400) { e.preventDefault(); e.stopPropagation(); } }, true);
+// dice tumble overlay: its own lazily imported module (with the vendored cannon-es), started on the click and
+// never awaited, so the random story loads exactly as before while the dice roll over the page
+function rollDiceOverlay() {
+  if (reduced || matchMedia('(prefers-reduced-motion: reduce)').matches) return;   // no animation, nothing loaded
+  import('./dice-roll.js?v=20261019k').then(m => m.rollDice()).catch(err => console.warn('dice roll', err));
+}
 $('.random-link')?.addEventListener('click', async e => {
   e.preventDefault();
+  rollDiceOverlay();
   const rnd = await randomStoryKey().catch(err => { console.warn(err); return null; });
   if (!rnd) return;
   const icon = $('#random-icon');

@@ -39,6 +39,9 @@ jobs:
       - name: Verify today Docker image build and smoke test
         run: bash scripts/verify-today-docker-image.sh
 
+      - name: botz.ai dice roll physics tests
+        run: node --test scripts/botz-dice-physics.test.mjs
+
       - name: nginx generator tests
         run: node --test scripts/generate-nginx.test.mjs
 

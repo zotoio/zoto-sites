@@ -1695,6 +1695,7 @@ async function initGL() {
     const mesh = new THREE.Mesh(flipGeo, m); mesh.frustumCulled = false; mesh.renderOrder = refl ? 1 : 20; s3.add(mesh); return mesh;
   };
   const flip = mkFlip(false), flipRefl = mkFlip(true);
+  let flipDrawn = false;
   flip.visible = false;
 
   // --- glossy floor sheen ---
@@ -1751,6 +1752,7 @@ async function initGL() {
     sideGroup.rotation.y = mouse.x * 0.035; sideGroup.rotation.x = mouse.y * 0.012;
     sideGroup.position.x = mouse.x * -14;
     renderer.render(s3, camera);
+    flipDrawn = flip.visible;   // what the canvas shows until the next render (test hook: stats().flipDrawn)
   }
   // render loop: one frame per kick, more only while something is still easing; never while hidden/off-screen
   let raf = 0, hidden = document.visibilityState === 'hidden', offscreen = false, contextLost = false, suspended = false;
@@ -1838,7 +1840,7 @@ async function initGL() {
       const info = renderer.info;
       return { textures: info.memory.textures, geometries: info.memory.geometries, programs: info.programs?.length ?? null,
         sideTexturesCached: sideTex.size, sideTexturesInUse: inUse.size, sideMeshPool: pool.length, ...texStats,
-        loop: { ...loopStats, hidden, offscreen, suspended, contextLost, rafPending: !!raf } };
+        loop: { ...loopStats, hidden, offscreen, suspended, contextLost, rafPending: !!raf }, flipDrawn };
     },
     dispose() {
       halt();
@@ -1986,11 +1988,19 @@ async function goToIndex(target, fromHash = false, { instant = false, replace = 
   if (gl && !instant && !reduced) {
     if (frontStale || gl.frontStale()) { gl.setFrontTexture(snapFor(active)); frontStale = false; }
     const backSnap = snapFor(target);
-    cardEl.style.opacity = '0';
-    await gl.flipTo(target, dir, backSnap, setOff);
-    if (mobileMode || layoutIsStale(epoch)) return;
-    active = target; renderCard(cardEl, target); cardEl.style.opacity = '1';
-    gl.endFlip(backSnap);
+    // hand-off without a gap: the DOM card hides and shows in single frames (no CSS opacity fade, which left
+    // the centre half-transparent once the WebGL card was gone = the focus flash), and it is only shown once
+    // its image is decoded, while the finished WebGL flip still covers the centre
+    cardEl.style.transition = 'none';
+    let hidden = false;   // hide the DOM card in the first flip frame, the same frame the canvas first draws the flip card
+    await gl.flipTo(target, dir, backSnap, e => { if (!hidden) { hidden = true; cardEl.style.opacity = '0'; } setOff(e); });
+    if (mobileMode || layoutIsStale(epoch)) { cardEl.style.transition = ''; return; }
+    active = target; renderCard(cardEl, target);
+    await cardImageDecoded(cardEl);
+    if (mobileMode || layoutIsStale(epoch)) { cardEl.style.transition = ''; return; }
+    cardEl.style.opacity = '1';
+    gl.endFlip(backSnap);   // the canvas drops the flip card on its next frame, the same frame the DOM card paints
+    requestAnimationFrame(() => requestAnimationFrame(() => { if (cardEl.style.opacity === '1') cardEl.style.transition = ''; }));
   } else if (instant || reduced) {
     if (!instant && reduced) {
       cardEl.classList.add('fade-out'); scene.classList.add('fading');
@@ -2024,6 +2034,13 @@ async function goToIndex(target, fromHash = false, { instant = false, replace = 
   logCenteredKey();
   if (hadFocus && hadFocus.classList.contains('side')) { const nb = sideBtns[Number(hadFocus.dataset.i)]; (nb?.hidden ? cardEl.querySelector('.card-title') : nb)?.focus?.(); }
   else if (hadFocus) { const b = cardEl.querySelector(`[data-nav="${dir}"]`); (b && !b.disabled ? b : cardEl.querySelector(`[data-nav="${-dir}"]`))?.focus(); }
+}
+
+/** The centre card's image decoded (or failed), bounded so a slow image never holds up navigation. */
+function cardImageDecoded(el, maxMs = 300) {
+  const im = el.querySelector('img.card-img');
+  if (!im || !im.getAttribute('src') || (im.complete && im.naturalWidth && !im.decode)) return Promise.resolve();
+  return Promise.race([im.decode().catch(() => {}), wait(maxMs)]);
 }
 
 async function go(target, fromHash = false) {

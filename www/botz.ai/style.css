@@ -333,3 +333,7 @@ html.modal-open{overflow:hidden}
 /* header bar: kicker and its skeleton share one line box, so loading -> story never changes the card height */
 .kicker{line-height:1.4}
 .skel-head .skel-kicker{margin:.125em 0}
+/* responsive WebP <picture> wrappers are layout-neutral: the <img> inside keeps every existing rule */
+picture{display:contents}
+picture > source{display:none}
+.grid-sentinel{height:1px; margin-top:-1px; pointer-events:none}

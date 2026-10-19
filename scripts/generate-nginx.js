@@ -101,14 +101,21 @@ function renderExtraHeaders(headers) {
 
 function renderBotzEditorialCacheBlocks() {
   return `
-    # Editorial cache bind-mount: block dot-path archives (e.g. /cache/.replaced/).
-    location ~ ^/cache/\\. {
+    # Editorial cache bind-mount: block dot-paths at any depth (e.g. /cache/.replaced/, image temp files).
+    location ~ ^/cache/(.*/)?\\. {
         deny all;
         return 403;
     }
 
     location /cache/ {
         alias /usr/share/nginx/html/botz.ai/cache/;
+    }
+
+    # Story images and their WebP variants have content-hashed names that never change: cache them for a year.
+    # No "always": a 404 (variant not generated yet) is not cached as immutable.
+    location /cache/images/ {
+        alias /usr/share/nginx/html/botz.ai/cache/images/;
+        add_header Cache-Control "public, max-age=31536000, immutable";
     }`;
 }
 

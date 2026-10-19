@@ -33,6 +33,7 @@ import {
 } from './cacheListing.js';
 import { stripPrivateEditorialFields, writeEditorialUsageRecord } from './editorialUsageStore.js';
 import { archivePageWindow, buildArchiveListItem, formatEditorialByline } from './archiveListing.js';
+import { writeVariantsForPng } from './imageVariants.js';
 import {
     CACHE_NONE,
     CACHE_RECENT,
@@ -730,11 +731,31 @@ const saveImageToFile = async (response, generationContext = {}) => {
         const currentDate = new Date();
         datePrefix = `${currentDate.getFullYear()}-${padNumber(currentDate.getMonth() + 1)}-${padNumber(currentDate.getDate())}-${padNumber(currentDate.getHours())}`;
     }
-    const cacheKey = `${datePrefix}-${urlHash}`;
-    const cacheFilePath = `${path.join(cacheDir, 'images', cacheKey)}.png`;
+    let cacheKey = `${datePrefix}-${urlHash}`;
+    let cacheFilePath = `${path.join(cacheDir, 'images', cacheKey)}.png`;
     console.log(cacheFilePath);
-    fs.writeFileSync(cacheFilePath, buffer);
+    try {
+        // 'wx': a new image never replaces an existing PNG (existing source images are read-only)
+        fs.writeFileSync(cacheFilePath, buffer, { flag: 'wx' });
+    } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+        // same name already taken: name the new image by a hash of its full bytes instead
+        cacheKey = `${datePrefix}-${crypto.createHash('sha256').update(buffer).digest('hex')}`;
+        cacheFilePath = `${path.join(cacheDir, 'images', cacheKey)}.png`;
+        try {
+            fs.writeFileSync(cacheFilePath, buffer, { flag: 'wx' });
+        } catch (again) {
+            if (again.code !== 'EEXIST') throw again;   // byte-identical image already stored: reuse it
+        }
+    }
     response.data[0].localUrl = `/cache/images/${cacheKey}.png`;
+    // resized WebP variants next to the PNG (new files only; failures never block the editorial)
+    try {
+        const variants = await writeVariantsForPng(cacheFilePath);
+        if (variants.failed.length) console.error('imageVariants: some variants failed', JSON.stringify(variants.failed));
+    } catch (error) {
+        console.error('imageVariants: skipped', error?.message || error);
+    }
     return response;
 };
 
@@ -819,6 +840,8 @@ app.get('/cache/images/:image', (req, res) => {
     const imageName = image.replace(/[^a-zA-Z0-9-_.]/g, '');
     const imagePath = path.join(cacheDir, 'images', imageName);
     if (fs.existsSync(imagePath)) {
+        // content-addressed names (hash in the PNG name; variants derive from it): same policy as nginx
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
         res.sendFile(imagePath);
     } else {
         res.status(404).send('Image not found');

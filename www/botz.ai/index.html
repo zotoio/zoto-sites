@@ -75,12 +75,14 @@
     };
 
     const scrollToTopButton = document.getElementById('scroll-to-top');
+    let scrollQueued = false;
     function toggleScrollToTopButton() {
-      if (window.pageYOffset > 300) scrollToTopButton.classList.add('visible');
-      else scrollToTopButton.classList.remove('visible');
+      scrollQueued = false;
+      scrollToTopButton.classList.toggle('visible', window.pageYOffset > 300);
     }
     function scrollToTop() { window.scrollTo({ top: 0, behavior: 'smooth' }); }
-    window.addEventListener('scroll', toggleScrollToTopButton);
+    // at most one scroll-position read per frame
+    window.addEventListener('scroll', () => { if (!scrollQueued) { scrollQueued = true; requestAnimationFrame(toggleScrollToTopButton); } }, { passive: true });
     scrollToTopButton.addEventListener('click', scrollToTop);
     scrollToTopButton.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); scrollToTop(); } });
   </script>

@@ -32,7 +32,18 @@ import {
     listPublicEditorialCacheFileNames,
 } from './cacheListing.js';
 import { stripPrivateEditorialFields, writeEditorialUsageRecord } from './editorialUsageStore.js';
-import { buildArchiveListItem, formatEditorialByline } from './archiveListing.js';
+import { archivePageWindow, buildArchiveListItem, formatEditorialByline } from './archiveListing.js';
+import {
+    CACHE_NONE,
+    CACHE_RECENT,
+    archiveDayCacheControl,
+    archiveDaySlice,
+    buildArchiveDayItem,
+    buildArchiveIndex,
+    cacheKeyDate,
+    cacheKeyOfFile,
+    isArchiveDate,
+} from './archiveDays.js';
 import { buildRelevanceScoringPrompt } from './storySelection.js';
 import { assertNewsSourceEnv, parseNewsSource } from './newsSourceConfig.js';
 import { readRecentLiveStoryIdentifiers } from './liveStoryDedup.js';
@@ -815,9 +826,76 @@ app.get('/cache/images/:image', (req, res) => {
 });
 
 
-// an express route that responds with cached editorials
+/* ---- date-paged archive (see archiveDays.js). Read-only: lists and reads cache files, never writes them. ---- */
+let archiveNamesMemo = { at: 0, names: [] };
+function publicArchiveFileNames() {
+    // a short memo keeps bursts of day requests from re-listing ~20k files each time
+    if (Date.now() - archiveNamesMemo.at > 5000) {
+        archiveNamesMemo = { at: Date.now(), names: listPublicEditorialCacheFileNames(cacheDir) };
+    }
+    return archiveNamesMemo.names;
+}
+
+async function readArchiveDay(date) {
+    const { files, older } = archiveDaySlice(publicArchiveFileNames(), date);
+    const editorials = [];
+    for (const file of files) {
+        try {
+            const rows = JSON.parse(await fs.promises.readFile(path.join(cacheDir, file), 'utf8'));
+            editorials.push(buildArchiveDayItem(cacheKeyOfFile(file), rows?.[0]));
+        } catch (error) {
+            console.error(`archive day ${date}: unreadable ${file}`, error.message);
+        }
+    }
+    return { date, count: files.length, older, editorials };
+}
+
+app.get('/archive/index', (req, res) => {
+    res.setHeader('Cache-Control', CACHE_RECENT);
+    res.json(buildArchiveIndex(publicArchiveFileNames()));
+});
+
+app.get('/archive/latest', async (req, res) => {
+    const index = buildArchiveIndex(publicArchiveFileNames());
+    const newest = index.days[0];
+    if (!newest) {
+        res.setHeader('Cache-Control', CACHE_RECENT);
+        return res.status(404).json({ message: 'No stories' });
+    }
+    try {
+        const day = await readArchiveDay(newest.date);
+        res.setHeader('Cache-Control', CACHE_RECENT);
+        res.json(day);
+    } catch (error) {
+        res.setHeader('Cache-Control', CACHE_NONE);
+        res.status(500).json({ error: 'Failed to read archive day' });
+    }
+});
+
+app.get('/archive/day/:date', async (req, res) => {
+    const { date } = req.params;
+    if (!isArchiveDate(date)) {
+        res.setHeader('Cache-Control', CACHE_NONE);
+        return res.status(400).json({ message: 'Invalid date, expected YYYY-MM-DD' });
+    }
+    try {
+        const day = await readArchiveDay(date);
+        if (!day.count) {
+            res.setHeader('Cache-Control', CACHE_RECENT);
+            return res.status(404).json({ message: 'No stories for that date', date, older: day.older });
+        }
+        const n = req.query.n === undefined ? undefined : Number(req.query.n);
+        res.setHeader('Cache-Control', archiveDayCacheControl(date, day.count, n));
+        res.json(day);
+    } catch (error) {
+        res.setHeader('Cache-Control', CACHE_NONE);
+        res.status(500).json({ error: 'Failed to read archive day' });
+    }
+});
+
+// legacy page-number listing (kept for older clients); page boundaries shift with every new story, so short TTL only
 app.get('/archive', async (req, res) => {
-    applyEditorialNoStore(res);
+    res.setHeader('Cache-Control', CACHE_RECENT);
 
     // read the files
     let files = await fs.promises.readdir(`${cacheDir}`, { withFileTypes: true }, (err, files) => {
@@ -839,31 +917,14 @@ app.get('/archive', async (req, res) => {
     const sizeParam = parseInt(req.query.size);
     console.log(`pageParam: ${pageParam}, sizeParam: ${sizeParam}`);
 
-    const size = sizeParam && sizeParam < 24 ? sizeParam : 24;
-    const page = pageParam && (pageParam * size) < jsonFiles.length ? pageParam : -1;
-    
-    const start = (page - 1) * size;
-    const end = start + size;
+    const win = archivePageWindow(jsonFiles.length, pageParam, sizeParam);
+    console.log(`page: ${win.pagination.page}, size: ${win.pagination.size}, start: ${win.start}, end: ${win.end}`);
 
-    // Ensure start and end are within the bounds of the array
-    const validStart = (start >= 0 && start < jsonFiles.length) ? start : -1;
-    const validEnd = (end > 0 && end <= jsonFiles.length) ? end : -1;
-
-    console.log(`page: ${page}, size: ${size}, start: ${validStart}, end: ${validEnd}`);
-
-    if (validStart === -1 || validEnd === -1) {
-        const response = {
-            editorials: [],
-            pagination: {
-                has_next: false
-            }
-        };
-        return res.json(response);
+    if (!win.valid) {
+        return res.json({ editorials: [], pagination: win.pagination });
     }
 
-    console.log(`page: ${page}, size: ${size}, start: ${validStart}, end: ${validEnd}`);
-
-    const pagejsonFiles = jsonFiles.slice(validStart, validEnd);
+    const pagejsonFiles = jsonFiles.slice(win.start, win.end);
     console.log(pagejsonFiles);
 
     const editorialPromises = pagejsonFiles.map(file => {
@@ -893,15 +954,10 @@ app.get('/archive', async (req, res) => {
     try {
         const editorials = await Promise.all(editorialPromises) || [];
         console.log(`editorials: ${jsonFiles.length}`);
-        console.log(`pagination: ${validEnd}`);
-        const response = {
-            editorials,
-            pagination: {
-                has_next: validEnd < jsonFiles.length,
-            }
-        };
+        const response = { editorials, pagination: win.pagination };
         res.json(response);
     } catch (error) {
+        res.setHeader('Cache-Control', CACHE_NONE);
         res.status(500).json({ error: 'Failed to read JSON files' });
     }
 });
@@ -920,7 +976,17 @@ async function purgeEditorialUrlsForCacheKey(cacheKey) {
         `${base}/editorials`,
         `${base}/editorials?cacheKey=${encodeURIComponent(cacheKey)}`,
         `${base}/archive?page=1`,
+        `${base}/archive/index`,
+        `${base}/archive/latest`,
     ];
+    const date = cacheKeyDate(cacheKey);
+    archiveNamesMemo.at = 0;   // the story was just written: list the files afresh
+    if (date) {
+        // the day response for the new story's date, with and without the count the clients put in the URL
+        const count = buildArchiveIndex(publicArchiveFileNames()).days.find((d) => d.date === date)?.count;
+        urls.push(`${base}/archive/day/${date}`);
+        if (count) urls.push(`${base}/archive/day/${date}?n=${count}`);
+    }
     for (const url of urls) {
         await clearCloudflareCache(url);
     }

@@ -1,0 +1,26 @@
+{
+ "date": "2026-09-11",
+ "count": 1,
+ "older": "2026-09-10",
+ "editorials": [
+  {
+   "cache_key": "2026-09-11-12",
+   "title": "The Case for Selective Output Compression",
+   "image_url": "/stubs/images/placeholder-1.jpg",
+   "generated_at": "2026-09-11-11-51-00",
+   "published_at": "2026-09-11T06:51:00.000Z",
+   "author": "Agent ChatGPT",
+   "entry": {
+    "article": {
+     "title": "The Case for Selective Output Compression",
+     "published_at": "2026-09-11T06:51:00.000Z",
+     "source": "Local stub",
+     "image_url": "/stubs/images/placeholder-1.jpg",
+     "authorAlias": "ChatGPT",
+     "generated_at": "2026-09-11-11-51-00"
+    },
+    "editorial": "<h2>The Case for Selective Output Compression</h2><p>Local stub story for offline development. Open the site with ?live=1 to use the local API.</p>"
+   }
+  }
+ ]
+}

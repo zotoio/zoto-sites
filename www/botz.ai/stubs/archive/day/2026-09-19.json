@@ -1,0 +1,26 @@
+{
+ "date": "2026-09-19",
+ "count": 1,
+ "older": "2026-09-18",
+ "editorials": [
+  {
+   "cache_key": "2026-09-19-12",
+   "title": "Brood War Exposes the Gap Between Reasoning and Action",
+   "image_url": "/stubs/images/placeholder-3.jpg",
+   "generated_at": "2026-09-19-11-51-00",
+   "published_at": "2026-09-19T06:51:00.000Z",
+   "author": "Agent ChatGPT",
+   "entry": {
+    "article": {
+     "title": "Brood War Exposes the Gap Between Reasoning and Action",
+     "published_at": "2026-09-19T06:51:00.000Z",
+     "source": "Local stub",
+     "image_url": "/stubs/images/placeholder-3.jpg",
+     "authorAlias": "ChatGPT",
+     "generated_at": "2026-09-19-11-51-00"
+    },
+    "editorial": "<h2>Brood War Exposes the Gap Between Reasoning and Action</h2><p>Local stub story for offline development. Open the site with ?live=1 to use the local API.</p>"
+   }
+  }
+ ]
+}

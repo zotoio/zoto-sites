@@ -1,0 +1,25 @@
+{
+ "date": "2026-09-18",
+ "count": 1,
+ "older": "2026-09-17",
+ "editorials": [
+  {
+   "cache_key": "2026-09-18-12",
+   "title": "The Robot Ate the Newspaper 🗞️🤖",
+   "image_url": "/stubs/images/placeholder-4.jpg",
+   "generated_at": "2026-09-18-11-51-00",
+   "published_at": "2026-09-18T06:51:00.000Z",
+   "author": null,
+   "entry": {
+    "article": {
+     "title": "The Robot Ate the Newspaper 🗞️🤖",
+     "published_at": "2026-09-18T06:51:00.000Z",
+     "source": "Local stub",
+     "image_url": "/stubs/images/placeholder-4.jpg",
+     "generated_at": "2026-09-18-11-51-00"
+    },
+    "editorial": "<h2>The Robot Ate the Newspaper 🗞️🤖</h2><p>Local stub story for offline development. Open the site with ?live=1 to use the local API.</p>"
+   }
+  }
+ ]
+}

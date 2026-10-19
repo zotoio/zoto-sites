@@ -141,10 +141,6 @@ a:hover{color:var(--green-hi)}
   padding:8px 16px; font:bold var(--fs-ui)/1.4 Arial, sans-serif; cursor:pointer;
 }
 .card-read-more:hover{background:var(--btn-hi)}
-.card.has-read-more:not(.is-expanded) .card-paras{
-  max-height:min(28vh, 210px); overflow:hidden; position:relative;
-  mask-image:linear-gradient(180deg, #000 62%, transparent);
-}
 
 .stage.is-loading .card{opacity:.55}
 
@@ -226,3 +222,114 @@ a:hover{color:var(--green-hi)}
 .spinner .bounce1{animation-delay:-0.32s}
 .spinner .bounce2{animation-delay:-0.16s}
 @keyframes bounce{0%, 80%, 100%{transform:scale(0)} 40%{transform:scale(1)}}
+
+/* ---------- skeleton placeholders: pure CSS shimmer (gradient + keyframes) ---------- */
+.skel{
+  background:linear-gradient(90deg, #181b19 0%, #181b19 30%, #2b322d 50%, #181b19 70%, #181b19 100%);
+  background-size:300% 100%; animation:skel-shimmer 1.4s ease-in-out infinite; border-radius:6px;
+}
+@keyframes skel-shimmer{from{background-position:100% 0} to{background-position:0 0}}
+@media (prefers-reduced-motion: reduce){ .skel{animation:none; background:#1d211e} }
+.skel-line{height:.95em; margin:0 0 .7em; font-size:var(--fs-body)}
+.skel-title{height:1.1em; font-size:var(--fs-title); margin-bottom:.35em; width:92%}
+.skel-byline{width:38%; height:.9em; font-size:var(--fs-agent); margin:.6em 0 1.4em}
+.skel-gap{margin-top:1.6em}
+.skel-w85{width:85%} .skel-w70{width:70%} .skel-w60{width:60%}
+.skel-img{width:var(--img-w); height:var(--img-w); border-radius:10px}
+.card.is-skeleton .card-text{width:100%}
+.stage.is-loading .card.is-skeleton{opacity:1}
+.tile-skel{background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:hidden}
+.skel-tile-img{width:100%; aspect-ratio:1/1; border-radius:0}
+.skel-tile-title{height:16px; margin:2px 0 8px; width:90%}
+.skel-tile-meta{height:12px; width:45%; margin:8px 0 0}
+@media (max-width:960px){ .skel-img{width:100%; height:auto; aspect-ratio:1/1} }
+/* skeleton card mirrors the real card: header bar + Older/Newer, image, title, byline, paragraphs, (Read more), meta */
+.skel-head .skel-kicker{font-size:var(--fs-ui); width:min(300px, 42%); height:1.15em; border-radius:4px}
+.skel-nav{display:flex; gap:8px}
+.skel-btn{font-size:var(--fs-ui); height:calc(1.4em + 12px); width:6.4em; border-radius:6px}
+.skel-para{margin:0 0 .75em; font-size:var(--fs-body)}
+.skel-para .skel-line{height:1em; margin:0 0 .6em}
+.skel-readmore{display:none; width:8.5em; margin:4px 0 0}
+.skel-meta{margin-top:18px; padding-top:12px; border-top:1px solid var(--line)}
+.skel-meta-line{font-size:var(--fs-meta); height:1em; margin:0 0 .55em; width:46%}
+.skel-meta-line:nth-child(2){width:62%} .skel-meta-line:nth-child(3){width:54%} .skel-meta-line:nth-child(4){width:36%; margin-bottom:0}
+/* faint side-card placeholders on the wide carousel (positioned by the same slot maths as the real side cards) */
+.scene .side-skel{pointer-events:none; cursor:default; background:var(--card); border:1px solid var(--line); border-radius:14px; overflow:hidden}
+.mode-gl .scene .side-skel > *{visibility:visible}
+.side-skel-img{width:100%; aspect-ratio:1/1; border-radius:0}
+.side-skel-txt{padding:6% 6%}
+.side-skel-txt .skel-line{height:14px; margin:0 0 10px; font-size:16px}
+/* first load: real tiles stay hidden behind the skeleton row until the top story is on screen,
+   so the newest story can be dropped from the grid before it is ever shown twice */
+.browse.awaiting-top .grid > .tile{display:none}
+@media (max-width:760px){
+  .skel-head, .skel-readmore{display:none !important}
+  .skel-paras{max-height:none}
+  .browse.awaiting-top .grid > .tile-skel:nth-child(n+3){display:none}
+}
+/* card skeleton when a flick outruns the prefetch buffer */
+.card.is-story-loading .card-text{width:100%}
+/* centred carousel card image opens the modal viewer */
+.card-img-btn{display:block; width:100%; padding:0; margin:0; border:0; background:none; border-radius:10px; cursor:zoom-in; line-height:0}
+.card-img-btn:focus-visible{outline:3px solid var(--green-hi); outline-offset:3px}
+html.modal-open{overflow:hidden}
+.img-modal{position:fixed; inset:0; z-index:2000; display:grid; place-items:center; padding:clamp(16px, 4vh, 48px) clamp(16px, 4vw, 64px);
+  background:rgba(4,6,5,.88); opacity:0; transition:opacity 200ms ease}
+.img-modal[hidden]{display:none}
+.img-modal.is-open{opacity:1}
+.img-modal-img{--ar:1; display:block; width:min(92vw, calc(86vh * var(--ar))); height:auto; max-height:86vh; object-fit:contain;
+  border-radius:12px; box-shadow:0 30px 90px rgba(0,0,0,.7); background:#101311; transform:scale(.94); transition:transform 220ms ease}
+.img-modal.is-open .img-modal-img{transform:none}
+.img-modal-close{position:absolute; top:16px; right:20px; width:46px; height:46px; border-radius:50%; border:1px solid rgba(255,255,255,.25);
+  background:rgba(20,24,21,.85); color:#fff; font:28px/1 Arial, sans-serif; cursor:pointer; display:grid; place-items:center}
+.img-modal-close:hover{background:var(--btn-hi)}
+.img-modal-close:focus-visible{outline:3px solid var(--green-hi); outline-offset:3px}
+@media (prefers-reduced-motion: reduce){ .img-modal, .img-modal-img{transition:none} .img-modal-img{transform:none} }
+/* article nav (desktop card): Older/Newer at the bottom of the article, Read more right-aligned */
+.card-foot{display:flex; justify-content:space-between; align-items:center; gap:16px; margin-top:16px; padding-top:14px; border-top:1px solid var(--line)}
+.card-head{min-height:calc(var(--fs-ui) * 1.4)}
+.card-read-more:not([hidden]){display:block; margin:12px 0 0 auto}
+.skel-readmore{margin-left:auto}
+.skel-foot .skel-btn{width:6.4em}
+/* touch/pen swipes on the stage (including the card) are handled in JS; vertical panning still scrolls */
+@media (min-width:761px){ .stage{touch-action:pan-y pinch-zoom} }
+@media (max-height:920px){ .card-foot{margin-top:12px; padding-top:10px} }
+@media (max-width:760px){ .skel-foot{display:none !important} }
+.site-head h1 img.site-logo{background:#2a2f2b}
+
+.card-spacer{display:none}
+/* ---------- Read more (desktop, above 760px) ----------
+   Collapsed is the default and has ONE fixed height: the text column is exactly as tall as the image, the story
+   (paragraphs + source details) is clipped inside it and Read more stays visible underneath. The skeleton uses
+   the same box, so loading, every story and the grid below line up without any per-story measuring.
+   Expanded lifts the card out of the flow (a spacer holds its slot) and lets it grow down over the grid. */
+@media (min-width:761px){
+  .card{--text-h:var(--img-w)}
+  .card-text, .card.is-skeleton .skel-body .card-text, .card.is-story-loading .skel-body .card-text{display:flex; flex-direction:column; height:var(--text-h); min-height:0}
+  .card-title, .card-agent, .card-read-more{flex:none}
+  .card-more, .skel-paras{flex:1 1 auto; min-height:0; overflow:hidden}
+  .card.has-read-more:not(.is-expanded) .card-more{mask-image:linear-gradient(180deg, #000 70%, transparent); -webkit-mask-image:linear-gradient(180deg, #000 70%, transparent)}
+  .skel-readmore{display:block; flex:none; height:calc(1.4em + 16px); margin:12px 0 0 auto}
+  .skel-body .skel-meta{display:none}
+
+  .stage.has-expanded-card{z-index:6}   /* above the grid (z-index 4), which overlaps the stage bottom */
+  .stage.has-expanded-card .card-spacer{display:block}
+  .card.is-expanded{
+    position:absolute; left:0; right:0; top:var(--card-top, 0); margin:0 auto; z-index:30;
+    overflow-x:hidden; overflow-y:auto; overscroll-behavior:contain; scrollbar-gutter:stable;
+    touch-action:pan-y pinch-zoom;   /* it is its own scroll container: keep horizontal swipes for Older/Newer */
+    box-shadow:0 40px 120px rgba(0,0,0,.85), 0 0 0 1px rgba(47,207,55,.25);
+    background:linear-gradient(180deg, var(--card-2), var(--card) 420px, var(--card));
+  }
+  .card.is-expanded .card-text{height:auto}
+  .card.is-expanded .card-more{overflow:visible}
+  .card.is-expanded .card-read-more{position:sticky; bottom:10px; box-shadow:0 6px 18px rgba(0,0,0,.55)}
+}
+@media (min-width:761px) and (max-width:960px){ .card{--text-h:300px} }
+@media (min-width:761px) and (prefers-reduced-motion: no-preference){
+  .card.is-expanded{animation:card-expand 160ms ease-out}
+}
+@keyframes card-expand{from{opacity:.6} to{opacity:1}}
+/* header bar: kicker and its skeleton share one line box, so loading -> story never changes the card height */
+.kicker{line-height:1.4}
+.skel-head .skel-kicker{margin:.125em 0}

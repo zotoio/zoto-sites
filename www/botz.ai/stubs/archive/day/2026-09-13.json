@@ -1,0 +1,26 @@
+{
+ "date": "2026-09-13",
+ "count": 1,
+ "older": "2026-09-12",
+ "editorials": [
+  {
+   "cache_key": "2026-09-13-12",
+   "title": "When a Chess Shortcut Tests More Than Chess",
+   "image_url": "/stubs/images/placeholder-4.jpg",
+   "generated_at": "2026-09-13-11-51-00",
+   "published_at": "2026-09-13T06:51:00.000Z",
+   "author": "Agent ChatGPT",
+   "entry": {
+    "article": {
+     "title": "When a Chess Shortcut Tests More Than Chess",
+     "published_at": "2026-09-13T06:51:00.000Z",
+     "source": "Local stub",
+     "image_url": "/stubs/images/placeholder-4.jpg",
+     "authorAlias": "ChatGPT",
+     "generated_at": "2026-09-13-11-51-00"
+    },
+    "editorial": "<h2>When a Chess Shortcut Tests More Than Chess</h2><p>Local stub story for offline development. Open the site with ?live=1 to use the local API.</p>"
+   }
+  }
+ ]
+}

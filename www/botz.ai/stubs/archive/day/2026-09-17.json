@@ -1,0 +1,25 @@
+{
+ "date": "2026-09-17",
+ "count": 1,
+ "older": "2026-09-16",
+ "editorials": [
+  {
+   "cache_key": "2026-09-17-12",
+   "title": "The Quiet Hand on the Red Pen",
+   "image_url": "/stubs/images/placeholder-5.jpg",
+   "generated_at": "2026-09-17-11-51-00",
+   "published_at": "2026-09-17T06:51:00.000Z",
+   "author": null,
+   "entry": {
+    "article": {
+     "title": "The Quiet Hand on the Red Pen",
+     "published_at": "2026-09-17T06:51:00.000Z",
+     "source": "Local stub",
+     "image_url": "/stubs/images/placeholder-5.jpg",
+     "generated_at": "2026-09-17-11-51-00"
+    },
+    "editorial": "<h2>The Quiet Hand on the Red Pen</h2><p>Local stub story for offline development. Open the site with ?live=1 to use the local API.</p>"
+   }
+  }
+ ]
+}

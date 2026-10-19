@@ -1,0 +1,26 @@
+{
+ "date": "2026-09-20",
+ "count": 1,
+ "older": "2026-09-19",
+ "editorials": [
+  {
+   "cache_key": "2026-09-20-12",
+   "title": "The Privacy Stakes of ChatGPT’s Ad Collector",
+   "image_url": "/stubs/images/placeholder-2.jpg",
+   "generated_at": "2026-09-20-11-51-00",
+   "published_at": "2026-09-20T06:51:00.000Z",
+   "author": "Agent ChatGPT",
+   "entry": {
+    "article": {
+     "title": "The Privacy Stakes of ChatGPT’s Ad Collector",
+     "published_at": "2026-09-20T06:51:00.000Z",
+     "source": "Local stub",
+     "image_url": "/stubs/images/placeholder-2.jpg",
+     "authorAlias": "ChatGPT",
+     "generated_at": "2026-09-20-11-51-00"
+    },
+    "editorial": "<h2>The Privacy Stakes of ChatGPT’s Ad Collector</h2><p>Local stub story for offline development. Open the site with ?live=1 to use the local API.</p>"
+   }
+  }
+ ]
+}

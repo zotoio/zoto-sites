@@ -13,7 +13,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>botz.ai - GenAI News</title>
-  <link rel="stylesheet" href="style.css?v=20261019">
+  <link rel="preload" href="logo-80.png" as="image" fetchpriority="high">
+  <link rel="stylesheet" href="style.css?v=20261019i">
   <meta name="description"
     content="Botz.ai offers the latest news and insights in the world of artificial intelligence. Stay updated with AI trends, breakthroughs, and analysis. Discover how AI is transforming technology and industries worldwide.">
   <meta name="keywords"
@@ -22,7 +23,7 @@
 
 <body>
   <header class="site-head">
-    <h1><a href="/"><img src="favicon.ico" width="40" height="40" alt=""> GenAI News</a></h1>
+    <h1><a href="/"><img class="site-logo" src="logo-80.png" width="40" height="40" alt="" decoding="sync" fetchpriority="high"> GenAI News</a></h1>
     <a href="#" class="random-link" aria-label="Random story"><img src="perspective-dice-random.svg" alt=""
         id="random-icon" class="random-icon" style="filter: brightness(0) invert(1); width: 30px; height: 30px;"></a>
   </header>
@@ -33,20 +34,24 @@
       <div class="scene" id="scene"></div>
       <div class="stage-end" id="end-marker" hidden aria-hidden="true"><span class="stage-end-label">Latest</span></div>
 
-      <article class="card" id="card" aria-live="polite"></article>
+      <article class="card is-skeleton" id="card" aria-live="polite" aria-busy="true"><span class="sr-only" role="status">Loading story</span><div class="card-head skel-head" aria-hidden="true"><div class="skel skel-kicker"></div></div><div class="card-body skel-body" aria-hidden="true"><div class="skel skel-img"></div><div class="card-text"><div class="skel skel-line skel-title"></div><div class="skel skel-line skel-title skel-w60"></div><div class="skel skel-line skel-byline"></div><div class="skel-paras"><div class="skel-para"><div class="skel skel-line"></div><div class="skel skel-line"></div><div class="skel skel-line"></div><div class="skel skel-line skel-w70"></div></div><div class="skel-para"><div class="skel skel-line"></div><div class="skel skel-line"></div><div class="skel skel-line"></div><div class="skel skel-line skel-w85"></div></div><div class="skel-para skel-para-extra"><div class="skel skel-line"></div><div class="skel skel-line"></div><div class="skel skel-line"></div><div class="skel skel-line skel-w60"></div></div></div><div class="skel skel-btn skel-readmore"></div><div class="skel-meta"><div class="skel skel-line skel-meta-line"></div><div class="skel skel-line skel-meta-line"></div><div class="skel skel-line skel-meta-line"></div><div class="skel skel-line skel-meta-line"></div></div></div></div><div class="card-foot skel-foot" aria-hidden="true"><div class="skel skel-btn"></div><div class="skel skel-btn"></div></div></article>
       <div class="card measure" id="measure" aria-hidden="true"></div>
       <p class="hint" id="hint">← / → keys, click a side card, or swipe</p>
     </section>
 
-    <section class="browse" aria-labelledby="browse-h">
+    <section class="browse awaiting-top" id="browse" aria-labelledby="browse-h">
       <h2 id="browse-h">More stories</h2>
-      <div class="grid" id="grid"></div>
+      <div class="grid" id="grid" aria-busy="true"><div class="tile-skel" aria-hidden="true"><div class="skel skel-tile-img"></div><div class="tile-body"><div class="skel skel-line skel-tile-title"></div><div class="skel skel-line skel-tile-title skel-w60"></div><div class="skel skel-line skel-tile-meta"></div></div></div><div class="tile-skel" aria-hidden="true"><div class="skel skel-tile-img"></div><div class="tile-body"><div class="skel skel-line skel-tile-title"></div><div class="skel skel-line skel-tile-title skel-w60"></div><div class="skel skel-line skel-tile-meta"></div></div></div><div class="tile-skel" aria-hidden="true"><div class="skel skel-tile-img"></div><div class="tile-body"><div class="skel skel-line skel-tile-title"></div><div class="skel skel-line skel-tile-title skel-w60"></div><div class="skel skel-line skel-tile-meta"></div></div></div><div class="tile-skel" aria-hidden="true"><div class="skel skel-tile-img"></div><div class="tile-body"><div class="skel skel-line skel-tile-title"></div><div class="skel skel-line skel-tile-title skel-w60"></div><div class="skel skel-line skel-tile-meta"></div></div></div><div class="tile-skel" aria-hidden="true"><div class="skel skel-tile-img"></div><div class="tile-body"><div class="skel skel-line skel-tile-title"></div><div class="skel skel-line skel-tile-title skel-w60"></div><div class="skel skel-line skel-tile-meta"></div></div></div><div class="tile-skel" aria-hidden="true"><div class="skel skel-tile-img"></div><div class="tile-body"><div class="skel skel-line skel-tile-title"></div><div class="skel skel-line skel-tile-title skel-w60"></div><div class="skel skel-line skel-tile-meta"></div></div></div><div class="tile-skel" aria-hidden="true"><div class="skel skel-tile-img"></div><div class="tile-body"><div class="skel skel-line skel-tile-title"></div><div class="skel skel-line skel-tile-title skel-w60"></div><div class="skel skel-line skel-tile-meta"></div></div></div><div class="tile-skel" aria-hidden="true"><div class="skel skel-tile-img"></div><div class="tile-body"><div class="skel skel-line skel-tile-title"></div><div class="skel skel-line skel-tile-title skel-w60"></div><div class="skel skel-line skel-tile-meta"></div></div></div><div class="tile-skel" aria-hidden="true"><div class="skel skel-tile-img"></div><div class="tile-body"><div class="skel skel-line skel-tile-title"></div><div class="skel skel-line skel-tile-title skel-w60"></div><div class="skel skel-line skel-tile-meta"></div></div></div><div class="tile-skel" aria-hidden="true"><div class="skel skel-tile-img"></div><div class="tile-body"><div class="skel skel-line skel-tile-title"></div><div class="skel skel-line skel-tile-title skel-w60"></div><div class="skel skel-line skel-tile-meta"></div></div></div><div class="tile-skel" aria-hidden="true"><div class="skel skel-tile-img"></div><div class="tile-body"><div class="skel skel-line skel-tile-title"></div><div class="skel skel-line skel-tile-title skel-w60"></div><div class="skel skel-line skel-tile-meta"></div></div></div><div class="tile-skel" aria-hidden="true"><div class="skel skel-tile-img"></div><div class="tile-body"><div class="skel skel-line skel-tile-title"></div><div class="skel skel-line skel-tile-title skel-w60"></div><div class="skel skel-line skel-tile-meta"></div></div></div></div>
     </section>
   </main>
 
   <p class="error-message" role="alert"></p>
   <div id="loading" style="display: none;">Loading...</div>
   <div id="story-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+  <div class="img-modal" id="img-modal" role="dialog" aria-modal="true" aria-label="Story image" hidden>
+    <button type="button" class="img-modal-close" aria-label="Close image">&times;</button>
+    <img class="img-modal-img" alt="">
+  </div>
 
   <div id="scroll-to-top" class="scroll-to-top" role="button" tabindex="0" aria-label="Scroll to top">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -79,7 +84,7 @@
     scrollToTopButton.addEventListener('click', scrollToTop);
     scrollToTopButton.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); scrollToTop(); } });
   </script>
-  <script type="module" src="carousel-app.js?v=20261019"></script>
+  <script type="module" src="carousel-app.js?v=20261019i"></script>
 </body>
 
 </html>

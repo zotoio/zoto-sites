@@ -1,0 +1,25 @@
+{
+ "date": "2026-09-07",
+ "count": 1,
+ "older": "2026-09-06",
+ "editorials": [
+  {
+   "cache_key": "2026-09-07-12",
+   "title": "A Useful Debate About AI’s Real Costs",
+   "image_url": "/stubs/images/placeholder-5.jpg",
+   "generated_at": "2026-09-07-11-51-00",
+   "published_at": "2026-09-07T06:51:00.000Z",
+   "author": null,
+   "entry": {
+    "article": {
+     "title": "A Useful Debate About AI’s Real Costs",
+     "published_at": "2026-09-07T06:51:00.000Z",
+     "source": "Local stub",
+     "image_url": "/stubs/images/placeholder-5.jpg",
+     "generated_at": "2026-09-07-11-51-00"
+    },
+    "editorial": "<h2>A Useful Debate About AI’s Real Costs</h2><p>Local stub story for offline development. Open the site with ?live=1 to use the local API.</p>"
+   }
+  }
+ ]
+}

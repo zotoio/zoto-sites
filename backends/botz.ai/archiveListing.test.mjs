@@ -88,3 +88,21 @@ test('buildArchiveListItem prefers persisted article.author', () => {
     });
     assert.equal(item.author, 'Agent Henry Ford');
 });
+
+test('archivePageWindow serves the final partial page and reports totals', async () => {
+    const { archivePageWindow } = await import('./archiveListing.js');
+    assert.deepEqual(archivePageWindow(69, 3, NaN), { valid: true, start: 48, end: 69,
+        pagination: { has_next: false, page: 3, size: 24, total: 69, total_pages: 3 } });
+    assert.equal(archivePageWindow(69, 1, NaN).pagination.has_next, true);
+    assert.equal(archivePageWindow(69, 4, NaN).valid, false);
+    // 24 or fewer stories used to return an empty page 1
+    assert.deepEqual(archivePageWindow(10, 1, NaN).pagination, { has_next: false, page: 1, size: 24, total: 10, total_pages: 1 });
+    assert.equal(archivePageWindow(48, 2, NaN).valid, true);
+    assert.equal(archivePageWindow(48, 2, NaN).pagination.has_next, false);
+    assert.equal(archivePageWindow(30, 2, 10).end, 20);
+    assert.equal(archivePageWindow(0, 1, NaN).valid, false);
+    assert.equal(archivePageWindow(5, NaN, NaN).pagination.page, 1);
+});
+
+// date-paged archive tests live alongside; imported here so the existing test script runs them
+import './archiveDays.test.mjs';

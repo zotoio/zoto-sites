@@ -709,12 +709,22 @@ function cardHTML(a, i) {
     <img class="card-img" data-snap="img" src="${esc(a.img)}" alt="" width="340" height="340">
     <div class="card-text">
       <h2 class="card-title" data-snap="text">${esc(a.title)}</h2>
-      ${a.showAgent ? `<p class="card-agent" data-snap="text">${esc(a.agent)}</p>` : ''}
+      ${cardBylineHTML(a, true)}
       <div class="card-paras">${a.bodyHtml}</div>
       <button type="button" class="card-read-more" hidden aria-expanded="false">Read more</button>
       ${cardMetaHTML(a)}
     </div>
   </div>`;
+}
+/** Article view byline: "Agent ChatGPT · 19 Oct 2026" — same date source/format as the grid tiles; missing parts omitted. */
+function cardBylineHTML(a, snap) {
+  const ds = snap ? ' data-snap="text"' : '';
+  const date = archiveItemDate(a.generatedAt, a.published);
+  const parts = [];
+  if (a.showAgent && a.agent) parts.push(`<span class="card-agent-name"${ds}>${esc(a.agent)}</span>`);
+  if (date) parts.push(`<time class="card-date"${ds} datetime="${esc(date.toISOString())}" title="${esc(tileDateTitleFmt.format(date))}">${esc(tileDateFmt.format(date))}</time>`);
+  if (!parts.length) return '';
+  return `<p class="card-agent">${parts.join(`<span class="card-sep" aria-hidden="true"${ds}>·</span>`)}</p>`;
 }
 function cardMetaHTML(a) {
   return `<div class="card-meta">
@@ -731,7 +741,7 @@ function mobileArticleHTML(a) {
     ${a.img ? `<img class="card-img" src="${esc(a.img)}" alt="" width="400" height="400">` : ''}
     <div class="card-text">
       <h2 class="card-title">${esc(a.title)}</h2>
-      ${a.showAgent ? `<p class="card-agent">${esc(a.agent)}</p>` : ''}
+      ${cardBylineHTML(a, false)}
       <div class="card-paras">${a.bodyHtml}</div>
       ${cardMetaHTML(a)}
     </div>

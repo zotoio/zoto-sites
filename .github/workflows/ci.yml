@@ -91,5 +91,8 @@ jobs:
       - name: botz.ai idle autoplay tests
         run: node --test scripts/botz-autoplay.test.mjs
 
+      - name: botz.ai carousel polish guards (image shape, Read more, loading FOUC)
+        run: node --test scripts/botz-carousel-polish.test.mjs
+
       - name: Verify botz Docker image includes runtime modules
         run: bash scripts/verify-botz-docker-image.sh

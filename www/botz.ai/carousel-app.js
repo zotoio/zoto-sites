@@ -29,7 +29,10 @@ const layoutIsStale = epoch => epoch !== layoutEpoch;
 let pendingDesktopKey = null;
 const FLIP_MS = 520;
 const PERSP = 2200;
-const SIDE_W0 = 440, SIDE_ASPECT = 704 / 512;
+// image shape shared with the grid tiles (style.css --img-ar 7 / 8, --img-hw): height = width * IMG_HW
+const IMG_HW = 8 / 7;
+const SIDE_TEX_W = 512, SIDE_TEX_IMG_H = Math.round(SIDE_TEX_W * IMG_HW), SIDE_TEX_H = SIDE_TEX_IMG_H + 192;   // image + title/agent band
+const SIDE_W0 = 440, SIDE_ASPECT = SIDE_TEX_H / SIDE_TEX_W;
 const SLOTS = { S: [1, 0.8, 0.65, 0.52, 0.42], R: [0, 40, 40, 40, 40], Z: [0, -70, -150, -230, -310],
                 DIM: [1, 0.8, 0.6, 0.44, 0.3], BIAS: [0, 0.2, 0.9, 1.7, 2.4] };
 const useLocalStubs = params.get('live') !== '1' && ['localhost', '127.0.0.1'].includes(window.location.hostname);
@@ -936,9 +939,10 @@ const PNG_IMAGE_RE = /^(\/cache\/images\/[A-Za-z0-9][A-Za-z0-9._-]*)\.png$/;
 const variantMisses = new Lru(300);   // PNG bases whose variants 404'd this session: use the PNG directly
 const imageStats = { fallbacks: 0, texFallbacks: 0 };
 const imageSizes = {
-  card: '(max-width: 960px) calc(100vw - 64px), 430px',
-  tile: '(max-width: 760px) calc(100vw - 32px), 400px',
-  mobile: 'calc(100vw - 32px)',
+  // the source images are square and cover-cropped to 7:8, so the needed source width is the box HEIGHT (width * 8/7)
+  card: '(max-width: 960px) calc((100vw - 64px) * 1.143), 492px',
+  tile: '(max-width: 760px) calc((100vw - 32px) * 1.143), 420px',
+  mobile: 'calc((100vw - 32px) * 1.143)',
 };
 function variantBase(png) {
   const m = PNG_IMAGE_RE.exec(png || '');
@@ -1049,10 +1053,10 @@ function cardHTML(a, i, { measure = false } = {}) {
   if (a.placeholder) return `${head}<span class="sr-only">Loading story</span>${CARD_SKELETON_BODY}${foot}`;
   // off-screen measuring/snapshot copies keep the same box but load nothing (snapshots draw the decoded texture image)
   const img = a.img && measure
-    ? `<button type="button" class="card-img-btn" tabindex="-1"><img class="card-img" data-snap="img" alt="" width="340" height="340"></button>`
+    ? `<button type="button" class="card-img-btn" tabindex="-1"><img class="card-img" data-snap="img" alt="" width="350" height="400"></button>`
     : a.img
-    ? `<button type="button" class="card-img-btn" aria-haspopup="dialog" aria-label="Enlarge image${a.title ? `: ${esc(a.title)}` : ''}">${pictureHTML(a.img, 'class="card-img" data-snap="img" alt="" width="340" height="340"', imageSizes.card)}</button>`
-    : `<img class="card-img" data-snap="img" src="" alt="" width="340" height="340">`;
+    ? `<button type="button" class="card-img-btn" aria-haspopup="dialog" aria-label="Enlarge image${a.title ? `: ${esc(a.title)}` : ''}">${pictureHTML(a.img, 'class="card-img" data-snap="img" alt="" width="350" height="400"', imageSizes.card)}</button>`
+    : `<img class="card-img" data-snap="img" src="" alt="" width="350" height="400">`;
   return `${head}
   <div class="card-body">
     ${img}
@@ -1089,7 +1093,7 @@ function cardMetaHTML(a) {
 function mobileArticleHTML(a) {
   return `
   <div class="card-body">
-    ${a.img ? pictureHTML(a.img, 'class="card-img" alt="" width="400" height="400"', imageSizes.mobile) : ''}
+    ${a.img ? pictureHTML(a.img, 'class="card-img" alt="" width="350" height="400"', imageSizes.mobile) : ''}
     <div class="card-text">
       <h2 class="card-title">${esc(a.title)}</h2>
       ${cardBylineHTML(a, false)}
@@ -1146,10 +1150,8 @@ function updateReadMoreState(el = cardEl) {
 function sizeExpandedCard() {
   if (!readMoreExpanded()) return;
   // reads first, then writes (one layout)
-  const offTop = cardSpacer.offsetTop, spacerH = cardSpacer.offsetHeight;
-  const top = Math.max(0, cardSpacer.getBoundingClientRect().top);
-  cardEl.style.setProperty('--card-top', offTop + 'px');
-  cardEl.style.maxHeight = Math.max(spacerH, window.innerHeight - top - 16) + 'px';
+  // no max-height: the overlay grows to its full content height (no inner scrollbar); the page scrolls instead
+  cardEl.style.setProperty('--card-top', cardSpacer.offsetTop + 'px');
 }
 function expandReadMore() {
   if (mobileMode || readMoreExpanded() || !cardEl.querySelector('.card-read-more')) return;
@@ -1297,7 +1299,7 @@ function appendArchiveTiles(items) {
     a.dataset.publishedAt = editorial.published_at || '';
     const body = tileBodyHTML(a.dataset.rawTitle, { author: a.dataset.author, generatedAt: a.dataset.generatedAt, publishedAt: a.dataset.publishedAt });
     a._bodyHtml = body;
-    a.innerHTML = `${pictureHTML(editorial.image_url || '', 'alt="" loading="lazy" decoding="async" width="400" height="400"', imageSizes.tile)}
+    a.innerHTML = `${pictureHTML(editorial.image_url || '', 'alt="" loading="lazy" decoding="async" width="350" height="400"', imageSizes.tile)}
       <div class="tile-body">${body}</div>`;
     frag.appendChild(a);
   });
@@ -1362,7 +1364,10 @@ function hideRepeatedFirstTile() {
   const sameKey = !!cur && first.dataset.id === cur.id;
   const sameLatest = !!cur && cur.id === LATEST_SLOT_ID && !!first.dataset.generatedAt
     && first.dataset.generatedAt === (cur.generatedAt || '');
-  first.classList.toggle('is-dup-top', sameKey || sameLatest);
+  // desktop: once hidden, the repeated newest tile stays hidden (the newest story is always one step away in the
+  // carousel), so leaving the top story never re-inserts it and shifts the whole grid by a column (layout shift)
+  const keep = !mobileMode && first.classList.contains('is-dup-top');
+  first.classList.toggle('is-dup-top', sameKey || sameLatest || keep);
 }
 let toastT;
 function toast(msg) {
@@ -1503,7 +1508,7 @@ function snapshot(el, i, dpr = 1.5) {
     if (kind === 'img') {
       const im = imgs.peek(a.id); ctx.save(); rr(ctx, x, y, r.width, r.height, 10); ctx.clip();
       ctx.fillStyle = '#1a1d1b'; ctx.fillRect(x, y, r.width, r.height);
-      if (im && im.naturalWidth) ctx.drawImage(im, x, y, r.width, r.height); ctx.restore(); return;
+      if (im && im.naturalWidth) drawCover(ctx, im, x, y, r.width, r.height); ctx.restore(); return;
     }
     ctx.font = `${st.fontStyle} ${st.fontWeight} ${st.fontSize} ${st.fontFamily}`;
     if (kind === 'button') {
@@ -1532,6 +1537,12 @@ function wrap(ctx, text, maxW) {
   }
   if (line) lines.push(line); return lines;
 }
+/** drawImage with CSS object-fit: cover semantics (centred crop, never stretched), like the DOM <img>. */
+function drawCover(ctx, im, x, y, w, h) {
+  const iw = im.naturalWidth || im.width, ih = im.naturalHeight || im.height;
+  const s = Math.max(w / iw, h / ih), sw = w / s, sh = h / s;
+  ctx.drawImage(im, (iw - sw) / 2, (ih - sh) / 2, sw, sh, x, y, w, h);
+}
 function rr(ctx, x, y, w, h, r) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
 
 /** Cache key of a side card's texture: story, whether its image was drawn, and the title. */
@@ -1539,22 +1550,22 @@ function sideTextureKey(i) {
   const a = FEAT[i];
   return a.placeholder ? '' : `${a.id}|${imgs.peek(a.id)?.naturalWidth ? 1 : 0}|${a.title}`;
 }
-/** Draws a side card (image + title + agent) into a new 512x704 canvas; WebGL caches the uploaded texture by key. */
+/** Draws a side card (image + title + agent) into a new 512x777 canvas (7:8 image); WebGL caches the uploaded texture by key. */
 function sideTexture(i) {
   const a = FEAT[i];
   if (a.placeholder) { const blank = document.createElement('canvas'); blank.width = blank.height = 2; return blank; }
-  const W = 512, H = 704, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const W = SIDE_TEX_W, H = SIDE_TEX_H, IH = SIDE_TEX_IMG_H, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d');
   ctx.save(); rr(ctx, 0, 0, W, H, 22); ctx.clip();
   ctx.fillStyle = '#101311'; ctx.fillRect(0, 0, W, H);
-  const im = imgs.peek(a.id); if (im && im.naturalWidth) ctx.drawImage(im, 0, 0, W, W);
-  const g = ctx.createLinearGradient(0, W - 60, 0, W); g.addColorStop(0, 'rgba(16,19,17,0)'); g.addColorStop(1, 'rgba(16,19,17,.9)');
-  ctx.fillStyle = g; ctx.fillRect(0, W - 60, W, 60);
+  const im = imgs.peek(a.id); if (im && im.naturalWidth) drawCover(ctx, im, 0, 0, W, IH);
+  const g = ctx.createLinearGradient(0, IH - 60, 0, IH); g.addColorStop(0, 'rgba(16,19,17,0)'); g.addColorStop(1, 'rgba(16,19,17,.9)');
+  ctx.fillStyle = g; ctx.fillRect(0, IH - 60, W, 60);
   ctx.fillStyle = '#eef1ee'; ctx.font = 'bold 31px Arial, sans-serif'; ctx.textBaseline = 'top';
   let lines = wrap(ctx, a.title, W - 48);
   if (lines.length > 2) { lines = lines.slice(0, 2); while (ctx.measureText(lines[1] + '…').width > W - 48) lines[1] = lines[1].slice(0, -1); lines[1] += '…'; }
-  lines.forEach((l, k) => ctx.fillText(l, 24, W + 26 + k * 40));
-  ctx.fillStyle = '#2fcf37'; ctx.font = 'bold 23px Arial, sans-serif'; ctx.fillText(a.agent, 24, W + 26 + 2 * 40 + 14);
+  lines.forEach((l, k) => ctx.fillText(l, 24, IH + 26 + k * 40));
+  ctx.fillStyle = '#2fcf37'; ctx.font = 'bold 23px Arial, sans-serif'; ctx.fillText(a.agent, 24, IH + 26 + 2 * 40 + 14);
   ctx.restore();
   ctx.strokeStyle = 'rgba(255,255,255,.12)'; ctx.lineWidth = 2; rr(ctx, 1, 1, W - 2, H - 2, 21); ctx.stroke();
   return cv;
@@ -2153,6 +2164,8 @@ async function applyFeaturedStateInner(feat, activeIndex, fromHash, { omitHash =
   fixCardHeight(); updateReadMoreState();
   markActiveTile();
   paintStats.centreAt = paintStats.centreAt || Math.round(performance.now());
+  // the story is painted: end the loading state now, not when the archive page or three.js finish later
+  stage.classList.remove('is-loading'); cardEl.classList.remove('card-loading');
   preloadImages();
   const glReady = ensureGL();
   await yieldToMain();

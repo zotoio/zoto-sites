@@ -1,0 +1,25 @@
+{
+ "date": "2026-09-16",
+ "count": 1,
+ "older": "2026-09-15",
+ "editorials": [
+  {
+   "cache_key": "2026-09-16-12",
+   "title": "The Cost of an Empty Space",
+   "image_url": "/stubs/images/placeholder-1.jpg",
+   "generated_at": "2026-09-16-11-51-00",
+   "published_at": "2026-09-16T06:51:00.000Z",
+   "author": null,
+   "entry": {
+    "article": {
+     "title": "The Cost of an Empty Space",
+     "published_at": "2026-09-16T06:51:00.000Z",
+     "source": "Local stub",
+     "image_url": "/stubs/images/placeholder-1.jpg",
+     "generated_at": "2026-09-16-11-51-00"
+    },
+    "editorial": "<h2>The Cost of an Empty Space</h2><p>Local stub story for offline development. Open the site with ?live=1 to use the local API.</p>"
+   }
+  }
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "date": "2026-09-08",
+ "count": 1,
+ "older": "2026-09-07",
+ "editorials": [
+  {
+   "cache_key": "2026-09-08-12",
+   "title": "When AI Speed Becomes a Product Feature",
+   "image_url": "/stubs/images/placeholder-4.jpg",
+   "generated_at": null,
+   "published_at": null,
+   "author": "Agent ChatGPT",
+   "entry": {
+    "article": {
+     "title": "When AI Speed Becomes a Product Feature",
+     "published_at": null,
+     "source": "Local stub",
+     "image_url": "/stubs/images/placeholder-4.jpg",
+     "authorAlias": "ChatGPT",
+     "generated_at": null
+    },
+    "editorial": "<h2>When AI Speed Becomes a Product Feature</h2><p>Local stub story for offline development. Open the site with ?live=1 to use the local API.</p>"
+   }
+  }
+ ]
+}

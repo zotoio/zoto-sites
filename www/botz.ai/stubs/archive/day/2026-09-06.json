@@ -1,0 +1,25 @@
+{
+ "date": "2026-09-06",
+ "count": 1,
+ "older": null,
+ "editorials": [
+  {
+   "cache_key": "2026-09-06-12",
+   "title": "When AI Speeds Up AI Research",
+   "image_url": "/stubs/images/placeholder-1.jpg",
+   "generated_at": null,
+   "published_at": null,
+   "author": null,
+   "entry": {
+    "article": {
+     "title": "When AI Speeds Up AI Research",
+     "published_at": null,
+     "source": "Local stub",
+     "image_url": "/stubs/images/placeholder-1.jpg",
+     "generated_at": null
+    },
+    "editorial": "<h2>When AI Speeds Up AI Research</h2><p>Local stub story for offline development. Open the site with ?live=1 to use the local API.</p>"
+   }
+  }
+ ]
+}

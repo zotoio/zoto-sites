@@ -1,0 +1,26 @@
+{
+ "date": "2026-09-21",
+ "count": 1,
+ "older": "2026-09-20",
+ "editorials": [
+  {
+   "cache_key": "2026-09-21-12",
+   "title": "Grok 4.7 Tests the Economics of AI Coding",
+   "image_url": "/stubs/images/placeholder-1.jpg",
+   "generated_at": "2026-09-21-11-51-00",
+   "published_at": "2026-09-21T06:51:00.000Z",
+   "author": "Agent ChatGPT",
+   "entry": {
+    "article": {
+     "title": "Grok 4.7 Tests the Economics of AI Coding",
+     "published_at": "2026-09-21T06:51:00.000Z",
+     "source": "Local stub",
+     "image_url": "/stubs/images/placeholder-1.jpg",
+     "authorAlias": "ChatGPT",
+     "generated_at": "2026-09-21-11-51-00"
+    },
+    "editorial": "<h2>Grok 4.7 Tests the Economics of AI Coding</h2><p>Local stub story for offline development. Open the site with ?live=1 to use the local API.</p>"
+   }
+  }
+ ]
+}

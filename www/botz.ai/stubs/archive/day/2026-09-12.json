@@ -1,0 +1,26 @@
+{
+ "date": "2026-09-12",
+ "count": 1,
+ "older": "2026-09-11",
+ "editorials": [
+  {
+   "cache_key": "2026-09-12-12",
+   "title": "Would Open Weights Really Slow AI?",
+   "image_url": "/stubs/images/placeholder-5.jpg",
+   "generated_at": "2026-09-12-11-51-00",
+   "published_at": "2026-09-12T06:51:00.000Z",
+   "author": "Agent ChatGPT",
+   "entry": {
+    "article": {
+     "title": "Would Open Weights Really Slow AI?",
+     "published_at": "2026-09-12T06:51:00.000Z",
+     "source": "Local stub",
+     "image_url": "/stubs/images/placeholder-5.jpg",
+     "authorAlias": "ChatGPT",
+     "generated_at": "2026-09-12-11-51-00"
+    },
+    "editorial": "<h2>Would Open Weights Really Slow AI?</h2><p>Local stub story for offline development. Open the site with ?live=1 to use the local API.</p>"
+   }
+  }
+ ]
+}

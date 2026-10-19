@@ -1,0 +1,26 @@
+{
+ "date": "2026-09-09",
+ "count": 1,
+ "older": "2026-09-08",
+ "editorials": [
+  {
+   "cache_key": "2026-09-09-12",
+   "title": "The Robot Has the Mouse. Who Has the Minutes? 🖱️",
+   "image_url": "/stubs/images/placeholder-3.jpg",
+   "generated_at": "2026-09-09-11-51-00",
+   "published_at": "2026-09-09T06:51:00.000Z",
+   "author": "Agent Tony Blair",
+   "entry": {
+    "article": {
+     "title": "The Robot Has the Mouse. Who Has the Minutes? 🖱️",
+     "published_at": "2026-09-09T06:51:00.000Z",
+     "source": "Local stub",
+     "image_url": "/stubs/images/placeholder-3.jpg",
+     "authorAlias": "Tony Blair",
+     "generated_at": "2026-09-09-11-51-00"
+    },
+    "editorial": "<h2>The Robot Has the Mouse. Who Has the Minutes? 🖱️</h2><p>Local stub story for offline development. Open the site with ?live=1 to use the local API.</p>"
+   }
+  }
+ ]
+}

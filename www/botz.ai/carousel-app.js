@@ -87,7 +87,6 @@ function titleEndsWithBareAgent(title) {
 
 /** In-flight + settled JSON cache keyed by request URL (dedupes parallel fetches). */
 const jsonFlight = new Map();
-let archivePage1Flight = null;
 
 function fetchJsonMemo(url, stubUrl) {
   if (!jsonFlight.has(url)) {
@@ -97,13 +96,6 @@ function fetchJsonMemo(url, stubUrl) {
     }));
   }
   return jsonFlight.get(url);
-}
-
-function fetchArchivePage1() {
-  if (!archivePage1Flight) {
-    archivePage1Flight = fetchJsonMemo('/archive?page=1', '/stubs/archive.json');
-  }
-  return archivePage1Flight;
 }
 
 let FEAT = [];   // oldest -> newest
@@ -140,70 +132,126 @@ async function fetchJsonWithLocalStub(url, stubUrl) {
   }
 }
 
-let editorialRequestCount = 0;
-const editorialUrlsSeen = new Set();
-const editorialFlight = new Map();
+/* ---------------- shared archive store ----------------
+ * The grid AND the carousel read the same date-paged JSON, one request per URL (memoised in jsonFlight):
+ *   /archive/index               { total, days: [{ date, count }] }, newest day first        (short TTL)
+ *   /archive/latest              the newest day, same body as /archive/day/<date>          (short TTL)
+ *   /archive/day/<date>?n=<count> { date, count, older, editorials: [{ cache_key, title, ..., entry }] }
+ *                                past days are immutable for a given count (the n in the URL)
+ * Every story's full text rides in its day (`entry`), so opening a story, a grid tile or a carousel card never
+ * needs a request of its own. Story data stays here for the session; the ring only evicts textures and images. */
+let editorialRequestCount = 0;            // archive JSON requests issued (index, latest and day files)
+const archiveUrlsSeen = new Set();
+let archiveIndex = null;                  // { total, days: [{ date, count }], start: number[], dayPos: Map }
+let archiveIndexFlight = null;
+const dayData = new Map();                // date -> day JSON
+const dayFlight = new Map();              // date -> Promise<day JSON | null>
+const storyEntries = new Map();           // cache key -> { article, editorial }
 
-function editorialMemoKey(cacheKey, bust = false) {
-  return `${cacheKey ?? '__latest__'}|${bust ? 'bust' : 'normal'}`;
+function keyDate(key) {
+  return /^(\d{4}-\d{2}-\d{2})-\d{2}(?:-\d{13})?$/.exec(key || '')?.[1] || null;
 }
-
-async function fetchEditorialNetwork(cacheKey, bust = false) {
-  const stub = cacheKey ? `/stubs/editorials/${cacheKey}.json` : '/stubs/editorials/latest.json';
-  if (useLocalStubs) {
-    const response = await fetch(stub, { cache: 'no-store' });
-    if (response.ok) return response.json();
-    return [];
-  }
-  let url = '/editorials';
-  if (cacheKey) {
-    url += `?cacheKey=${encodeURIComponent(cacheKey)}`;
-    if (bust) url += `&_=${Date.now()}`;
-  }
-  if (!editorialUrlsSeen.has(url)) {
-    editorialUrlsSeen.add(url);
-    editorialRequestCount++;
-  }
-  try {
-    const response = await fetch(url, { cache: 'no-store' });
-    if (response.status === 404) return [];
-    if (!response.ok) throw new Error(`Request failed: ${response.status}`);
-    return response.json();
-  } catch (error) {
-    console.warn(`Editorial fetch failed for ${url}`, error);
-    return [];
-  }
+function archiveJson(url, stubUrl) {
+  if (useLocalStubs) url = stubUrl;   // localhost without ?live=1: the checked-in stubs only
+  if (!archiveUrlsSeen.has(url)) { archiveUrlsSeen.add(url); editorialRequestCount++; }
+  return fetchJsonMemo(url, stubUrl);
 }
-
-function fetchEditorialOnce(cacheKey, bust = false) {
-  const mk = editorialMemoKey(cacheKey, bust);
-  if (!editorialFlight.has(mk)) {
-    editorialFlight.set(mk, fetchEditorialNetwork(cacheKey, bust));
+function ingestDay(day) {
+  if (!day?.date || !Array.isArray(day.editorials)) return null;
+  dayData.set(day.date, day);
+  for (const it of day.editorials) if (it?.cache_key && it.entry) storyEntries.set(it.cache_key, it.entry);
+  return day;
+}
+let latestFlight = null;
+function fetchArchiveLatest() {
+  if (!latestFlight) {
+    latestFlight = archiveJson('/archive/latest', '/stubs/archive/latest.json').then(d => {
+      const day = ingestDay(d);
+      // the newest day is now in the store: its /archive/day/<date> URL is never fetched separately
+      if (day && !dayFlight.has(day.date)) dayFlight.set(day.date, Promise.resolve(day));
+      return day;
+    }).catch(err => { latestFlight = null; throw err; });
   }
-  return editorialFlight.get(mk);
+  return latestFlight;
 }
-
-/** Latest slot (no cacheKey) — not hour-validated. */
-async function fetchLatestEditorial() {
-  return fetchEditorialOnce(null);
+function setArchiveIndex(days) {
+  const start = [], dayPos = new Map();
+  let total = 0;
+  days.forEach((d, i) => { start.push(total); total += d.count; dayPos.set(d.date, i); });
+  archiveIndex = { total, days, start, dayPos };
 }
-
-async function fetchValidatedEditorial(cacheKey) {
-  if (!cacheKey) return fetchLatestEditorial();
-  let payload = await fetchEditorialOnce(cacheKey);
-  if (payload[0] && editorialBelongsToCacheKey(payload[0], cacheKey)) return payload;
-  // a cache-busting retry can only help keys whose hour window is checkable (plain YYYY-MM-DD-HH);
-  // timestamp-suffixed keys never validate, so skip the extra sequential round trip for them
-  if (payload[0] && cacheKeyToUtcMs(cacheKey) != null) {
-    payload = await fetchEditorialOnce(cacheKey, true);
-    if (payload[0] && editorialBelongsToCacheKey(payload[0], cacheKey)) return payload;
+function ensureArchiveIndex() {
+  if (archiveIndex) return Promise.resolve(archiveIndex);
+  if (!archiveIndexFlight) {
+    archiveIndexFlight = Promise.all([
+      archiveJson('/archive/index', '/stubs/archive/index.json'),
+      fetchArchiveLatest().catch(err => { console.warn(err); return null; }),
+    ]).then(([raw, latest]) => {
+      const days = (raw?.days || []).filter(d => d?.date && d.count > 0).map(d => ({ date: d.date, count: d.count }));
+      // index and latest load in parallel and can straddle a new story: the day body wins for its own date
+      if (latest?.date) {
+        const i = days.findIndex(d => d.date === latest.date);
+        if (i >= 0) days[i].count = latest.count;
+        else if (!days.length || latest.date > days[0].date) days.unshift({ date: latest.date, count: latest.count });
+      }
+      setArchiveIndex(days);
+      return archiveIndex;
+    }).catch(err => { archiveIndexFlight = null; throw err; });
   }
-  return [];
+  return archiveIndexFlight;
 }
+/** Day index holding the story `d` places from the newest (0 = newest). */
+function dayIndexForOffset(d) {
+  const st = archiveIndex.start;
+  let lo = 0, hi = st.length - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (st[mid] <= d) lo = mid; else hi = mid - 1; }
+  return lo;
+}
+function loadDay(date) {
+  if (dayData.has(date)) return Promise.resolve(dayData.get(date));
+  if (!dayFlight.has(date)) {
+    dayFlight.set(date, ensureArchiveIndex().then(ix => {
+      const i = ix.dayPos.get(date);
+      if (i == null) return null;   // no stories that day: nothing to fetch
+      return archiveJson(`/archive/day/${date}?n=${ix.days[i].count}`, `/stubs/archive/day/${date}.json`).then(ingestDay);
+    }).catch(err => { dayFlight.delete(date); throw err; }));
+  }
+  return dayFlight.get(date);
+}
+const dayKeysOf = date => (dayData.get(date)?.editorials || []).map(e => e.cache_key).filter(Boolean);
 
-async function fetchEditorial(cacheKey) {
-  if (!cacheKey) return fetchLatestEditorial();
-  return fetchValidatedEditorial(cacheKey);
+/** [entry] for a story (the newest story when no key), straight from the shared day store. */
+async function fetchStoryPayload(cacheKey) {
+  if (!cacheKey) {
+    const day = await fetchArchiveLatest().catch(err => { console.warn(err); return null; });
+    const it = day?.editorials?.[0];
+    if (it?.entry) return [it.entry];
+    // no /archive/latest: fall back to the newest day in the index
+    const ix = await ensureArchiveIndex().catch(() => null);
+    const d = ix?.days[0] && await loadDay(ix.days[0].date).catch(() => null);
+    return d?.editorials?.[0]?.entry ? [d.editorials[0].entry] : [];
+  }
+  if (!storyEntries.has(cacheKey)) {
+    const date = keyDate(cacheKey);
+    if (date) await loadDay(date).catch(err => console.warn(err));
+  }
+  const e = storyEntries.get(cacheKey);
+  return e ? [e] : [];
+}
+function fetchLatestEditorial() { return fetchStoryPayload(null); }
+function fetchValidatedEditorial(cacheKey) { return fetchStoryPayload(cacheKey); }
+function fetchEditorial(cacheKey) { return fetchStoryPayload(cacheKey); }
+/** Random story for the dice: a random archive position, resolved through the same day store. */
+async function randomStoryKey() {
+  const ix = await ensureArchiveIndex();
+  const cur = FEAT[active]?.key || FEAT[active]?.id;
+  for (let t = 0; t < 4 && ix.total > 1; t++) {
+    const d = Math.floor(Math.random() * ix.total), i = dayIndexForOffset(d);
+    const day = await loadDay(ix.days[i].date).catch(() => null);
+    const key = day?.editorials?.[d - ix.start[i]]?.cache_key;
+    if (key && key !== cur) return key;
+  }
+  return null;
 }
 
 function cacheKeyToUtcMs(key) {
@@ -334,16 +382,10 @@ function isFutureCacheKey(cacheKey) {
   return ms > currentHourMs;
 }
 
-async function loadArchivePage(page) {
-  const stub = page === 2 ? '/stubs/archive-page2.json' : '/stubs/archive.json';
-  if (useLocalStubs) {
-    const response = await fetch(stub, { cache: 'no-store' });
-    if (response.ok) return response.json();
-  }
-  return fetchJsonMemo(`/archive?page=${page}`, stub);
-}
-
-/** In-flight archive page load; concurrent callers wait for it instead of returning before data exists. */
+/* ---------------- More stories grid: whole days, newest first, at least GRID_BATCH stories per batch ---------------- */
+const GRID_BATCH = 24;
+let gridNextDay = 0;
+/** In-flight grid batch; concurrent callers wait for it instead of returning before data exists. */
 let archiveFlight = null;
 async function ensureArchivePageLoaded(page) {
   while (page > archivePagesLoaded && archiveFlight) {
@@ -363,16 +405,21 @@ async function ensureArchivePageLoaded(page) {
 async function loadArchivePageIntoGrid(page) {
   archiveLoading = true;
   try {
-    const data = await loadArchivePage(page);
-    const keys = (data.editorials || []).map(e => e.cache_key).filter(Boolean);
-    archiveKeysByPage[page] = keys;
+    const ix = await ensureArchiveIndex();
+    const dates = [];
+    for (let i = gridNextDay, n = 0; i < ix.days.length && n < GRID_BATCH; i++) { dates.push(ix.days[i].date); n += ix.days[i].count; }
+    const days = await Promise.all(dates.map(d => loadDay(d).catch(err => { console.warn(err); return null; })));
+    const items = days.flatMap(d => d?.editorials || []);
+    archiveKeysByPage[page] = items.map(e => e.cache_key).filter(Boolean);
     rebuildArchiveKeysChrono();
-    appendArchiveTiles(data.editorials || []);
+    appendArchiveTiles(items);
     refreshArchiveTileTitles();
     hideRepeatedFirstTile();
-    archiveHasMore = !!data.pagination?.has_next;
+    gridNextDay += dates.length;
+    archiveHasMore = gridNextDay < ix.days.length;
     archivePage = page;
     archivePagesLoaded = page;
+    ringFeedFromGrid(items.length);
   } catch (err) {
     console.error(err);
   } finally {
@@ -387,36 +434,17 @@ function ensureLatestSlotResolved() {
   return latestSlotFlight;
 }
 async function resolveLatestSlot() {
-  // latest story and archive page 1 load in parallel (they used to be sequential)
-  const [latestPayload] = await Promise.all([
-    fetchLatestEditorial(),
+  // the newest day and the first grid batch load in parallel; the newest story IS the archive top, so there is
+  // never a separate Latest slot any more
+  await Promise.all([
+    fetchArchiveLatest().catch(err => console.warn(err)),
     ensureArchivePageLoaded(1).catch(err => console.warn(err)),
   ]);
-  globalLatestPayload = latestPayload;
+  globalLatestPayload = await fetchLatestEditorial();
   latestIdentity = storyIdentity(globalLatestPayload[0]);
-  try {
-    const arch = await fetchArchivePage1();
-    newestArchiveKey = arch.editorials?.[0]?.cache_key || null;
-    rebuildArchiveKeysChrono();
-    latestIsArchiveTop = false;
-    showLatestSlot = false;
-    if (newestArchiveKey && globalLatestPayload?.[0] && editorialBelongsToCacheKey(globalLatestPayload[0], newestArchiveKey)) {
-      // the no-key payload is the newest archive hour: reuse it for that key (saves a sequential round trip)
-      editorialFlight.set(editorialMemoKey(newestArchiveKey, false), Promise.resolve(globalLatestPayload));
-      latestIsArchiveTop = true;
-    } else if (newestArchiveKey && globalLatestPayload?.[0]) {
-      const topPayload = await fetchValidatedEditorial(newestArchiveKey);
-      if (topPayload[0] && matchesLatestIdentity(topPayload[0])) {
-        latestIsArchiveTop = true;
-      } else {
-        showLatestSlot = true;
-      }
-    } else if (globalLatestPayload?.[0]) {
-      showLatestSlot = true;
-    }
-  } catch (err) {
-    console.warn(err);
-  }
+  newestArchiveKey = dayData.get(archiveIndex?.days[0]?.date)?.editorials?.[0]?.cache_key || archiveKeysByPage[1]?.[0] || null;
+  latestIsArchiveTop = !!newestArchiveKey;
+  showLatestSlot = false;
   latestSlotResolved = true;
 }
 
@@ -430,98 +458,64 @@ const RING_BUFFER = 4;       // stories prefetched ahead in BOTH directions (cro
 const RING_PAGE_AHEAD = 6;   // also fetch the archive page holding positions this far past the buffer
 const RING_KEEP = 12;        // loaded stories further than this from the centre are evicted
 const RING_CONCURRENCY = 4;  // parallel story prefetches
-let ringTotal = 0, ringPageSize = 24, ringReady = false, ringInitFlight = null;
-const ringPages = new Map();        // archive page -> cache keys (newest first)
-const ringPageFlights = new Map();
+let ringTotal = 0, ringReady = false, ringInitFlight = null;
 const ringStories = new Map();      // cache key -> { r, article, failed, promise }
 let ringPos = -1;                   // chrono position of the centred story
 let wrapCrossed = false;            // seam cards stay skeletons until the user has flicked across the wrap point
 let ringQueue = [], ringInflight = 0, ringOpenSeq = 0;
 const sideTexCache = new Map();
-const ringStats = { storyLoads: 0, pageLoads: 0, evicted: 0, skeletonCentres: 0 };
+const ringStats = { storyLoads: 0, pageLoads: 0, evicted: 0, skeletonCentres: 0, fedFromGrid: 0 };
 
 function ringLen() { return ringTotal + (showLatestSlot && globalLatestPayload?.[0] ? 1 : 0); }
 function ringWrap(r) { const n = ringLen(); return n ? ((r % n) + n) % n : 0; }
 function ringDist(a, b) { const n = ringLen(); if (!n) return 0; const d = Math.abs(a - b) % n; return Math.min(d, n - d); }
-function ringPageOf(r) { return Math.floor((ringTotal - 1 - r) / ringPageSize) + 1; }
+/** Archive day (index into archiveIndex.days) that holds chrono position r. */
+function ringDayOf(r) { return dayIndexForOffset(ringTotal - 1 - r); }
 function ringKeyAt(r) {
   if (r === ringTotal && ringLen() > ringTotal) return LATEST_SLOT_ID;
-  if (r < 0 || r >= ringTotal) return null;
-  const d = ringTotal - 1 - r;
-  return ringPages.get(Math.floor(d / ringPageSize) + 1)?.[d % ringPageSize] || null;
+  if (r < 0 || r >= ringTotal || !archiveIndex) return null;
+  const i = ringDayOf(r);
+  return dayKeysOf(archiveIndex.days[i].date)[ringTotal - 1 - r - archiveIndex.start[i]] || null;
 }
 function ringIndexOfKey(key) {
   if (key === LATEST_SLOT_ID) return ringLen() > ringTotal ? ringTotal : -1;
-  for (const [p, keys] of ringPages) {
-    const i = keys.indexOf(key);
-    if (i >= 0) return ringTotal - 1 - ((p - 1) * ringPageSize + i);
-  }
-  return -1;
+  const date = keyDate(key), i = archiveIndex?.dayPos.get(date);
+  if (i == null) return -1;
+  const j = dayKeysOf(date).indexOf(key);
+  return j < 0 ? -1 : ringTotal - 1 - (archiveIndex.start[i] + j);
 }
-const pageKeys = data => (data?.editorials || []).map(e => e.cache_key).filter(Boolean);
-function ringLoadPage(p) {
-  if (ringPages.has(p)) return Promise.resolve(ringPages.get(p));
-  if (!ringPageFlights.has(p)) {
-    ringStats.pageLoads++;
-    const flight = loadArchivePage(p)   // same source as the grid (memoised; stubs on localhost)
-      .then(data => { const keys = pageKeys(data); ringPages.set(p, keys); return keys; })
-      .finally(() => ringPageFlights.delete(p));
-    ringPageFlights.set(p, flight);
-  }
-  return ringPageFlights.get(p);
+const ringDayDate = i => archiveIndex.days[i].date;
+const ringDayPending = i => !dayData.has(ringDayDate(i)) && !dayFlight.has(ringDayDate(i));
+function ringLoadDay(i) {
+  if (ringDayPending(i)) ringStats.pageLoads++;   // the grid may already have it (shared store): then no request
+  return loadDay(ringDayDate(i)).then(() => dayKeysOf(ringDayDate(i)));
 }
-/** Older APIs have no totals: find the last page with O(log pages) requests instead of walking every page. */
-async function probeArchiveTotal(firstKeys, firstHasNext) {
-  if (!firstKeys.length) return 0;
-  if (!firstHasNext) return firstKeys.length;
-  const look = async p => { const d = await loadArchivePage(p); const keys = pageKeys(d); if (keys.length) ringPages.set(p, keys); return { n: keys.length, next: !!d.pagination?.has_next }; };
-  let lo = 1, hi = 0, last = 0, lastN = 0;
-  for (let p = 2; p <= 4096; p *= 2) {
-    const r = await look(p);
-    if (r.n && !r.next) { last = p; lastN = r.n; break; }
-    if (r.n) { lo = p; continue; }
-    hi = p; break;
-  }
-  while (!last && hi - lo > 1) {
-    const mid = (lo + hi) >> 1, r = await look(mid);
-    if (r.n && !r.next) { last = mid; lastN = r.n; } else if (r.n) lo = mid; else hi = mid;
-  }
-  if (!last) { last = lo; lastN = ringPages.get(lo)?.length || ringPageSize; }
-  return (last - 1) * ringPageSize + lastN;
+/** Grid batches land in the same store the ring reads from: re-run the buffer so it picks them up at once. */
+function ringFeedFromGrid(count) {
+  ringStats.fedFromGrid += count;
+  if (ringReady && ringPos >= 0 && !mobileMode) ringSchedule();
 }
 function ringInit() {
   if (ringReady) return Promise.resolve();
   if (!ringInitFlight) {
     ringInitFlight = (async () => {
       await ensureLatestSlotResolved();
-      const first = await loadArchivePage(1);
-      const keys = pageKeys(first);
-      ringPages.set(1, keys);
-      const pg = first.pagination || {};
-      ringPageSize = Number(pg.size) || keys.length || 24;
-      ringTotal = Number.isFinite(pg.total) ? pg.total : await probeArchiveTotal(keys, !!pg.has_next);
+      const ix = await ensureArchiveIndex();
+      ringTotal = ix.total;
       ringReady = true;
     })().finally(() => { ringInitFlight = null; });
   }
   return ringInitFlight;
 }
-/** Chrono position of a cache key; unknown pages are found by binary search over the (date-sorted) archive. */
+/** Chrono position of a cache key: its date names the one day file to look in. */
 async function ringLocate(key) {
   await ringInit();
-  let r = ringIndexOfKey(key);
+  const r = ringIndexOfKey(key);
   if (r >= 0 || !ringTotal) return r;
-  const newerThan = (a, b) => (b + '.json').localeCompare(a + '.json') < 0;   // archive order = filename, newest first
-  let lo = 1, hi = Math.ceil(ringTotal / ringPageSize);
-  for (let it = 0; it < 16 && lo <= hi; it++) {
-    const mid = (lo + hi) >> 1;
-    const keys = await ringLoadPage(mid);
-    if (keys.includes(key)) return ringIndexOfKey(key);
-    if (!keys.length) { hi = mid - 1; continue; }
-    if (newerThan(key, keys[0])) hi = mid - 1;
-    else if (newerThan(keys[keys.length - 1], key)) lo = mid + 1;
-    else return -1;
-  }
-  return -1;
+  const i = archiveIndex.dayPos.get(keyDate(key));
+  if (i == null) return -1;
+  await ringLoadDay(i).catch(err => console.warn(err));
+  return ringIndexOfKey(key);
 }
 function loadStoryImage(a) {
   return new Promise(res => {
@@ -537,13 +531,7 @@ async function loadRingArticle(key) {
   let a;
   if (key === LATEST_SLOT_ID) a = normalizeLatestSlotArticle(globalLatestPayload[0]);
   else {
-    let p = await fetchValidatedEditorial(key);
-    if (!p[0]) {
-      // timestamp-suffixed keys can't be hour-validated: use what /editorials?cacheKey= returns (as the mobile flow does),
-      // unless it is a stale echo of the latest story
-      p = await fetchEditorialOnce(key);
-      if (p[0] && matchesLatestIdentity(p[0]) && key !== newestArchiveKey) p = [];
-    }
+    const p = await fetchStoryPayload(key);   // from the shared day store (no per-story request)
     if (!p[0]) throw new Error(`story ${key} unavailable`);
     a = normalizeArticle(p[0], key);
   }
@@ -580,12 +568,12 @@ function ringSchedule() {
   }
   ringQueue = order;   // replaces the old queue: positions the user has left behind are dropped before they start
   if (ringKeyAt(focus) && !ringStories.has(ringKeyAt(focus))) ringEnsureStory(focus);   // landing story first, outside the concurrency limit
-  const pages = new Set();
+  const days = new Set();
   for (let d = 0; d <= RING_BUFFER + RING_PAGE_AHEAD; d++) for (const sgn of [1, -1]) {
     const r = ringWrap(focus + sgn * d);
-    if (r < ringTotal) pages.add(ringPageOf(r));
+    if (r < ringTotal) days.add(ringDayOf(r));
   }
-  for (const p of pages) if (!ringPages.has(p) && !ringPageFlights.has(p)) ringLoadPage(p).then(() => ringSchedule(), err => console.warn(err));
+  for (const i of days) if (ringDayPending(i)) ringLoadDay(i).then(() => ringSchedule(), err => console.warn(err));
   ringPump();
   ringEvict();
 }
@@ -601,8 +589,7 @@ function ringEvict() {
   for (const [key, st] of ringStories) {
     if (ringDist(st.r, ringPos) <= RING_KEEP || FEAT.some(a => a.id === key)) continue;
     ringStories.delete(key);
-    editorialFlight.delete(editorialMemoKey(key, false));
-    editorialFlight.delete(editorialMemoKey(key, true));
+    // story data stays in storyEntries (cheap, shared with the grid); only the image and textures go
     delete imgs[key];
     for (const k of [...sideTexCache.keys()]) if (k.startsWith(key + '|')) sideTexCache.delete(k);
     ringStats.evicted++;
@@ -700,9 +687,9 @@ async function ringOpen(key, fromHash = false, { omitHash = false } = {}) {
   if (mobileMode || layoutIsStale(epoch) || seq !== ringOpenSeq) return;
   ringPos = r;
   ringSchedule();
-  const [L, R] = ringRadii(), pages = new Set();
-  for (let o = -L; o <= R; o++) { const rr = ringWrap(r + o); if (rr < ringTotal) pages.add(ringPageOf(rr)); }
-  await Promise.all([...pages].map(p => ringLoadPage(p).catch(() => [])));
+  const [L, R] = ringRadii(), days = new Set();
+  for (let o = -L; o <= R; o++) { const rr = ringWrap(r + o); if (rr < ringTotal) days.add(ringDayOf(rr)); }
+  await Promise.all([...days].map(i => ringLoadDay(i).catch(() => [])));
   const around = [];
   for (let o = -L; o <= R; o++) if (o && !ringSeamMasked(o)) around.push(ringEnsureStory(ringWrap(r + o)));
   await ringEnsureStory(r);
@@ -1726,7 +1713,7 @@ stage.addEventListener('pointerup', e => {
 stage.addEventListener('click', e => { if (performance.now() - swipedAt < 400) { e.preventDefault(); e.stopPropagation(); } }, true);
 $('.random-link')?.addEventListener('click', async e => {
   e.preventDefault();
-  const rnd = FEAT[active]?.navigation?.random;
+  const rnd = await randomStoryKey().catch(err => { console.warn(err); return null; });
   if (!rnd) return;
   const icon = $('#random-icon');
   if (icon) icon.className = icon.className === 'random-icon' ? 'random-icon-roll' : 'random-icon';
@@ -1856,11 +1843,7 @@ function enterMobileLayout() {
 }
 
 async function fetchStoryForMobile(cacheKey) {
-  if (!cacheKey) return fetchLatestEditorial();
-  const validated = await fetchValidatedEditorial(cacheKey);
-  if (validated[0]) return validated;
-  // earlier flow: render whatever /editorials?cacheKey= returns (also covers timestamp-suffixed keys)
-  return fetchEditorialOnce(cacheKey);
+  return fetchStoryPayload(cacheKey || null);
 }
 
 async function openStoryMobile(cacheKey, fromHash = false) {
@@ -1947,7 +1930,6 @@ async function relayout() {
 }
 async function boot() {
   editorialRequestCount = 0;
-  editorialUrlsSeen.clear();
   seedStaticAuthors();
   stage.classList.add('is-loading');
   const hashKey = decodeURIComponent(location.hash.slice(1));
@@ -2008,4 +1990,4 @@ small.addEventListener('change', async () => {
   if (id) await openStory(id, true);
   else await openLatestView(true);
 });
-window.__botzCarousel = { go, navRelative, openStory, get active() { return active; }, get busy() { return busy; }, get navQueue() { return navQueue; }, get navLog() { return window.__navLog; }, get centerKey() { return FEAT[active]?.id; }, get featIds() { return FEAT.map(a => a.id); }, get feat() { return FEAT.map((a, i) => ({ id: a.key || a.id, offset: i - active, placeholder: !!a.placeholder, seam: !!a.seam, ring: a.ringIndex })); }, get ring() { return { pos: ringPos, len: ringLen(), total: ringTotal, pageSize: ringPageSize, wrapCrossed, pages: [...ringPages.keys()].sort((a, b) => a - b), loaded: [...ringStories.values()].filter(x => x.article).length, cached: ringStories.size, keyAt: r => ringKeyAt(r), ...ringStats }; }, get modalOpen() { return imageModalOpen(); }, get showLatestSlot() { return showLatestSlot; }, get latestIsArchiveTop() { return latestIsArchiveTop; }, get newestArchiveKey() { return newestArchiveKey; }, get mode() { return gl ? 'webgl' : (reduced ? 'reduced' : 'css'); }, get editorialRequestCount() { return editorialRequestCount; }, get latestSlotId() { return LATEST_SLOT_ID; }, get mobileMode() { return mobileMode; }, ready: true };
+window.__botzCarousel = { go, navRelative, openStory, get active() { return active; }, get busy() { return busy; }, get navQueue() { return navQueue; }, get navLog() { return window.__navLog; }, get centerKey() { return FEAT[active]?.id; }, get featIds() { return FEAT.map(a => a.id); }, get feat() { return FEAT.map((a, i) => ({ id: a.key || a.id, offset: i - active, placeholder: !!a.placeholder, seam: !!a.seam, ring: a.ringIndex })); }, get ring() { return { pos: ringPos, len: ringLen(), total: ringTotal, days: archiveIndex?.days.length || 0, wrapCrossed, pages: [...dayData.keys()].sort(), loaded: [...ringStories.values()].filter(x => x.article).length, cached: ringStories.size, keyAt: r => ringKeyAt(r), ...ringStats }; }, get modalOpen() { return imageModalOpen(); }, get showLatestSlot() { return showLatestSlot; }, get latestIsArchiveTop() { return latestIsArchiveTop; }, get newestArchiveKey() { return newestArchiveKey; }, get mode() { return gl ? 'webgl' : (reduced ? 'reduced' : 'css'); }, get editorialRequestCount() { return editorialRequestCount; }, get store() { return { days: dayData.size, stories: storyEntries.size, urls: [...archiveUrlsSeen] }; }, get latestSlotId() { return LATEST_SLOT_ID; }, get mobileMode() { return mobileMode; }, ready: true };

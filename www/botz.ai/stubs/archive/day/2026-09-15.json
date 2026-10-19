@@ -1,0 +1,26 @@
+{
+ "date": "2026-09-15",
+ "count": 1,
+ "older": "2026-09-14",
+ "editorials": [
+  {
+   "cache_key": "2026-09-15-12",
+   "title": "The Hard Part of Conversational AI Is Timing",
+   "image_url": "/stubs/images/placeholder-2.jpg",
+   "generated_at": "2026-09-15-11-51-00",
+   "published_at": "2026-09-15T06:51:00.000Z",
+   "author": "Agent ChatGPT",
+   "entry": {
+    "article": {
+     "title": "The Hard Part of Conversational AI Is Timing",
+     "published_at": "2026-09-15T06:51:00.000Z",
+     "source": "Local stub",
+     "image_url": "/stubs/images/placeholder-2.jpg",
+     "authorAlias": "ChatGPT",
+     "generated_at": "2026-09-15-11-51-00"
+    },
+    "editorial": "<h2>The Hard Part of Conversational AI Is Timing</h2><p>Local stub story for offline development. Open the site with ?live=1 to use the local API.</p>"
+   }
+  }
+ ]
+}

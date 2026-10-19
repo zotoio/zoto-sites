@@ -5,6 +5,9 @@ const canvas = $('#gl');
 const endMarker = $('#end-marker');
 const storyAnnouncer = $('#story-announcer');
 const gridEl = $('#grid');
+const browseEl = $('#browse');
+/** Skeleton markup ships in index.html (first paint); reuse it for later loads. */
+const ARTICLE_SKELETON_HTML = cardEl.innerHTML;
 const loadingEl = $('#loading');
 
 const params = new URLSearchParams(location.search);
@@ -202,7 +205,9 @@ async function fetchValidatedEditorial(cacheKey) {
   if (!cacheKey) return fetchLatestEditorial();
   let payload = await fetchEditorialOnce(cacheKey);
   if (payload[0] && editorialBelongsToCacheKey(payload[0], cacheKey)) return payload;
-  if (payload[0]) {
+  // a cache-busting retry can only help keys whose hour window is checkable (plain YYYY-MM-DD-HH);
+  // timestamp-suffixed keys never validate, so skip the extra sequential round trip for them
+  if (payload[0] && cacheKeyToUtcMs(cacheKey) != null) {
     payload = await fetchEditorialOnce(cacheKey, true);
     if (payload[0] && editorialBelongsToCacheKey(payload[0], cacheKey)) return payload;
   }
@@ -351,9 +356,24 @@ async function loadArchivePage(page) {
   return fetchJsonMemo(`/archive?page=${page}`, stub);
 }
 
+/** In-flight archive page load; concurrent callers wait for it instead of returning before data exists. */
+let archiveFlight = null;
 async function ensureArchivePageLoaded(page) {
+  while (page > archivePagesLoaded && archiveFlight) {
+    const f = archiveFlight;
+    await f.promise;
+    if (f.page === page) return;
+  }
   if (page <= archivePagesLoaded) return;
-  if (archiveLoading) return;
+  const promise = loadArchivePageIntoGrid(page);
+  archiveFlight = { page, promise };
+  try {
+    await promise;
+  } finally {
+    if (archiveFlight?.promise === promise) archiveFlight = null;
+  }
+}
+async function loadArchivePageIntoGrid(page) {
   archiveLoading = true;
   try {
     const data = await loadArchivePage(page);
@@ -403,18 +423,31 @@ async function ensureAdjacentArchivePagesForCenter(centerKey) {
   rebuildArchiveKeysChrono();
 }
 
-async function ensureLatestSlotResolved() {
-  if (latestSlotResolved) return;
-  globalLatestPayload = await fetchLatestEditorial();
+let latestSlotFlight = null;
+function ensureLatestSlotResolved() {
+  if (latestSlotResolved) return Promise.resolve();
+  if (!latestSlotFlight) latestSlotFlight = resolveLatestSlot().finally(() => { latestSlotFlight = null; });
+  return latestSlotFlight;
+}
+async function resolveLatestSlot() {
+  // latest story and archive page 1 load in parallel (they used to be sequential)
+  const [latestPayload] = await Promise.all([
+    fetchLatestEditorial(),
+    ensureArchivePageLoaded(1).catch(err => console.warn(err)),
+  ]);
+  globalLatestPayload = latestPayload;
   latestIdentity = storyIdentity(globalLatestPayload[0]);
   try {
-    await ensureArchivePageLoaded(1);
     const arch = await fetchArchivePage1();
     newestArchiveKey = arch.editorials?.[0]?.cache_key || null;
     rebuildArchiveKeysChrono();
     latestIsArchiveTop = false;
     showLatestSlot = false;
-    if (newestArchiveKey && globalLatestPayload?.[0]) {
+    if (newestArchiveKey && globalLatestPayload?.[0] && editorialBelongsToCacheKey(globalLatestPayload[0], newestArchiveKey)) {
+      // the no-key payload is the newest archive hour: reuse it for that key (saves a sequential round trip)
+      editorialFlight.set(editorialMemoKey(newestArchiveKey, false), Promise.resolve(globalLatestPayload));
+      latestIsArchiveTop = true;
+    } else if (newestArchiveKey && globalLatestPayload?.[0]) {
       const topPayload = await fetchValidatedEditorial(newestArchiveKey);
       if (topPayload[0] && matchesLatestIdentity(topPayload[0])) {
         latestIsArchiveTop = true;
@@ -810,27 +843,42 @@ function rebuildSideButtons() {
 
 /* ---------------- browse grid (archive) ---------------- */
 /* ---------------- skeleton placeholders (pure CSS shimmer; JS only inserts/removes the markup) ---------------- */
-const ARTICLE_SKELETON_HTML = `
-  <div class="card-body skel-body" aria-hidden="true">
-    <div class="skel skel-img"></div>
-    <div class="card-text">
-      <div class="skel skel-line skel-title"></div>
-      <div class="skel skel-line skel-title skel-w60"></div>
-      <div class="skel skel-line skel-byline"></div>
-      <div class="skel skel-line"></div><div class="skel skel-line"></div><div class="skel skel-line skel-w85"></div>
-      <div class="skel skel-line skel-gap"></div><div class="skel skel-line"></div><div class="skel skel-line skel-w70"></div>
-    </div>
-  </div>`;
 function showArticleSkeleton() {
   cardEl.dataset.id = '';
+  cardEl.style.minHeight = '';
   cardEl.classList.add('is-skeleton');
   cardEl.setAttribute('aria-busy', 'true');
-  cardEl.innerHTML = `<span class="sr-only" role="status">Loading story</span>${ARTICLE_SKELETON_HTML}`;
+  cardEl.innerHTML = ARTICLE_SKELETON_HTML;
+}
+/** Faint side-card placeholders where the wide (>=1600px) carousel puts its side cards, using the same slot maths. */
+function showSideSkeletons(withNewer) {
+  if (mobileMode || !wide.matches || !scene) return;
+  computeGeom();
+  const g = geom;
+  scene.innerHTML = '';
+  scene.style.perspective = PERSP + 'px';
+  scene.style.perspectiveOrigin = `${g.cx}px ${g.cy}px`;
+  const offs = withNewer ? [-3, -2, -1, 1, 2, 3] : [-3, -2, -1];
+  for (const o of offs) {
+    const L = slot(o), a = Math.abs(o);
+    if (L.alpha <= 0.02) continue;
+    const d = document.createElement('div');
+    d.className = 'side side-skel';
+    d.setAttribute('aria-hidden', 'true');
+    d.innerHTML = '<div class="skel side-skel-img"></div><div class="side-skel-txt"><div class="skel skel-line"></div><div class="skel skel-line skel-w60"></div></div>';
+    d.style.width = g.sideW + 'px'; d.style.height = g.sideH + 'px';
+    d.style.left = g.cx + 'px'; d.style.top = g.cy + 'px';
+    d.style.margin = `${-g.sideH / 2}px 0 0 ${-g.sideW / 2}px`;
+    d.style.transform = `translate3d(${L.x}px, ${-L.y}px, ${L.z}px) rotateY(${L.rot}deg) scale(${L.S})`;
+    d.style.zIndex = String(100 - Math.round(a * 10));
+    d.style.opacity = String(L.alpha * 0.55);
+    scene.appendChild(d);
+  }
 }
 function clearArticleSkeletonState() {
   cardEl.classList.remove('is-skeleton');
 }
-const TILE_SKELETON_HTML = '<div class="tile-skel" aria-hidden="true"><div class="skel skel-tile-img"></div><div class="tile-body"><div class="skel skel-line skel-tile-title"></div><div class="skel skel-line skel-tile-title skel-w60"></div><div class="skel skel-line skel-tile-meta"></div></div></div>';
+const TILE_SKELETON_HTML = gridEl.querySelector('.tile-skel')?.outerHTML || '';
 function showTileSkeletons(count) {
   removeTileSkeletons();
   gridEl.insertAdjacentHTML('beforeend', TILE_SKELETON_HTML.repeat(count));
@@ -848,7 +896,8 @@ function removeTileSkeletons() {
 }
 
 function appendArchiveTiles(items) {
-  removeTileSkeletons();
+  // during first load the static skeleton row stays until the top story is known (see revealGrid)
+  if (!browseEl?.classList.contains('awaiting-top')) removeTileSkeletons();
   items.forEach(editorial => {
     if (gridEl.querySelector(`[data-id="${editorial.cache_key}"]`)) return;
     const a = document.createElement('a');
@@ -901,6 +950,7 @@ function markActiveTile() {
 /** The newest archive tile usually repeats the story shown at the top; hide it while that story is showing. */
 function hideRepeatedFirstTile() {
   const cur = FEAT[active];
+  if (!cur) return;   // top story not known yet (first load / layout rebuild): keep the previous decision
   const first = gridEl.querySelector('.tile');
   gridEl.querySelectorAll('.tile.is-dup-top').forEach(t => { if (t !== first) t.classList.remove('is-dup-top'); });
   if (!first) return;
@@ -1694,6 +1744,14 @@ async function openStoryMobile(cacheKey, fromHash = false) {
 }
 
 /* ---------------- boot ---------------- */
+/** First load: archive tiles stay hidden behind the skeleton row until the top story is on screen, so the
+ *  newest tile can be dropped before anyone sees it twice. */
+function revealGrid() {
+  hideRepeatedFirstTile();
+  removeTileSkeletons();
+  browseEl?.classList.remove('awaiting-top');
+  gridEl.removeAttribute('aria-busy');
+}
 function fixCardHeight() {
   // equalise card height across the featured set so the floor/reflections do not jump between stories
   cardEl.style.minHeight = '';
@@ -1712,19 +1770,22 @@ async function boot() {
   editorialUrlsSeen.clear();
   seedStaticAuthors();
   stage.classList.add('is-loading');
-  showArticleSkeleton();
-  showTileSkeletons(tileSkeletonCount());
+  const hashKey = decodeURIComponent(location.hash.slice(1));
+  showSideSkeletons(!!hashKey);
+  // deep link: start the linked story's request alongside the story list instead of after it (memoised, so reused)
+  if (hashKey) fetchValidatedEditorial(hashKey).catch(() => {});
   try {
-    await ensureArchivePageLoaded(1);
-    const hashKey = decodeURIComponent(location.hash.slice(1));
-    if (hashKey) await openStory(hashKey, true);
-    else await openStoryFromLatest(true);
+    await Promise.all([
+      ensureArchivePageLoaded(1),
+      hashKey ? openStory(hashKey, true) : openStoryFromLatest(true),
+    ]);
   } catch (e) {
     console.error(e);
     toast('Failed to load GenAI News.');
   } finally {
     stage.classList.remove('is-loading');
-    removeTileSkeletons();
+    revealGrid();
+    if (!FEAT.length) scene.querySelectorAll('.side-skel').forEach(n => n.remove());
     if (cardEl.classList.contains('is-skeleton')) {
       clearArticleSkeletonState();
       cardEl.removeAttribute('aria-busy');

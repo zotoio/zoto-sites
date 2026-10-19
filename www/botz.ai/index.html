@@ -13,7 +13,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>botz.ai - GenAI News</title>
-  <link rel="stylesheet" href="style.css?v=20261019b">
+  <link rel="stylesheet" href="style.css?v=20261019c">
   <meta name="description"
     content="Botz.ai offers the latest news and insights in the world of artificial intelligence. Stay updated with AI trends, breakthroughs, and analysis. Discover how AI is transforming technology and industries worldwide.">
   <meta name="keywords"
@@ -33,14 +33,14 @@
       <div class="scene" id="scene"></div>
       <div class="stage-end" id="end-marker" hidden aria-hidden="true"><span class="stage-end-label">Latest</span></div>
 
-      <article class="card" id="card" aria-live="polite"></article>
+      <article class="card is-skeleton" id="card" aria-live="polite" aria-busy="true"><span class="sr-only" role="status">Loading story</span><div class="card-head skel-head" aria-hidden="true"><div class="skel skel-kicker"></div><div class="skel-nav"><div class="skel skel-btn"></div><div class="skel skel-btn"></div></div></div><div class="card-body skel-body" aria-hidden="true"><div class="skel skel-img"></div><div class="card-text"><div class="skel skel-line skel-title"></div><div class="skel skel-line skel-title skel-w60"></div><div class="skel skel-line skel-byline"></div><div class="skel-paras"><div class="skel-para"><div class="skel skel-line"></div><div class="skel skel-line"></div><div class="skel skel-line"></div><div class="skel skel-line skel-w70"></div></div><div class="skel-para"><div class="skel skel-line"></div><div class="skel skel-line"></div><div class="skel skel-line"></div><div class="skel skel-line skel-w85"></div></div><div class="skel-para skel-para-extra"><div class="skel skel-line"></div><div class="skel skel-line"></div><div class="skel skel-line"></div><div class="skel skel-line skel-w60"></div></div></div><div class="skel skel-btn skel-readmore"></div><div class="skel-meta"><div class="skel skel-line skel-meta-line"></div><div class="skel skel-line skel-meta-line"></div><div class="skel skel-line skel-meta-line"></div><div class="skel skel-line skel-meta-line"></div></div></div></div></article>
       <div class="card measure" id="measure" aria-hidden="true"></div>
       <p class="hint" id="hint">← / → keys, click a side card, or swipe</p>
     </section>
 
-    <section class="browse" aria-labelledby="browse-h">
+    <section class="browse awaiting-top" id="browse" aria-labelledby="browse-h">
       <h2 id="browse-h">More stories</h2>
-      <div class="grid" id="grid"></div>
+      <div class="grid" id="grid" aria-busy="true"><div class="tile-skel" aria-hidden="true"><div class="skel skel-tile-img"></div><div class="tile-body"><div class="skel skel-line skel-tile-title"></div><div class="skel skel-line skel-tile-title skel-w60"></div><div class="skel skel-line skel-tile-meta"></div></div></div><div class="tile-skel" aria-hidden="true"><div class="skel skel-tile-img"></div><div class="tile-body"><div class="skel skel-line skel-tile-title"></div><div class="skel skel-line skel-tile-title skel-w60"></div><div class="skel skel-line skel-tile-meta"></div></div></div><div class="tile-skel" aria-hidden="true"><div class="skel skel-tile-img"></div><div class="tile-body"><div class="skel skel-line skel-tile-title"></div><div class="skel skel-line skel-tile-title skel-w60"></div><div class="skel skel-line skel-tile-meta"></div></div></div><div class="tile-skel" aria-hidden="true"><div class="skel skel-tile-img"></div><div class="tile-body"><div class="skel skel-line skel-tile-title"></div><div class="skel skel-line skel-tile-title skel-w60"></div><div class="skel skel-line skel-tile-meta"></div></div></div><div class="tile-skel" aria-hidden="true"><div class="skel skel-tile-img"></div><div class="tile-body"><div class="skel skel-line skel-tile-title"></div><div class="skel skel-line skel-tile-title skel-w60"></div><div class="skel skel-line skel-tile-meta"></div></div></div><div class="tile-skel" aria-hidden="true"><div class="skel skel-tile-img"></div><div class="tile-body"><div class="skel skel-line skel-tile-title"></div><div class="skel skel-line skel-tile-title skel-w60"></div><div class="skel skel-line skel-tile-meta"></div></div></div><div class="tile-skel" aria-hidden="true"><div class="skel skel-tile-img"></div><div class="tile-body"><div class="skel skel-line skel-tile-title"></div><div class="skel skel-line skel-tile-title skel-w60"></div><div class="skel skel-line skel-tile-meta"></div></div></div><div class="tile-skel" aria-hidden="true"><div class="skel skel-tile-img"></div><div class="tile-body"><div class="skel skel-line skel-tile-title"></div><div class="skel skel-line skel-tile-title skel-w60"></div><div class="skel skel-line skel-tile-meta"></div></div></div><div class="tile-skel" aria-hidden="true"><div class="skel skel-tile-img"></div><div class="tile-body"><div class="skel skel-line skel-tile-title"></div><div class="skel skel-line skel-tile-title skel-w60"></div><div class="skel skel-line skel-tile-meta"></div></div></div><div class="tile-skel" aria-hidden="true"><div class="skel skel-tile-img"></div><div class="tile-body"><div class="skel skel-line skel-tile-title"></div><div class="skel skel-line skel-tile-title skel-w60"></div><div class="skel skel-line skel-tile-meta"></div></div></div><div class="tile-skel" aria-hidden="true"><div class="skel skel-tile-img"></div><div class="tile-body"><div class="skel skel-line skel-tile-title"></div><div class="skel skel-line skel-tile-title skel-w60"></div><div class="skel skel-line skel-tile-meta"></div></div></div><div class="tile-skel" aria-hidden="true"><div class="skel skel-tile-img"></div><div class="tile-body"><div class="skel skel-line skel-tile-title"></div><div class="skel skel-line skel-tile-title skel-w60"></div><div class="skel skel-line skel-tile-meta"></div></div></div></div>
     </section>
   </main>
 
@@ -79,7 +79,7 @@
     scrollToTopButton.addEventListener('click', scrollToTop);
     scrollToTopButton.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); scrollToTop(); } });
   </script>
-  <script type="module" src="carousel-app.js?v=20261019b"></script>
+  <script type="module" src="carousel-app.js?v=20261019c"></script>
 </body>
 
 </html>

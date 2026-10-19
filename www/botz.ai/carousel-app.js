@@ -1,6 +1,6 @@
 // botz.ai GenAI News — WebGL cover-flow carousel + flat HTML centre card (production).
 const $ = (s, r = document) => r.querySelector(s);
-const stage = $('#stage'), cardEl = $('#card'), measureEl = $('#measure'), scene = $('#scene');
+const stage = $('#stage'), cardEl = $('#card'), measureEl = $('#measure'), scene = $('#scene'), arrowsEl = $('#stage-arrows');
 const canvas = $('#gl');
 const endMarker = $('#end-marker');
 const storyAnnouncer = $('#story-announcer');
@@ -701,7 +701,6 @@ function buildRingWindow() {
 function ringRefresh() {
   if (mobileMode || ringPos < 0 || !FEAT.length) return;
   const prevCentre = FEAT[active];
-  const focusNav = document.activeElement?.closest?.('#card [data-nav]')?.dataset.nav;
   const focusSide = document.activeElement?.closest?.('.side')?.dataset.i;
   const w = buildRingWindow();
   FEAT = w.feat; active = w.active; offsets = FEAT.map((_, i) => i - active);
@@ -709,8 +708,7 @@ function ringRefresh() {
   if (gl) gl.rebuildSideMeshes();
   const centreChanged = FEAT[active] !== prevCentre;
   if (centreChanged) {
-    renderCard(cardEl, active);
-    if (focusNav) cardEl.querySelector(`[data-nav="${focusNav}"]`)?.focus();
+    renderCard(cardEl, active);   // the arrows are outside the card, so a focused arrow keeps its focus
   }
   fixCardHeight({ sticky: true }); computeGeom(); layoutButtons(); updateReadMoreState();
   if (focusSide != null) (sideBtns[Number(focusSide)] && !sideBtns[Number(focusSide)].hidden ? sideBtns[Number(focusSide)] : cardEl.querySelector('.card-title'))?.focus?.();
@@ -1038,19 +1036,12 @@ function canGoOlder() { return ringLen() > 1; }
 function canGoNewer() { return ringLen() > 1; }
 function cardHTML(a, i, { measure = false } = {}) {
   const n = ringLen() || FEAT.length, pos = (a.ringIndex ?? i);
-  const olderLabel = pos === 0 ? 'Older story (wraps around to the newest)' : 'Older story';
-  const newerLabel = pos === n - 1 ? 'Newer story (wraps around to the oldest)' : 'Newer story';
   const head = `
   <header class="card-head">
     <span class="kicker" data-snap="text">Featured <b>${pos + 1}</b> of ${n} · newest on the right</span>
   </header>`;
-  // Older/Newer sit at the bottom of the article (below the text, Read more and source details)
-  const foot = `
-  <nav class="card-foot card-nav" aria-label="Story navigation">
-    <button type="button" data-snap="button" data-nav="-1" ${canGoOlder(i) ? '' : 'disabled'} aria-label="${olderLabel}">‹ Older</button>
-    <button type="button" data-snap="button" data-nav="1" ${canGoNewer(i) ? '' : 'disabled'} aria-label="${newerLabel}">Newer ›</button>
-  </nav>`;
-  if (a.placeholder) return `${head}<span class="sr-only">Loading story</span>${CARD_SKELETON_BODY}${foot}`;
+  // Older/Newer are the arrow buttons on the card's edges (#stage-arrows, outside the card: see updateArrows)
+  if (a.placeholder) return `${head}<span class="sr-only">Loading story</span>${CARD_SKELETON_BODY}`;
   // off-screen measuring/snapshot copies keep the same box but load nothing (snapshots draw the decoded texture image)
   const img = a.img && measure
     ? `<button type="button" class="card-img-btn" tabindex="-1"><img class="card-img" data-snap="img" alt="" width="350" height="400"></button>`
@@ -1069,7 +1060,7 @@ function cardHTML(a, i, { measure = false } = {}) {
       </div>
       <button type="button" class="card-read-more" data-snap="button" hidden aria-expanded="false" aria-controls="card-more-${i}">Read more</button>
     </div>
-  </div>${foot}`;
+  </div>`;
 }
 /** Article view byline: "Agent ChatGPT · 19 Oct 2026" — same date source/format as the grid tiles; missing parts omitted. */
 function cardBylineHTML(a, snap) {
@@ -1107,6 +1098,7 @@ function renderCard(el, i) {
   if (el === cardEl) {
     clearArticleSkeletonState();
     if (FEAT[i].placeholder) el.setAttribute('aria-busy', 'true'); else el.removeAttribute('aria-busy');
+    updateArrows(i);
   }
   el.innerHTML = cardHTML(FEAT[i], i, { measure: el !== cardEl });
   el.dataset.id = FEAT[i].id;
@@ -1181,8 +1173,37 @@ cardEl.addEventListener('click', e => {
     if (readMoreExpanded()) collapseReadMore({ focus: true }); else expandReadMore();
     return;
   }
-  const b = e.target.closest('[data-nav]'); if (b) navRelative(Number(b.dataset.nav));
 });
+/* ---------------- Older / Newer arrows (desktop) ----------------
+ * Circles centred on the card's left/right edges (CSS), vertically centred on the COLLAPSED card. --arrow-y is
+ * measured from the card while collapsed and from its spacer (which holds the collapsed slot) while expanded, so
+ * Read more never moves them. They sit outside the card: the flip, its snapshot and its opacity never touch them. */
+arrowsEl?.addEventListener('click', e => {
+  const b = e.target.closest('[data-nav]');
+  if (b && !b.disabled) navRelative(Number(b.dataset.nav));
+});
+function updateArrows(i = active) {
+  if (!arrowsEl) return;
+  const a = FEAT[i]; if (!a) return;
+  const n = ringLen() || FEAT.length, pos = a.ringIndex ?? i;
+  const older = arrowsEl.querySelector('[data-nav="-1"]'), newer = arrowsEl.querySelector('[data-nav="1"]');
+  older.disabled = !canGoOlder(i); newer.disabled = !canGoNewer(i);
+  older.setAttribute('aria-label', pos === 0 ? 'Older story (wraps around to the newest)' : 'Older story');
+  newer.setAttribute('aria-label', pos === n - 1 ? 'Newer story (wraps around to the oldest)' : 'Newer story');
+}
+function positionArrows() {
+  if (!arrowsEl || mobileMode) return;
+  const ref = readMoreExpanded() ? cardSpacer : cardEl;
+  const h = ref.getBoundingClientRect().height;
+  if (!h) return;
+  const y = Math.round((ref.offsetTop + h / 2) * 100) / 100;
+  if (arrowsEl._y !== y) { arrowsEl._y = y; arrowsEl.style.setProperty('--arrow-y', y + 'px'); }
+}
+if (arrowsEl) {
+  new ResizeObserver(positionArrows).observe(cardEl);   // runs before paint: skeleton -> story, fixCardHeight, resize
+  window.addEventListener('resize', positionArrows);
+  positionArrows();
+}
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape' || !readMoreExpanded() || imageModalOpen()) return;
   e.preventDefault();
@@ -1477,7 +1498,7 @@ function snapshot(el, i, dpr = 1.5) {
   const grd = ctx.createLinearGradient(0, 0, 0, h); grd.addColorStop(0, '#151916'); grd.addColorStop(1, '#0f1210');
   ctx.fillStyle = grd; ctx.fill(); ctx.strokeStyle = 'rgba(255,255,255,.09)'; ctx.lineWidth = 1; ctx.stroke(); ctx.restore();
   // divider lines
-  el.querySelectorAll('.card-head, .card-meta, .card-foot').forEach(d => {
+  el.querySelectorAll('.card-head, .card-meta').forEach(d => {
     const r = d.getBoundingClientRect(), cs2 = getComputedStyle(d);
     ctx.fillStyle = 'rgba(255,255,255,.09)';
     if (d.classList.contains('card-head')) ctx.fillRect(r.left - r0.left, r.bottom - r0.top - 1, r.width, 1);
@@ -1994,7 +2015,7 @@ async function goToIndex(target, fromHash = false, { instant = false, replace = 
     if (id === LATEST_SLOT_ID) history.replaceState(null, '', location.pathname + location.search);
     else history[replace ? 'replaceState' : 'pushState'](null, '', '#' + id);
   }
-  const hadFocus = document.activeElement && document.activeElement.closest('.side, .card-nav') ? document.activeElement : null;
+  const hadFocus = document.activeElement && document.activeElement.closest('.side, .nav-arrow') ? document.activeElement : null;
 
   if (gl && !instant && !reduced) {
     if (frontStale || gl.frontStale()) { gl.setFrontTexture(snapFor(active)); frontStale = false; }
@@ -2044,7 +2065,7 @@ async function goToIndex(target, fromHash = false, { instant = false, replace = 
   trackPageView();
   logCenteredKey();
   if (hadFocus && hadFocus.classList.contains('side')) { const nb = sideBtns[Number(hadFocus.dataset.i)]; (nb?.hidden ? cardEl.querySelector('.card-title') : nb)?.focus?.(); }
-  else if (hadFocus) { const b = cardEl.querySelector(`[data-nav="${dir}"]`); (b && !b.disabled ? b : cardEl.querySelector(`[data-nav="${-dir}"]`))?.focus(); }
+  else if (hadFocus?.disabled) arrowsEl?.querySelector(`[data-nav="${-dir}"]`)?.focus();   // a focused arrow otherwise keeps focus
 }
 
 /** The centre card's image decoded (or failed), bounded so a slow image never holds up navigation. */

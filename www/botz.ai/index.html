@@ -17,7 +17,7 @@
   <style>html{background:#050605;color-scheme:dark}</style>
   <title>botz.ai - GenAI News</title>
   <link rel="preload" href="logo-80.png" as="image" fetchpriority="high">
-  <link rel="stylesheet" href="style.css?v=20261019q">
+  <link rel="stylesheet" href="style.css?v=20261019r">
   <meta name="description"
     content="Botz.ai offers the latest news and insights in the world of artificial intelligence. Stay updated with AI trends, breakthroughs, and analysis. Discover how AI is transforming technology and industries worldwide.">
   <meta name="keywords"
@@ -37,8 +37,12 @@
       <div class="scene" id="scene"></div>
       <div class="stage-end" id="end-marker" hidden aria-hidden="true"><span class="stage-end-label">Latest</span></div>
 
-      <article class="card is-skeleton" id="card" aria-live="polite" aria-busy="true"><span class="sr-only" role="status">Loading story</span><div class="card-head skel-head" aria-hidden="true"><div class="skel skel-kicker"></div></div><div class="card-body skel-body" aria-hidden="true"><div class="skel skel-img"></div><div class="card-text"><div class="skel skel-line skel-title"></div><div class="skel skel-line skel-title skel-w60"></div><div class="skel skel-line skel-byline"></div><div class="skel-paras"><div class="skel-para"><div class="skel skel-line"></div><div class="skel skel-line"></div><div class="skel skel-line"></div><div class="skel skel-line skel-w70"></div></div><div class="skel-para"><div class="skel skel-line"></div><div class="skel skel-line"></div><div class="skel skel-line"></div><div class="skel skel-line skel-w85"></div></div><div class="skel-para skel-para-extra"><div class="skel skel-line"></div><div class="skel skel-line"></div><div class="skel skel-line"></div><div class="skel skel-line skel-w60"></div></div></div><div class="skel skel-btn skel-readmore"></div><div class="skel-meta"><div class="skel skel-line skel-meta-line"></div><div class="skel skel-line skel-meta-line"></div><div class="skel skel-line skel-meta-line"></div><div class="skel skel-line skel-meta-line"></div></div></div></div><div class="card-foot skel-foot" aria-hidden="true"><div class="skel skel-btn"></div><div class="skel skel-btn"></div></div></article>
+      <article class="card is-skeleton" id="card" aria-live="polite" aria-busy="true"><span class="sr-only" role="status">Loading story</span><div class="card-head skel-head" aria-hidden="true"><div class="skel skel-kicker"></div></div><div class="card-body skel-body" aria-hidden="true"><div class="skel skel-img"></div><div class="card-text"><div class="skel skel-line skel-title"></div><div class="skel skel-line skel-title skel-w60"></div><div class="skel skel-line skel-byline"></div><div class="skel-paras"><div class="skel-para"><div class="skel skel-line"></div><div class="skel skel-line"></div><div class="skel skel-line"></div><div class="skel skel-line skel-w70"></div></div><div class="skel-para"><div class="skel skel-line"></div><div class="skel skel-line"></div><div class="skel skel-line"></div><div class="skel skel-line skel-w85"></div></div><div class="skel-para skel-para-extra"><div class="skel skel-line"></div><div class="skel skel-line"></div><div class="skel skel-line"></div><div class="skel skel-line skel-w60"></div></div></div><div class="skel skel-btn skel-readmore"></div><div class="skel-meta"><div class="skel skel-line skel-meta-line"></div><div class="skel skel-line skel-meta-line"></div><div class="skel skel-line skel-meta-line"></div><div class="skel skel-line skel-meta-line"></div></div></div></div></article>
       <div class="card measure" id="measure" aria-hidden="true"></div>
+      <div class="stage-arrows" id="stage-arrows" role="group" aria-label="Story navigation">
+        <button type="button" class="nav-arrow nav-arrow-older" data-nav="-1" aria-label="Older story" disabled><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg></button>
+        <button type="button" class="nav-arrow nav-arrow-newer" data-nav="1" aria-label="Newer story" disabled><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path d="M9.5 5.5 16 12l-6.5 6.5"/></svg></button>
+      </div>
       <p class="hint" id="hint">← / → keys, click a side card, or swipe</p>
     </section>
 
@@ -89,7 +93,7 @@
     scrollToTopButton.addEventListener('click', scrollToTop);
     scrollToTopButton.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); scrollToTop(); } });
   </script>
-  <script type="module" src="carousel-app.js?v=20261019q"></script>
+  <script type="module" src="carousel-app.js?v=20261019r"></script>
 </body>
 
 </html>

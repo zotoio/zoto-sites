@@ -278,9 +278,27 @@ a:hover{color:var(--green-hi)}
 }
 /* reserve the carousel card's typical footprint while loading (calibrated against the live card at
    1280x800, 1920x1080, 2560x1080 and 3440x1440) so the grid below doesn't jump when the story lands */
-@media (min-width:961px){ .card.is-skeleton{min-height:898px} }
-@media (min-width:2200px){ .card.is-skeleton{min-height:779px} }
-@media (min-width:3000px){ .card.is-skeleton{min-height:927px} }
+@media (min-width:961px){ .card.is-skeleton{min-height:924px} }
+@media (min-width:2200px){ .card.is-skeleton{min-height:805px} }
+@media (min-width:3000px){ .card.is-skeleton{min-height:981px} }
 @media (min-width:961px) and (max-height:900px), (min-width:961px) and (max-width:1500px) and (max-height:920px){
   .card.is-skeleton{min-height:601px}
 }
+/* card skeleton when a flick outruns the prefetch buffer */
+.card.is-story-loading .card-text{width:100%}
+/* centred carousel card image opens the modal viewer */
+.card-img-btn{display:block; width:100%; padding:0; margin:0; border:0; background:none; border-radius:10px; cursor:zoom-in; line-height:0}
+.card-img-btn:focus-visible{outline:3px solid var(--green-hi); outline-offset:3px}
+html.modal-open{overflow:hidden}
+.img-modal{position:fixed; inset:0; z-index:2000; display:grid; place-items:center; padding:clamp(16px, 4vh, 48px) clamp(16px, 4vw, 64px);
+  background:rgba(4,6,5,.88); opacity:0; transition:opacity 200ms ease}
+.img-modal[hidden]{display:none}
+.img-modal.is-open{opacity:1}
+.img-modal-img{--ar:1; display:block; width:min(92vw, calc(86vh * var(--ar))); height:auto; max-height:86vh; object-fit:contain;
+  border-radius:12px; box-shadow:0 30px 90px rgba(0,0,0,.7); background:#101311; transform:scale(.94); transition:transform 220ms ease}
+.img-modal.is-open .img-modal-img{transform:none}
+.img-modal-close{position:absolute; top:16px; right:20px; width:46px; height:46px; border-radius:50%; border:1px solid rgba(255,255,255,.25);
+  background:rgba(20,24,21,.85); color:#fff; font:28px/1 Arial, sans-serif; cursor:pointer; display:grid; place-items:center}
+.img-modal-close:hover{background:var(--btn-hi)}
+.img-modal-close:focus-visible{outline:3px solid var(--green-hi); outline-offset:3px}
+@media (prefers-reduced-motion: reduce){ .img-modal, .img-modal-img{transition:none} .img-modal-img{transform:none} }

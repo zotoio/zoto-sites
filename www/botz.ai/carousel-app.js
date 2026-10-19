@@ -8,6 +8,8 @@ const gridEl = $('#grid');
 const browseEl = $('#browse');
 /** Skeleton markup ships in index.html (first paint); reuse it for later loads. */
 const ARTICLE_SKELETON_HTML = cardEl.innerHTML;
+/** Card body skeleton reused when a flick outruns the prefetch buffer. */
+const CARD_SKELETON_BODY = cardEl.querySelector('.skel-body')?.outerHTML || '';
 const loadingEl = $('#loading');
 
 const params = new URLSearchParams(location.search);
@@ -30,7 +32,6 @@ const PERSP = 2200;
 const SIDE_W0 = 440, SIDE_ASPECT = 704 / 512;
 const SLOTS = { S: [1, 0.8, 0.65, 0.52, 0.42], R: [0, 40, 40, 40, 40], Z: [0, -70, -150, -230, -310],
                 DIM: [1, 0.8, 0.6, 0.44, 0.3], BIAS: [0, 0.2, 0.9, 1.7, 2.4] };
-const WINDOW_RADIUS = 3;
 const useLocalStubs = params.get('live') !== '1' && ['localhost', '127.0.0.1'].includes(window.location.hostname);
 
 /** No-key /editorials is a dedicated LATEST slot (empty URL hash when centered). */
@@ -66,23 +67,9 @@ function seedStaticAuthors() {
   STATIC_AUTHOR_SEED.forEach(registerKnownAuthor);
 }
 
-async function refreshArchiveKeyIndex(extraKeys = []) {
-  const fromPages = Object.values(archiveKeysByPage).flat();
-  archiveKeysChrono = [...new Set([...fromPages, ...extraKeys])].sort();
-}
-
 function rebuildArchiveKeysChrono(extraKeys = []) {
   const fromPages = Object.values(archiveKeysByPage).flat();
   archiveKeysChrono = [...new Set([...fromPages, ...extraKeys])].sort();
-}
-
-function neighborArchiveKeys(centerKey, radius = WINDOW_RADIUS) {
-  if (!centerKey) return [];
-  const idx = archiveKeysChrono.indexOf(centerKey);
-  if (idx < 0) return [centerKey];
-  const lo = Math.max(0, idx - radius);
-  const hi = Math.min(archiveKeysChrono.length - 1, idx + radius);
-  return archiveKeysChrono.slice(lo, hi + 1);
 }
 
 function authorSuffixAllowed(suffix) {
@@ -393,36 +380,6 @@ async function loadArchivePageIntoGrid(page) {
   }
 }
 
-async function ensureKeyListedInArchive(cacheKey) {
-  if (!cacheKey) return false;
-  rebuildArchiveKeysChrono();
-  if (archiveKeysChrono.includes(cacheKey)) return true;
-  if (archivePagesLoaded < 1) await ensureArchivePageLoaded(1);
-  if (archiveKeysChrono.includes(cacheKey)) return true;
-  for (let p = archivePagesLoaded + 1; p <= ARCHIVE_PAGE_SEARCH_CAP; p++) {
-    if (!archiveHasMore) break;
-    await ensureArchivePageLoaded(p);
-    if (archiveKeysChrono.includes(cacheKey)) return true;
-  }
-  return archiveKeysChrono.includes(cacheKey);
-}
-
-async function ensureAdjacentArchivePagesForCenter(centerKey) {
-  if (!centerKey || centerKey === LATEST_SLOT_ID) return;
-  await ensureKeyListedInArchive(centerKey);
-  for (let p = 1; p <= archivePagesLoaded; p++) {
-    const keys = archiveKeysByPage[p];
-    if (!keys?.includes(centerKey)) continue;
-    const sorted = [...keys].sort();
-    const localIdx = sorted.indexOf(centerKey);
-    if (localIdx <= WINDOW_RADIUS && archiveHasMore) {
-      await ensureArchivePageLoaded(archivePagesLoaded + 1);
-    }
-    break;
-  }
-  rebuildArchiveKeysChrono();
-}
-
 let latestSlotFlight = null;
 function ensureLatestSlotResolved() {
   if (latestSlotResolved) return Promise.resolve();
@@ -463,55 +420,293 @@ async function resolveLatestSlot() {
   latestSlotResolved = true;
 }
 
-/** Archive-backed hourly slot; validates generated_at window and rejects stale LATEST echoes. */
-async function fetchHourlyEditorial(cacheKey, prefetchedPayload = null) {
-  if (!cacheKey || cacheKey === LATEST_SLOT_ID) return null;
-  await ensureLatestSlotResolved();
-  let payload = prefetchedPayload;
-  if (!payload?.[0]) {
-    if (!archiveKeysChrono.includes(cacheKey) && !prefetchedPayload?.[0]) return null;
-    payload = await fetchValidatedEditorial(cacheKey);
-  } else if (!editorialBelongsToCacheKey(payload[0], cacheKey)) {
-    payload = await fetchValidatedEditorial(cacheKey);
-  }
-  const row = payload?.[0];
-  if (!row) return null;
-  if (matchesLatestIdentity(row)) {
-    if (cacheKey === newestArchiveKey) return payload;
-    return null;
-  }
-  if (!editorialBelongsToCacheKey(row, cacheKey)) return null;
-  return payload;
-}
+/* ---------------- desktop carousel ring: wrap-around, on-demand loading, rolling prefetch buffer ----------------
+ * Chrono positions 0..n-1 (0 = oldest archive story, n-1 = newest; the LATEST slot is n-1 when it is shown).
+ * Older from 0 wraps to n-1 and Newer from n-1 wraps to 0. Only the archive pages that hold the stories around
+ * the centre are fetched (page 1 + whichever page a position falls in; the oldest page comes from the archive
+ * totals), and only ~RING_BUFFER stories each way are loaded ahead of the user. */
+const RING_VISIBLE = 3;      // side cards each way (matches the slot layout)
+const RING_BUFFER = 4;       // stories prefetched ahead in BOTH directions (crosses the wrap point)
+const RING_PAGE_AHEAD = 6;   // also fetch the archive page holding positions this far past the buffer
+const RING_KEEP = 12;        // loaded stories further than this from the centre are evicted
+const RING_CONCURRENCY = 4;  // parallel story prefetches
+let ringTotal = 0, ringPageSize = 24, ringReady = false, ringInitFlight = null;
+const ringPages = new Map();        // archive page -> cache keys (newest first)
+const ringPageFlights = new Map();
+const ringStories = new Map();      // cache key -> { r, article, failed, promise }
+let ringPos = -1;                   // chrono position of the centred story
+let wrapCrossed = false;            // seam cards stay skeletons until the user has flicked across the wrap point
+let ringQueue = [], ringInflight = 0, ringOpenSeq = 0;
+const sideTexCache = new Map();
+const ringStats = { storyLoads: 0, pageLoads: 0, evicted: 0, skeletonCentres: 0 };
 
-async function resolveNewerTarget(fromKey) {
-  if (!fromKey || fromKey === LATEST_SLOT_ID) return null;
-  await ensureLatestSlotResolved();
-  rebuildArchiveKeysChrono();
-  await ensureArchivePagesForWindow(fromKey);
-  rebuildArchiveKeysChrono();
-  if (showLatestSlot && fromKey === newestArchiveKey) return LATEST_SLOT_ID;
-  const idx = archiveKeysChrono.indexOf(fromKey);
-  if (idx >= 0 && idx < archiveKeysChrono.length - 1) return archiveKeysChrono[idx + 1];
-  return null;
+function ringLen() { return ringTotal + (showLatestSlot && globalLatestPayload?.[0] ? 1 : 0); }
+function ringWrap(r) { const n = ringLen(); return n ? ((r % n) + n) % n : 0; }
+function ringDist(a, b) { const n = ringLen(); if (!n) return 0; const d = Math.abs(a - b) % n; return Math.min(d, n - d); }
+function ringPageOf(r) { return Math.floor((ringTotal - 1 - r) / ringPageSize) + 1; }
+function ringKeyAt(r) {
+  if (r === ringTotal && ringLen() > ringTotal) return LATEST_SLOT_ID;
+  if (r < 0 || r >= ringTotal) return null;
+  const d = ringTotal - 1 - r;
+  return ringPages.get(Math.floor(d / ringPageSize) + 1)?.[d % ringPageSize] || null;
 }
-
-async function resolveOlderCacheKey(fromKey) {
-  if (!fromKey) return null;
-  if (fromKey === LATEST_SLOT_ID) return newestArchiveKey;
-  await ensureLatestSlotResolved();
-  rebuildArchiveKeysChrono();
-  await ensureArchivePagesForWindow(fromKey);
-  rebuildArchiveKeysChrono();
-  let idx = archiveKeysChrono.indexOf(fromKey);
-  if (idx > 0) return archiveKeysChrono[idx - 1];
-  if (idx === 0 && archiveHasMore) {
-    await ensureArchivePageLoaded(archivePagesLoaded + 1);
-    rebuildArchiveKeysChrono();
-    idx = archiveKeysChrono.indexOf(fromKey);
-    if (idx > 0) return archiveKeysChrono[idx - 1];
+function ringIndexOfKey(key) {
+  if (key === LATEST_SLOT_ID) return ringLen() > ringTotal ? ringTotal : -1;
+  for (const [p, keys] of ringPages) {
+    const i = keys.indexOf(key);
+    if (i >= 0) return ringTotal - 1 - ((p - 1) * ringPageSize + i);
   }
-  return null;
+  return -1;
+}
+const pageKeys = data => (data?.editorials || []).map(e => e.cache_key).filter(Boolean);
+function ringLoadPage(p) {
+  if (ringPages.has(p)) return Promise.resolve(ringPages.get(p));
+  if (!ringPageFlights.has(p)) {
+    ringStats.pageLoads++;
+    const flight = loadArchivePage(p)   // same source as the grid (memoised; stubs on localhost)
+      .then(data => { const keys = pageKeys(data); ringPages.set(p, keys); return keys; })
+      .finally(() => ringPageFlights.delete(p));
+    ringPageFlights.set(p, flight);
+  }
+  return ringPageFlights.get(p);
+}
+/** Older APIs have no totals: find the last page with O(log pages) requests instead of walking every page. */
+async function probeArchiveTotal(firstKeys, firstHasNext) {
+  if (!firstKeys.length) return 0;
+  if (!firstHasNext) return firstKeys.length;
+  const look = async p => { const d = await loadArchivePage(p); const keys = pageKeys(d); if (keys.length) ringPages.set(p, keys); return { n: keys.length, next: !!d.pagination?.has_next }; };
+  let lo = 1, hi = 0, last = 0, lastN = 0;
+  for (let p = 2; p <= 4096; p *= 2) {
+    const r = await look(p);
+    if (r.n && !r.next) { last = p; lastN = r.n; break; }
+    if (r.n) { lo = p; continue; }
+    hi = p; break;
+  }
+  while (!last && hi - lo > 1) {
+    const mid = (lo + hi) >> 1, r = await look(mid);
+    if (r.n && !r.next) { last = mid; lastN = r.n; } else if (r.n) lo = mid; else hi = mid;
+  }
+  if (!last) { last = lo; lastN = ringPages.get(lo)?.length || ringPageSize; }
+  return (last - 1) * ringPageSize + lastN;
+}
+function ringInit() {
+  if (ringReady) return Promise.resolve();
+  if (!ringInitFlight) {
+    ringInitFlight = (async () => {
+      await ensureLatestSlotResolved();
+      const first = await loadArchivePage(1);
+      const keys = pageKeys(first);
+      ringPages.set(1, keys);
+      const pg = first.pagination || {};
+      ringPageSize = Number(pg.size) || keys.length || 24;
+      ringTotal = Number.isFinite(pg.total) ? pg.total : await probeArchiveTotal(keys, !!pg.has_next);
+      ringReady = true;
+    })().finally(() => { ringInitFlight = null; });
+  }
+  return ringInitFlight;
+}
+/** Chrono position of a cache key; unknown pages are found by binary search over the (date-sorted) archive. */
+async function ringLocate(key) {
+  await ringInit();
+  let r = ringIndexOfKey(key);
+  if (r >= 0 || !ringTotal) return r;
+  const newerThan = (a, b) => (b + '.json').localeCompare(a + '.json') < 0;   // archive order = filename, newest first
+  let lo = 1, hi = Math.ceil(ringTotal / ringPageSize);
+  for (let it = 0; it < 16 && lo <= hi; it++) {
+    const mid = (lo + hi) >> 1;
+    const keys = await ringLoadPage(mid);
+    if (keys.includes(key)) return ringIndexOfKey(key);
+    if (!keys.length) { hi = mid - 1; continue; }
+    if (newerThan(key, keys[0])) hi = mid - 1;
+    else if (newerThan(keys[keys.length - 1], key)) lo = mid + 1;
+    else return -1;
+  }
+  return -1;
+}
+function loadStoryImage(a) {
+  return new Promise(res => {
+    if (!a.img) { imgs[a.id] = null; res(); return; }
+    if (imgs[a.id]?.complete && imgs[a.id].src) { res(); return; }
+    const im = new Image();
+    const done = () => { clearTimeout(t); res(); };
+    const t = setTimeout(done, 4000);
+    im.onload = im.onerror = done; im.decoding = 'async'; im.src = a.img; imgs[a.id] = im;
+  });
+}
+async function loadRingArticle(key) {
+  let a;
+  if (key === LATEST_SLOT_ID) a = normalizeLatestSlotArticle(globalLatestPayload[0]);
+  else {
+    let p = await fetchValidatedEditorial(key);
+    if (!p[0]) {
+      // timestamp-suffixed keys can't be hour-validated: use what /editorials?cacheKey= returns (as the mobile flow does),
+      // unless it is a stale echo of the latest story
+      p = await fetchEditorialOnce(key);
+      if (p[0] && matchesLatestIdentity(p[0]) && key !== newestArchiveKey) p = [];
+    }
+    if (!p[0]) throw new Error(`story ${key} unavailable`);
+    a = normalizeArticle(p[0], key);
+  }
+  await loadStoryImage(a);   // buffered = text + image, so a flick never lands on a half-drawn card
+  return a;
+}
+function unavailableArticle(key) {
+  return { id: key, title: 'Story unavailable', agent: '', showAgent: false, bodyHtml: '<p>This story could not be loaded. Try Older or Newer.</p>',
+    generated: '', generatedAt: '', source: '', published: '', origTitle: '', url: '', hn: '', img: '', navigation: {}, unavailable: true };
+}
+function ringEnsureStory(r) {
+  const key = ringKeyAt(r);
+  if (!key) return Promise.resolve(null);
+  let st = ringStories.get(key);
+  if (st) { st.r = r; return st.promise; }
+  st = { r, article: null, failed: false, promise: null };
+  ringStories.set(key, st);
+  ringStats.storyLoads++;
+  st.promise = loadRingArticle(key)
+    .then(a => { if (ringStories.get(key) === st) { st.article = a; ringStoryArrived(key); } return a; })
+    .catch(err => { console.warn(err); if (ringStories.get(key) === st) { st.failed = true; ringStoryArrived(key); } return null; });
+  return st.promise;
+}
+/** Rolling buffer: centre first, then +-1, +-2 ... +-RING_BUFFER (wrapping). Re-run on every move. */
+function ringSchedule() {
+  const n = ringLen();
+  if (!n || ringPos < 0 || mobileMode) return;
+  const order = [ringPos], seen = new Set(order);
+  for (let d = 1; d <= RING_BUFFER; d++) for (const sgn of [1, -1]) {
+    const r = ringWrap(ringPos + sgn * d);
+    if (!seen.has(r)) { seen.add(r); order.push(r); }
+  }
+  ringQueue = order;   // replaces the old queue: positions the user has left behind are dropped before they start
+  const pages = new Set();
+  for (let d = 0; d <= RING_BUFFER + RING_PAGE_AHEAD; d++) for (const sgn of [1, -1]) {
+    const r = ringWrap(ringPos + sgn * d);
+    if (r < ringTotal) pages.add(ringPageOf(r));
+  }
+  for (const p of pages) if (!ringPages.has(p) && !ringPageFlights.has(p)) ringLoadPage(p).then(() => ringSchedule(), err => console.warn(err));
+  ringPump();
+  ringEvict();
+}
+function ringPump() {
+  while (ringInflight < RING_CONCURRENCY && ringQueue.length) {
+    const r = ringQueue.shift(), key = ringKeyAt(r);
+    if (!key || ringStories.has(key)) continue;   // unknown key: its page is on the way and re-schedules
+    ringInflight++;
+    ringEnsureStory(r).finally(() => { ringInflight--; ringPump(); });
+  }
+}
+function ringEvict() {
+  for (const [key, st] of ringStories) {
+    if (ringDist(st.r, ringPos) <= RING_KEEP || FEAT.some(a => a.id === key)) continue;
+    ringStories.delete(key);
+    editorialFlight.delete(editorialMemoKey(key, false));
+    editorialFlight.delete(editorialMemoKey(key, true));
+    delete imgs[key];
+    for (const k of [...sideTexCache.keys()]) if (k.startsWith(key + '|')) sideTexCache.delete(k);
+    ringStats.evicted++;
+  }
+}
+/** Positions across the wrap point from the centre. While the latest story is centred (and until the user has
+ *  crossed the seam once) they show skeleton side cards instead of the wrapped-around oldest stories. */
+function ringSeamMasked(o) {
+  const n = ringLen();
+  const crosses = ringPos + o >= n || ringPos + o < 0;
+  return crosses && (ringPos === n - 1 || !wrapCrossed);
+}
+function ringEntry(o) {
+  const r = ringWrap(ringPos + o), key = ringKeyAt(r);
+  const st = key ? ringStories.get(key) : null;
+  const masked = o !== 0 && ringSeamMasked(o);
+  if (!masked && st?.article) { st.article.ringIndex = r; return st.article; }
+  if (!masked && st?.failed) { const u = unavailableArticle(key); u.ringIndex = r; return u; }
+  return { id: key || `__pending__${r}`, key, placeholder: true, seam: masked, ringIndex: r, title: '', agent: '', img: '' };
+}
+function ringRadii() {
+  const n = ringLen();
+  const left = Math.min(RING_VISIBLE, Math.floor((n - 1) / 2));
+  return [left, Math.min(RING_VISIBLE, n - 1 - left)];
+}
+function buildRingWindow() {
+  const [L, R] = ringRadii(), feat = [];
+  for (let o = -L; o <= R; o++) feat.push(ringEntry(o));
+  return { feat, active: L };
+}
+/** Re-centre the window on ringPos (after a move, or when a buffered story lands). Same slots, so nothing jumps. */
+function ringRefresh() {
+  if (mobileMode || ringPos < 0 || !FEAT.length) return;
+  const prevCentre = FEAT[active];
+  const focusNav = document.activeElement?.closest?.('#card [data-nav]')?.dataset.nav;
+  const focusSide = document.activeElement?.closest?.('.side')?.dataset.i;
+  const w = buildRingWindow();
+  FEAT = w.feat; active = w.active; offsets = FEAT.map((_, i) => i - active);
+  rebuildSideButtons();
+  if (gl) gl.rebuildSideMeshes();
+  const centreChanged = FEAT[active] !== prevCentre;
+  if (centreChanged) {
+    renderCard(cardEl, active);
+    if (focusNav) cardEl.querySelector(`[data-nav="${focusNav}"]`)?.focus();
+  }
+  fixCardHeight({ sticky: true }); computeGeom(); layoutButtons(); updateReadMoreState();
+  if (focusSide != null) (sideBtns[Number(focusSide)] && !sideBtns[Number(focusSide)].hidden ? sideBtns[Number(focusSide)] : cardEl.querySelector('.card-title'))?.focus?.();
+  if (gl) { gl.resize(); gl.setFrontTexture(snapFor(active)); gl.kick(); }
+  markActiveTile();
+}
+function ringStoryArrived(key) {
+  if (mobileMode || ringPos < 0 || !FEAT.length || busy) return;   // a move in progress re-centres when it lands
+  const i = FEAT.findIndex(a => a.placeholder && !a.seam && a.key === key);
+  if (i < 0) return;
+  ringRefresh();
+  if (i === active) {
+    const a = FEAT[active];
+    if (a.id !== LATEST_SLOT_ID && location.hash !== '#' + a.id && !a.placeholder) history.replaceState(null, '', '#' + a.id);
+    if (storyAnnouncer) storyAnnouncer.textContent = a.title;
+  }
+}
+/** Step the ring by delta (|delta| <= visible radius animates, larger jumps re-centre). Never waits on the network:
+ *  an unbuffered centre shows the skeleton card until its story lands. */
+async function ringMove(delta, fromHash = false, { instant = false } = {}) {
+  const n = ringLen();
+  if (n <= 1 || !delta || ringPos < 0 || mobileMode) return;
+  const epoch = layoutEpoch;
+  const newPos = ringWrap(ringPos + delta);
+  const crossing = ringPos + delta >= n || ringPos + delta < 0;
+  const key = ringKeyAt(newPos);
+  const st = key ? ringStories.get(key) : null;
+  if (!st?.article && !st?.failed) { ringStats.skeletonCentres++; ringEnsureStory(newPos); }
+  const target = active + delta;
+  if (target >= 0 && target < FEAT.length) {
+    if (FEAT[target].placeholder && st?.article) { st.article.ringIndex = newPos; FEAT[target] = st.article; }   // seam card becomes the centre
+    await goToIndex(target, fromHash, { instant });
+    if (mobileMode || layoutIsStale(epoch)) return;
+  } else if (!fromHash && key && key !== LATEST_SLOT_ID) history.pushState(null, '', '#' + key);
+  if (crossing) wrapCrossed = true;
+  ringPos = newPos;
+  ringRefresh();
+  ringSchedule();
+}
+/** Open the ring at a story (null = latest view). Waits for the centre and its visible neighbours (bounded), so the
+ *  first paint matches the old full-window layout. */
+async function ringOpen(key, fromHash = false, { omitHash = false } = {}) {
+  const epoch = layoutEpoch, seq = ++ringOpenSeq;
+  await ringInit();
+  if (mobileMode || layoutIsStale(epoch) || seq !== ringOpenSeq) return;
+  const n = ringLen();
+  if (!n) throw new Error('No stories available');
+  let r = key ? await ringLocate(key) : n - 1;
+  if (r < 0) { r = n - 1; key = null; }   // unknown / unlisted key: latest view, as before
+  if (mobileMode || layoutIsStale(epoch) || seq !== ringOpenSeq) return;
+  ringPos = r;
+  ringSchedule();
+  const [L, R] = ringRadii(), pages = new Set();
+  for (let o = -L; o <= R; o++) { const rr = ringWrap(r + o); if (rr < ringTotal) pages.add(ringPageOf(rr)); }
+  await Promise.all([...pages].map(p => ringLoadPage(p).catch(() => [])));
+  const around = [];
+  for (let o = -L; o <= R; o++) if (o && !ringSeamMasked(o)) around.push(ringEnsureStory(ringWrap(r + o)));
+  await ringEnsureStory(r);
+  await Promise.race([Promise.all(around), wait(2500)]);
+  if (mobileMode || layoutIsStale(epoch) || seq !== ringOpenSeq) return;
+  const w = buildRingWindow();
+  await applyFeaturedState(w.feat, w.active, fromHash, { omitHash: omitHash || !key, epoch });
+  ringSchedule();
 }
 
 function registerKnownAuthor(authorAlias) {
@@ -643,77 +838,12 @@ function normalizeLatestSlotArticle(entry) {
   return a;
 }
 
-async function ensureArchivePagesForWindow(centerKey) {
-  if (!centerKey || centerKey === LATEST_SLOT_ID) return;
-  await ensureKeyListedInArchive(centerKey);
-  await ensureAdjacentArchivePagesForCenter(centerKey);
-  for (let attempt = 0; attempt < ARCHIVE_PAGE_SEARCH_CAP; attempt++) {
-    rebuildArchiveKeysChrono();
-    const want = neighborArchiveKeys(centerKey, WINDOW_RADIUS);
-    if (want.every(k => archiveKeysChrono.includes(k))) break;
-    if (!archiveHasMore) break;
-    await ensureArchivePageLoaded(archivePagesLoaded + 1);
-  }
-}
-
-async function buildFeaturedWindow(centerKey, opts = {}) {
-  const { anchorPayload = null, centerOnLatest = false } = opts;
-  await ensureLatestSlotResolved();
-  let center = centerKey;
-  if (centerOnLatest) {
-    center = showLatestSlot ? null : newestArchiveKey;
-  }
-  if (center) await ensureArchivePagesForWindow(center);
-  else if (centerOnLatest && newestArchiveKey) await ensureArchivePagesForWindow(newestArchiveKey);
-  rebuildArchiveKeysChrono(centerKey ? [centerKey] : []);
-  const byId = new Map();
-
-  async function addHourly(key, payload) {
-    if (!key || key === LATEST_SLOT_ID || byId.has(key)) return;
-    const p = await fetchHourlyEditorial(key, payload);
-    if (!p?.[0]) return;
-    byId.set(key, normalizeArticle(p[0], key));
-  }
-
-  if (center) {
-    const keys = archiveKeysChrono.includes(center)
-      ? neighborArchiveKeys(center, WINDOW_RADIUS)
-      : [center];
-    await Promise.all(keys.filter(k => k !== center).map(k => addHourly(k)));
-    await addHourly(center, anchorPayload);
-    if (!byId.has(center) && anchorPayload?.[0] && editorialBelongsToCacheKey(anchorPayload[0], center)) {
-      byId.set(center, normalizeArticle(anchorPayload[0], center));
-    }
-  } else if (centerOnLatest && showLatestSlot && newestArchiveKey) {
-    const keys = neighborArchiveKeys(newestArchiveKey, WINDOW_RADIUS);
-    await Promise.all(keys.map(k => addHourly(k)));
-  }
-
-  if (globalLatestPayload?.[0] && showLatestSlot) {
-    byId.set(LATEST_SLOT_ID, normalizeLatestSlotArticle(globalLatestPayload[0]));
-  }
-  return orderFeaturedArticles(byId);
-}
-
-function orderFeaturedArticles(byId) {
-  const hourly = [...byId.keys()].filter(k => k !== LATEST_SLOT_ID).sort();
-  const seenIdentity = new Set();
-  const ordered = [];
-  for (const k of hourly) {
-    const art = byId.get(k);
-    const key = art?.storyIdentityKey;
-    if (key && seenIdentity.has(key)) continue;
-    if (key) seenIdentity.add(key);
-    ordered.push(art);
-  }
-  if (byId.has(LATEST_SLOT_ID)) ordered.push(byId.get(LATEST_SLOT_ID));
-  return ordered;
-}
-
 /* ---------------- images ---------------- */
 const imgs = {};
 function preloadImages() {
   return Promise.all(FEAT.map(a => new Promise(res => {
+    if (a.placeholder) { res(); return; }
+    if (imgs[a.id]?.complete && imgs[a.id].src === a.img) { res(); return; }
     if (!a.img) { imgs[a.id] = null; res(); return; }
     const im = new Image(); im.onload = im.onerror = () => res(); im.src = a.img; imgs[a.id] = im;
   })));
@@ -721,30 +851,33 @@ function preloadImages() {
 
 /* ---------------- DOM rendering ---------------- */
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-function canGoOlder(i) {
-  if (i > 0) return true;
-  return !!FEAT[0]?.navigation?.next;
-}
-function canGoNewer(i) {
-  if (i < FEAT.length - 1) return true;
-  return false;
-}
+/** The desktop ring wraps, so Older/Newer are only disabled when there is a single story. */
+function canGoOlder() { return ringLen() > 1; }
+function canGoNewer() { return ringLen() > 1; }
 function cardHTML(a, i) {
-  return `
+  const n = ringLen() || FEAT.length, pos = (a.ringIndex ?? i);
+  const olderLabel = pos === 0 ? 'Older story (wraps around to the newest)' : 'Older story';
+  const newerLabel = pos === n - 1 ? 'Newer story (wraps around to the oldest)' : 'Newer story';
+  const head = `
   <header class="card-head">
-    <span class="kicker" data-snap="text">Featured <b>${i + 1}</b> of ${FEAT.length} · newest on the right</span>
+    <span class="kicker" data-snap="text">Featured <b>${pos + 1}</b> of ${n} · newest on the right</span>
     <div class="card-nav">
-      <button type="button" data-snap="button" data-nav="-1" ${canGoOlder(i) ? '' : 'disabled'} aria-label="Older story">‹ Older</button>
-      <button type="button" data-snap="button" data-nav="1" ${canGoNewer(i) ? '' : 'disabled'} aria-label="Newer story">Newer ›</button>
+      <button type="button" data-snap="button" data-nav="-1" ${canGoOlder(i) ? '' : 'disabled'} aria-label="${olderLabel}">‹ Older</button>
+      <button type="button" data-snap="button" data-nav="1" ${canGoNewer(i) ? '' : 'disabled'} aria-label="${newerLabel}">Newer ›</button>
     </div>
-  </header>
+  </header>`;
+  if (a.placeholder) return `${head}<span class="sr-only">Loading story</span>${CARD_SKELETON_BODY}`;
+  const img = a.img
+    ? `<button type="button" class="card-img-btn" aria-haspopup="dialog" aria-label="Enlarge image${a.title ? `: ${esc(a.title)}` : ''}"><img class="card-img" data-snap="img" src="${esc(a.img)}" alt="" width="340" height="340"></button>`
+    : `<img class="card-img" data-snap="img" src="" alt="" width="340" height="340">`;
+  return `${head}
   <div class="card-body">
-    <img class="card-img" data-snap="img" src="${esc(a.img)}" alt="" width="340" height="340">
+    ${img}
     <div class="card-text">
       <h2 class="card-title" data-snap="text">${esc(a.title)}</h2>
       ${cardBylineHTML(a, true)}
       <div class="card-paras">${a.bodyHtml}</div>
-      <button type="button" class="card-read-more" hidden aria-expanded="false">Read more</button>
+      <button type="button" class="card-read-more" data-snap="button" hidden aria-expanded="false">Read more</button>
       ${cardMetaHTML(a)}
     </div>
   </div>`;
@@ -781,7 +914,11 @@ function mobileArticleHTML(a) {
   </div>`;
 }
 function renderCard(el, i) {
-  if (el === cardEl) { clearArticleSkeletonState(); el.removeAttribute('aria-busy'); }
+  if (el === cardEl) {
+    clearArticleSkeletonState();
+    el.classList.toggle('is-story-loading', !!FEAT[i].placeholder);
+    if (FEAT[i].placeholder) el.setAttribute('aria-busy', 'true'); else el.removeAttribute('aria-busy');
+  }
   el.innerHTML = cardHTML(FEAT[i], i);
   el.dataset.id = FEAT[i].id;
   el.querySelectorAll('.card-paras p, .card-paras li').forEach(n => { n.dataset.snap = 'text'; });
@@ -829,7 +966,14 @@ cardEl.addEventListener('click', e => {
 function rebuildSideButtons() {
   scene.innerHTML = '';
   sideBtns = FEAT.map((a, i) => {
-    if (a.id === LATEST_SLOT_ID) return null;
+    if (a.placeholder) {
+      // not loaded yet, or across the wrap point while the latest story is centred: faint CSS skeleton card
+      const d = document.createElement('div');
+      d.className = 'side side-skel'; d.dataset.i = String(i); d.setAttribute('aria-hidden', 'true');
+      d.innerHTML = '<div class="skel side-skel-img"></div><div class="side-skel-txt"><div class="skel skel-line"></div><div class="skel skel-line skel-w60"></div></div>';
+      scene.appendChild(d);
+      return d;
+    }
     const b = document.createElement('button');
     b.type = 'button'; b.className = 'side'; b.dataset.i = String(i);
     b.innerHTML = `<img class="side-img" src="${esc(a.img)}" alt=""><span class="side-txt"><span class="side-t">${esc(a.title)}</span><span class="side-a">${esc(a.agent)}</span></span>`;
@@ -934,7 +1078,7 @@ window.addEventListener('scroll', () => {
 });
 function updateEndMarker() {
   if (!endMarker) return;
-  const atNewest = FEAT[active]?.id === LATEST_SLOT_ID;
+  const atNewest = ringPos >= 0 && ringPos === ringLen() - 1 && FEAT[active]?.id === LATEST_SLOT_ID;
   const hasLatestSlot = FEAT.some(a => a.id === LATEST_SLOT_ID);
   endMarker.hidden = !(geom.showSides && atNewest);
   endMarker.classList.toggle('is-separated', geom.showSides && hasLatestSlot);
@@ -1026,7 +1170,7 @@ function layoutButtons() {
   scene.style.perspective = PERSP + 'px';
   scene.style.perspectiveOrigin = `${g.cx}px ${g.cy}px`;
   sideBtns.forEach((b, i) => {
-    if (!b || FEAT[i]?.id === LATEST_SLOT_ID) return;
+    if (!b) return;
     const o = offsets[i], L = slot(o), a = Math.abs(o);
     const vis = g.showSides && a > 0.5 && a < 3.5 && L.alpha > 0.02;
     if (b.hidden === vis) b.hidden = !vis;
@@ -1040,6 +1184,7 @@ function layoutButtons() {
     // CSS y is down; rotateY sign matches three.js rotation.y
     b.style.transform = `translate3d(${L.x}px, ${-L.y}px, ${L.z}px) rotateY(${L.rot}deg) scale(${L.S})`;
     b.style.zIndex = String(100 - Math.round(a * 10));
+    if (FEAT[i].placeholder) { b.style.opacity = String(L.alpha * 0.55); return; }
     b.style.opacity = gl ? '' : String(L.alpha);
     b.style.filter = gl ? '' : `brightness(${L.dim})`;
     const rel = o < 0 ? 'Older' : 'Newer';
@@ -1065,9 +1210,22 @@ function snapshot(el, i, dpr = 1.5) {
     if (d.classList.contains('card-head')) ctx.fillRect(r.left - r0.left, r.bottom - r0.top - 1, r.width, 1);
     else ctx.fillRect(r.left - r0.left, r.top - r0.top, r.width, 1);
   });
+  // clamped paragraphs (Read more on short viewports) are clipped in the flip texture just like on the card
+  const parasEl = el.classList.contains('has-read-more') && !el.classList.contains('is-expanded') ? el.querySelector('.card-paras') : null;
+  const pr = parasEl?.getBoundingClientRect();
   el.querySelectorAll('[data-snap]').forEach(n => {
     const r = n.getBoundingClientRect(), x = r.left - r0.left, y = r.top - r0.top, st = getComputedStyle(n);
     const kind = n.dataset.snap;
+    if (!r.width || !r.height) return;
+    if (pr && parasEl.contains(n)) {
+      if (r.top >= pr.bottom) return;
+      ctx.save(); ctx.beginPath(); ctx.rect(0, pr.top - r0.top, w, pr.height); ctx.clip();
+      const lh = parseFloat(st.lineHeight) || parseFloat(st.fontSize) * 1.4;
+      ctx.font = `${st.fontStyle} ${st.fontWeight} ${st.fontSize} ${st.fontFamily}`;
+      ctx.fillStyle = st.color; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+      wrap(ctx, n.textContent.replace(/\s+/g, ' ').trim(), r.width + 1).forEach((ln, k) => ctx.fillText(ln, x, y + k * lh + lh / 2));
+      ctx.restore(); return;
+    }
     if (kind === 'img') {
       const im = imgs[a.id]; ctx.save(); rr(ctx, x, y, r.width, r.height, 10); ctx.clip();
       ctx.fillStyle = '#1a1d1b'; ctx.fillRect(x, y, r.width, r.height);
@@ -1103,7 +1261,12 @@ function wrap(ctx, text, maxW) {
 function rr(ctx, x, y, w, h, r) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
 
 function sideTexture(i) {
-  const a = FEAT[i], W = 512, H = 704, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const a = FEAT[i];
+  if (a.placeholder) { const blank = document.createElement('canvas'); blank.width = blank.height = 2; return blank; }
+  const ck = `${a.id}|${imgs[a.id]?.naturalWidth ? 1 : 0}|${a.title}`;
+  if (sideTexCache.has(ck)) return sideTexCache.get(ck);
+  const W = 512, H = 704, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  sideTexCache.set(ck, cv);
   const ctx = cv.getContext('2d');
   ctx.save(); rr(ctx, 0, 0, W, H, 22); ctx.clip();
   ctx.fillStyle = '#101311'; ctx.fillRect(0, 0, W, H);
@@ -1258,7 +1421,7 @@ async function initGL() {
   function update() {
     const g = geom;
     sides.forEach((s, i) => {
-      const L = slot(offsets[i]), vis = g.showSides && L.alpha > 0.004 && Math.abs(offsets[i]) > 0.02;
+      const L = slot(offsets[i]), vis = g.showSides && !FEAT[i]?.placeholder && L.alpha > 0.004 && Math.abs(offsets[i]) > 0.02;
       s.hi += (s.hiT - s.hi) * 0.25;
       [s.main, s.refl].forEach(m => {
         m.visible = vis; if (!vis) return;
@@ -1353,13 +1516,61 @@ async function initGL() {
   };
 }
 
+/* ---------------- centred-card image: modal viewer (desktop carousel only; mobile article view unchanged) ---------------- */
+const imgModal = $('#img-modal');
+const imgModalImg = imgModal?.querySelector('.img-modal-img');
+const imgModalClose = imgModal?.querySelector('.img-modal-close');
+let imgModalReturn = null, imgModalHideT = 0;
+function imageModalOpen() { return !!imgModal && imgModal.classList.contains('is-open'); }
+function openImageModal(trigger) {
+  const a = FEAT[active];
+  if (!imgModal || mobileMode || !a?.img || a.placeholder || busy) return;
+  clearTimeout(imgModalHideT);
+  imgModalReturn = trigger;
+  imgModalImg.style.removeProperty('--ar');
+  imgModalImg.onload = () => { if (imgModalImg.naturalWidth) imgModalImg.style.setProperty('--ar', String(imgModalImg.naturalWidth / imgModalImg.naturalHeight)); };
+  imgModalImg.src = a.imgFull || a.img;   // full-resolution source when the story has one
+  imgModalImg.alt = a.title ? `Image for: ${a.title}` : 'Story image';
+  imgModal.setAttribute('aria-label', a.title ? `Image: ${a.title}` : 'Story image');
+  navQueue = 0; sw = null;
+  imgModal.hidden = false;
+  document.documentElement.classList.add('modal-open');   // page scroll lock
+  imgModal.offsetWidth;                                    // start the CSS transition from the closed state
+  imgModal.classList.add('is-open');
+  imgModalClose.focus();
+}
+function closeImageModal() {
+  if (!imageModalOpen()) return;
+  imgModal.classList.remove('is-open');
+  document.documentElement.classList.remove('modal-open');
+  const ms = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 220;
+  imgModalHideT = setTimeout(() => { if (!imageModalOpen()) { imgModal.hidden = true; imgModalImg.removeAttribute('src'); } }, ms);
+  const back = imgModalReturn?.isConnected ? imgModalReturn : cardEl.querySelector('.card-img-btn');
+  imgModalReturn = null;
+  back?.focus();
+}
+cardEl.addEventListener('click', e => {
+  const btn = e.target.closest('.card-img-btn');
+  if (btn && !mobileMode) { e.preventDefault(); openImageModal(btn); }
+});
+imgModal?.addEventListener('click', e => {
+  if (e.target === imgModal || e.target.closest('.img-modal-close')) closeImageModal();   // backdrop or the x button
+});
+document.addEventListener('keydown', e => {
+  if (!imageModalOpen()) return;
+  if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeImageModal(); return; }
+  if (e.key === 'Tab') { e.preventDefault(); imgModalClose.focus(); return; }   // only focusable control: trap focus on it
+  if (/^(Arrow|Page|Home|End| $|j$|k$|J$|K$)/.test(e.key)) e.stopPropagation();   // carousel keys are off while open
+}, true);
+document.addEventListener('focusin', e => { if (imageModalOpen() && !imgModal.contains(e.target)) imgModalClose.focus(); });
+
 /* ---------------- navigation ---------------- */
 function indexFromHash() { const id = decodeURIComponent(location.hash.slice(1)); return FEAT.findIndex(a => a.id === id); }
 function snapFor(i) { renderCard(measureEl, i); measureEl.style.width = geom.cardW + 'px'; return snapshot(measureEl, i); }
 
 async function navRelative(delta, fromHash = false) {
-  if (!delta || mobileMode) return;
-  navQueue += delta;
+  if (!delta || mobileMode || imageModalOpen()) return;
+  navQueue = Math.max(-12, Math.min(12, navQueue + delta));   // fast repeated flicks queue up (bounded)
   if (busy) return;
   await pumpNavQueue(fromHash);
 }
@@ -1371,7 +1582,7 @@ async function pumpNavQueue(fromHash = false) {
     const instant = navQueue !== 0;
     busy = true;
     try {
-      await stepRelative(delta, fromHash, { instant });
+      await ringMove(delta, fromHash, { instant });
     } catch (err) {
       console.error(err);
     } finally {
@@ -1380,47 +1591,14 @@ async function pumpNavQueue(fromHash = false) {
   }
 }
 
-async function stepRelative(delta, fromHash = false, { instant = false } = {}) {
-  await ensureLatestSlotResolved();
-  const curId = FEAT[active]?.id;
-  if (!curId) return;
-
-  if (delta < 0) {
-    const olderKey = await resolveOlderCacheKey(curId);
-    if (!olderKey) return;
-    const idx = FEAT.findIndex(a => a.id === olderKey);
-    if (idx >= 0) {
-      await goToIndex(idx, fromHash, { instant });
-      return;
-    }
-    await openStory(olderKey, fromHash);
-    return;
-  }
-
-  const newerKey = await resolveNewerTarget(curId);
-  if (!newerKey) return;
-  if (newerKey === LATEST_SLOT_ID) {
-    const idx = FEAT.findIndex(a => a.id === LATEST_SLOT_ID);
-    if (idx >= 0) await goToIndex(idx, fromHash, { instant });
-    else await openLatestView(fromHash);
-    return;
-  }
-  const idx = FEAT.findIndex(a => a.id === newerKey);
-  if (idx >= 0) {
-    await goToIndex(idx, fromHash, { instant });
-    return;
-  }
-  await openStory(newerKey, fromHash);
-}
-
 async function goToIndex(target, fromHash = false, { instant = false } = {}) {
   if (mobileMode || target === active || target < 0 || target >= FEAT.length) return;
   const epoch = layoutEpoch;
   const from = active, dir = Math.sign(target - from);
   const start = FEAT.map((_, i) => i - from), end = FEAT.map((_, i) => i - target);
   const setOff = e => { offsets = start.map((s, i) => s + (end[i] - s) * e); layoutButtons(); };
-  if (!fromHash) {
-    const id = FEAT[target].id;
+  if (!fromHash && !(FEAT[target].placeholder && !FEAT[target].key)) {
+    const id = FEAT[target].key || FEAT[target].id;
     if (id === LATEST_SLOT_ID) history.replaceState(null, '', location.pathname + location.search);
     else history.pushState(null, '', '#' + id);
   }
@@ -1457,11 +1635,11 @@ async function goToIndex(target, fromHash = false, { instant = false } = {}) {
   }
   if (mobileMode || layoutIsStale(epoch)) return;
   offsets = end; layoutButtons(); markActiveTile();
-  const activeId = FEAT[active]?.id;
-  document.title = activeId && activeId !== LATEST_SLOT_ID
+  const activeId = FEAT[active]?.key || FEAT[active]?.id;
+  document.title = activeId && activeId !== LATEST_SLOT_ID && !activeId.startsWith('__pending__')
     ? `botz.ai - GenAI News - ${activeId}`
     : 'botz.ai - GenAI News';
-  if (storyAnnouncer) storyAnnouncer.textContent = FEAT[active].title;
+  if (storyAnnouncer) storyAnnouncer.textContent = FEAT[active].title || 'Loading story';
   trackPageView();
   logCenteredKey();
   if (hadFocus && hadFocus.classList.contains('side')) { const nb = sideBtns[Number(hadFocus.dataset.i)]; (nb?.hidden ? cardEl.querySelector('.card-title') : nb)?.focus?.(); }
@@ -1471,23 +1649,35 @@ async function goToIndex(target, fromHash = false, { instant = false } = {}) {
 async function go(target, fromHash = false) {
   if (target === active) return;
   if (target < 0 || target >= FEAT.length) return;
-  if (busy) return;
+  if (busy || imageModalOpen()) return;
   busy = true;
   try {
-    await goToIndex(target, fromHash, { instant: false });
+    await ringMove(target - active, fromHash, { instant: false });
   } finally {
     busy = false;
   }
+  await pumpNavQueue();
 }
 const wait = ms => new Promise(r => setTimeout(r, ms));
 function animate(ms, fn) {
   return new Promise(res => { const t0 = performance.now(); const f = now => { const t = Math.min(1, (now - t0) / ms); fn(t); t < 1 ? requestAnimationFrame(f) : res(); }; requestAnimationFrame(f); });
 }
 
+/** Left/Right (and J/K) step Older/Newer on the desktop carousel, same direction as swipes and side cards. */
+function carouselKeysBlocked(e) {
+  if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.defaultPrevented || e.isComposing) return true;
+  if (mobileMode || imageModalOpen()) return true;
+  const t = e.target;
+  if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || ''))) return true;
+  const sel = window.getSelection?.();
+  return !!(sel && !sel.isCollapsed && String(sel).trim());
+}
 window.addEventListener('keydown', e => {
-  if (e.altKey || e.ctrlKey || e.metaKey || /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
-  if (e.key === 'ArrowRight') { e.preventDefault(); navRelative(1); }
-  else if (e.key === 'ArrowLeft') { e.preventDefault(); navRelative(-1); }
+  const dir = e.key === 'ArrowRight' || e.key === 'k' || e.key === 'K' ? 1
+    : e.key === 'ArrowLeft' || e.key === 'j' || e.key === 'J' ? -1 : 0;
+  if (!dir || carouselKeysBlocked(e)) return;   // Up/Down/Space/PageUp/PageDown keep scrolling the page
+  e.preventDefault();
+  navRelative(dir);
 });
 window.addEventListener('hashchange', () => {
   const id = decodeURIComponent(location.hash.slice(1));
@@ -1497,15 +1687,15 @@ window.addEventListener('hashchange', () => {
 window.addEventListener('popstate', () => {
   const id = decodeURIComponent(location.hash.slice(1));
   if (!id) { openStoryFromLatest(true); return; }
-  const i = FEAT.findIndex(a => a.id === id);
+  const i = FEAT.findIndex(a => (a.key || a.id) === id);
   if (i >= 0 && i !== active) go(i, true);
   else if (i < 0) openStory(id, true);
 });
 // swipe (touch/pen anywhere on the stage; mouse drags only outside the text card so text stays selectable)
 let sw = null;
-stage.addEventListener('pointerdown', e => { if (e.pointerType === 'mouse' && e.target.closest('.card')) return; sw = { x: e.clientX, y: e.clientY }; });
+stage.addEventListener('pointerdown', e => { if (imageModalOpen() || (e.pointerType === 'mouse' && e.target.closest('.card'))) return; sw = { x: e.clientX, y: e.clientY }; });
 stage.addEventListener('pointerup', e => {
-  if (!sw) return; const dx = e.clientX - sw.x, dy = e.clientY - sw.y; sw = null;
+  if (!sw || imageModalOpen()) { sw = null; return; } const dx = e.clientX - sw.x, dy = e.clientY - sw.y; sw = null;
   if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.3) navRelative(dx < 0 ? 1 : -1);
 });
 $('.random-link')?.addEventListener('click', async e => {
@@ -1565,23 +1755,10 @@ async function applyFeaturedState(feat, activeIndex, fromHash, { omitHash = fals
 
 async function openLatestView(fromHash = false) {
   if (mobileMode) return openStoryMobile(null, fromHash);
-  const epoch = layoutEpoch;
   window.scrollTo(0, 0);
   stage.classList.add('is-loading');
   try {
-    await ensureLatestSlotResolved();
-    const feat = await buildFeaturedWindow(null, { centerOnLatest: true });
-    if (mobileMode || layoutIsStale(epoch)) return;
-    let activeIndex;
-    if (showLatestSlot) {
-      activeIndex = feat.findIndex(a => a.id === LATEST_SLOT_ID);
-      if (activeIndex < 0) activeIndex = feat.length - 1;
-      await applyFeaturedState(feat, activeIndex, fromHash, { omitHash: true, epoch });
-    } else {
-      activeIndex = feat.findIndex(a => a.id === newestArchiveKey);
-      if (activeIndex < 0) activeIndex = Math.max(0, feat.length - 1);
-      await applyFeaturedState(feat, activeIndex, fromHash, { omitHash: true, epoch });
-    }
+    await ringOpen(null, fromHash, { omitHash: true });
   } catch (err) {
     console.error(err);
     toast('Failed to load GenAI News.');
@@ -1594,18 +1771,18 @@ async function openStory(cacheKey, fromHash = false) {
   if (mobileMode) return openStoryMobile(cacheKey, fromHash);
   const epoch = layoutEpoch;
   window.scrollTo(0, 0);
-  await ensureLatestSlotResolved();
-  if (!cacheKey) {
+  if (!cacheKey || isFutureCacheKey(cacheKey)) {
     await openLatestView(fromHash);
     return;
   }
-  if (isFutureCacheKey(cacheKey)) {
-    await openLatestView(fromHash);
-    return;
-  }
-  const existing = FEAT.findIndex(a => a.id === cacheKey);
-  if (existing >= 0) {
-    if (existing !== active) await goToIndex(existing, fromHash, { instant: navQueue !== 0 });
+  // already on the carousel: animate there (wrapping if that is shorter is not needed; the window is contiguous)
+  const existing = FEAT.findIndex(a => (a.key || a.id) === cacheKey);
+  if (existing >= 0 && ringPos >= 0) {
+    if (existing !== active) {
+      if (busy) { navQueue += existing - active; return; }
+      busy = true;
+      try { await ringMove(existing - active, fromHash, { instant: navQueue !== 0 }); } finally { busy = false; }
+    }
     return;
   }
   pendingDesktopKey = cacheKey;
@@ -1615,41 +1792,14 @@ async function openStory(cacheKey, fromHash = false) {
   const ownedBusy = !busy;
   if (ownedBusy) busy = true;
   try {
-    if (isFutureCacheKey(cacheKey)) {
-      await openLatestView(fromHash);
-      return;
-    }
-    const listed = await ensureKeyListedInArchive(cacheKey);
-    let anchorPayload = await fetchValidatedEditorial(cacheKey);
-    if (!anchorPayload[0]) {
-      await openLatestView(fromHash);
-      return;
-    }
-    if (!listed && !editorialBelongsToCacheKey(anchorPayload[0], cacheKey)) {
-      await openLatestView(fromHash);
-      return;
-    }
-    if (!listed) rebuildArchiveKeysChrono([cacheKey]);
-    if (matchesLatestIdentity(anchorPayload[0]) && cacheKey !== newestArchiveKey) {
-      await openLatestView(fromHash);
-      return;
-    }
-    const feat = await buildFeaturedWindow(cacheKey, { anchorPayload });
-    if (mobileMode || layoutIsStale(epoch)) return;
-    let activeIndex = feat.findIndex(a => a.id === cacheKey);
-    if (activeIndex < 0) {
-      if (showLatestSlot) activeIndex = Math.max(0, feat.findIndex(a => a.id === LATEST_SLOT_ID) - 1);
-      else activeIndex = feat.findIndex(a => a.id === newestArchiveKey);
-    }
-    if (activeIndex < 0) activeIndex = 0;
-    await applyFeaturedState(feat, activeIndex, fromHash, { epoch });
+    await ringOpen(cacheKey, fromHash);
   } catch (err) {
     console.error(err);
     toast('Could not load that story.');
   } finally {
     stage.classList.remove('is-loading');
     cardEl.classList.remove('card-loading');
-    cardEl.removeAttribute('aria-busy');
+    if (!FEAT[active]?.placeholder) cardEl.removeAttribute('aria-busy');
     if (ownedBusy) busy = false;
     if (!layoutIsStale(epoch) && pendingDesktopKey === cacheKey) pendingDesktopKey = null;
     await pumpNavQueue(fromHash);
@@ -1752,12 +1902,16 @@ function revealGrid() {
   browseEl?.classList.remove('awaiting-top');
   gridEl.removeAttribute('aria-busy');
 }
-function fixCardHeight() {
-  // equalise card height across the featured set so the floor/reflections do not jump between stories
+let stickyCardH = 0;
+function fixCardHeight({ sticky = false } = {}) {
+  // equalise card height across the visible stories so the floor/reflections do not jump between stories;
+  // while flicking (sticky) it only grows, so the grid below never shifts per step
   cardEl.style.minHeight = '';
   measureEl.style.width = cardEl.getBoundingClientRect().width + 'px';
-  let maxH = 0; FEAT.forEach((_, i) => { renderCard(measureEl, i); maxH = Math.max(maxH, measureEl.getBoundingClientRect().height); });
-  cardEl.style.minHeight = Math.ceil(maxH) + 'px';
+  let maxH = sticky ? stickyCardH : 0;
+  FEAT.forEach((a, i) => { if (a.placeholder) return; renderCard(measureEl, i); maxH = Math.max(maxH, measureEl.getBoundingClientRect().height); });
+  stickyCardH = maxH;
+  if (maxH) cardEl.style.minHeight = Math.ceil(maxH) + 'px';
 }
 async function relayout() {
   if (mobileMode) return;
@@ -1771,7 +1925,7 @@ async function boot() {
   seedStaticAuthors();
   stage.classList.add('is-loading');
   const hashKey = decodeURIComponent(location.hash.slice(1));
-  showSideSkeletons(!!hashKey);
+  showSideSkeletons(true);   // the ring has neighbours both ways (right-hand ones stay skeletons on the latest story)
   // deep link: start the linked story's request alongside the story list instead of after it (memoised, so reused)
   if (hashKey) fetchValidatedEditorial(hashKey).catch(() => {});
   try {
@@ -1797,6 +1951,7 @@ await boot();
 endMarker?.addEventListener('click', () => {
   const idx = FEAT.findIndex(a => a.id === LATEST_SLOT_ID);
   if (idx >= 0 && active !== idx) go(idx);
+  else if (idx < 0 && ringPos !== ringLen() - 1) openLatestView(false);
 });
 endMarker?.addEventListener('keydown', e => {
   if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); endMarker?.click(); }
@@ -1827,4 +1982,4 @@ small.addEventListener('change', async () => {
   if (id) await openStory(id, true);
   else await openLatestView(true);
 });
-window.__botzCarousel = { go, navRelative, openStory, get active() { return active; }, get busy() { return busy; }, get navQueue() { return navQueue; }, get navLog() { return window.__navLog; }, get centerKey() { return FEAT[active]?.id; }, get featIds() { return FEAT.map(a => a.id); }, get showLatestSlot() { return showLatestSlot; }, get latestIsArchiveTop() { return latestIsArchiveTop; }, get newestArchiveKey() { return newestArchiveKey; }, get mode() { return gl ? 'webgl' : (reduced ? 'reduced' : 'css'); }, get editorialRequestCount() { return editorialRequestCount; }, get latestSlotId() { return LATEST_SLOT_ID; }, get mobileMode() { return mobileMode; }, ready: true };
+window.__botzCarousel = { go, navRelative, openStory, get active() { return active; }, get busy() { return busy; }, get navQueue() { return navQueue; }, get navLog() { return window.__navLog; }, get centerKey() { return FEAT[active]?.id; }, get featIds() { return FEAT.map(a => a.id); }, get feat() { return FEAT.map((a, i) => ({ id: a.key || a.id, offset: i - active, placeholder: !!a.placeholder, seam: !!a.seam, ring: a.ringIndex })); }, get ring() { return { pos: ringPos, len: ringLen(), total: ringTotal, pageSize: ringPageSize, wrapCrossed, pages: [...ringPages.keys()].sort((a, b) => a - b), loaded: [...ringStories.values()].filter(x => x.article).length, cached: ringStories.size, keyAt: r => ringKeyAt(r), ...ringStats }; }, get modalOpen() { return imageModalOpen(); }, get showLatestSlot() { return showLatestSlot; }, get latestIsArchiveTop() { return latestIsArchiveTop; }, get newestArchiveKey() { return newestArchiveKey; }, get mode() { return gl ? 'webgl' : (reduced ? 'reduced' : 'css'); }, get editorialRequestCount() { return editorialRequestCount; }, get latestSlotId() { return LATEST_SLOT_ID; }, get mobileMode() { return mobileMode; }, ready: true };

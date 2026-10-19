@@ -84,3 +84,22 @@ export function buildArchiveListItem(cacheKey, entry) {
         author: author || null,
     };
 }
+
+/**
+ * Page window for /archive (newest first). Every page that has at least one item is served, including the
+ * final partial page, and the pagination block carries the totals so clients can jump straight to the
+ * oldest page without walking the whole history.
+ */
+export function archivePageWindow(total, pageParam, sizeParam, maxSize = 24) {
+    const count = Math.max(0, Number(total) || 0);
+    const size = Number.isInteger(sizeParam) && sizeParam > 0 && sizeParam < maxSize ? sizeParam : maxSize;
+    const totalPages = Math.ceil(count / size);
+    const page = Number.isInteger(pageParam) && pageParam >= 1 ? pageParam : 1;
+    const start = (page - 1) * size;
+    const valid = start < count;
+    const end = valid ? Math.min(start + size, count) : start;
+    return {
+        valid, start, end,
+        pagination: { has_next: valid && end < count, page, size, total: count, total_pages: totalPages },
+    };
+}

@@ -32,7 +32,7 @@ import {
     listPublicEditorialCacheFileNames,
 } from './cacheListing.js';
 import { stripPrivateEditorialFields, writeEditorialUsageRecord } from './editorialUsageStore.js';
-import { buildArchiveListItem, formatEditorialByline } from './archiveListing.js';
+import { archivePageWindow, buildArchiveListItem, formatEditorialByline } from './archiveListing.js';
 import { buildRelevanceScoringPrompt } from './storySelection.js';
 import { assertNewsSourceEnv, parseNewsSource } from './newsSourceConfig.js';
 import { readRecentLiveStoryIdentifiers } from './liveStoryDedup.js';
@@ -839,31 +839,14 @@ app.get('/archive', async (req, res) => {
     const sizeParam = parseInt(req.query.size);
     console.log(`pageParam: ${pageParam}, sizeParam: ${sizeParam}`);
 
-    const size = sizeParam && sizeParam < 24 ? sizeParam : 24;
-    const page = pageParam && (pageParam * size) < jsonFiles.length ? pageParam : -1;
-    
-    const start = (page - 1) * size;
-    const end = start + size;
+    const win = archivePageWindow(jsonFiles.length, pageParam, sizeParam);
+    console.log(`page: ${win.pagination.page}, size: ${win.pagination.size}, start: ${win.start}, end: ${win.end}`);
 
-    // Ensure start and end are within the bounds of the array
-    const validStart = (start >= 0 && start < jsonFiles.length) ? start : -1;
-    const validEnd = (end > 0 && end <= jsonFiles.length) ? end : -1;
-
-    console.log(`page: ${page}, size: ${size}, start: ${validStart}, end: ${validEnd}`);
-
-    if (validStart === -1 || validEnd === -1) {
-        const response = {
-            editorials: [],
-            pagination: {
-                has_next: false
-            }
-        };
-        return res.json(response);
+    if (!win.valid) {
+        return res.json({ editorials: [], pagination: win.pagination });
     }
 
-    console.log(`page: ${page}, size: ${size}, start: ${validStart}, end: ${validEnd}`);
-
-    const pagejsonFiles = jsonFiles.slice(validStart, validEnd);
+    const pagejsonFiles = jsonFiles.slice(win.start, win.end);
     console.log(pagejsonFiles);
 
     const editorialPromises = pagejsonFiles.map(file => {
@@ -893,13 +876,7 @@ app.get('/archive', async (req, res) => {
     try {
         const editorials = await Promise.all(editorialPromises) || [];
         console.log(`editorials: ${jsonFiles.length}`);
-        console.log(`pagination: ${validEnd}`);
-        const response = {
-            editorials,
-            pagination: {
-                has_next: validEnd < jsonFiles.length,
-            }
-        };
+        const response = { editorials, pagination: win.pagination };
         res.json(response);
     } catch (error) {
         res.status(500).json({ error: 'Failed to read JSON files' });

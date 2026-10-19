@@ -13,7 +13,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>botz.ai - GenAI News</title>
-  <link rel="stylesheet" href="style.css?v=20261019c">
+  <link rel="stylesheet" href="style.css?v=20261019d">
   <meta name="description"
     content="Botz.ai offers the latest news and insights in the world of artificial intelligence. Stay updated with AI trends, breakthroughs, and analysis. Discover how AI is transforming technology and industries worldwide.">
   <meta name="keywords"
@@ -47,6 +47,10 @@
   <p class="error-message" role="alert"></p>
   <div id="loading" style="display: none;">Loading...</div>
   <div id="story-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+  <div class="img-modal" id="img-modal" role="dialog" aria-modal="true" aria-label="Story image" hidden>
+    <button type="button" class="img-modal-close" aria-label="Close image">&times;</button>
+    <img class="img-modal-img" alt="">
+  </div>
 
   <div id="scroll-to-top" class="scroll-to-top" role="button" tabindex="0" aria-label="Scroll to top">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -79,7 +83,7 @@
     scrollToTopButton.addEventListener('click', scrollToTop);
     scrollToTopButton.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); scrollToTop(); } });
   </script>
-  <script type="module" src="carousel-app.js?v=20261019c"></script>
+  <script type="module" src="carousel-app.js?v=20261019d"></script>
 </body>
 
 </html>

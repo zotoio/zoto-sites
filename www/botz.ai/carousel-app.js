@@ -656,6 +656,7 @@ function ringStoryArrived(key) {
 async function ringMove(delta, fromHash = false, { instant = false } = {}) {
   const n = ringLen();
   if (n <= 1 || !delta || ringPos < 0 || mobileMode) return;
+  collapseReadMore();   // every way of moving (buttons, keys, swipe, side cards, tiles, history) lands collapsed
   const epoch = layoutEpoch;
   const newPos = ringWrap(ringPos + delta);
   const crossing = ringPos + delta >= n || ringPos + delta < 0;
@@ -678,6 +679,7 @@ async function ringMove(delta, fromHash = false, { instant = false } = {}) {
  *  first paint matches the old full-window layout. */
 async function ringOpen(key, fromHash = false, { omitHash = false } = {}) {
   const epoch = layoutEpoch, seq = ++ringOpenSeq;
+  collapseReadMore();
   await ringInit();
   if (mobileMode || layoutIsStale(epoch) || seq !== ringOpenSeq) return;
   const n = ringLen();
@@ -869,9 +871,11 @@ function cardHTML(a, i) {
     <div class="card-text">
       <h2 class="card-title" data-snap="text">${esc(a.title)}</h2>
       ${cardBylineHTML(a, true)}
-      <div class="card-paras">${a.bodyHtml}</div>
-      <button type="button" class="card-read-more" data-snap="button" hidden aria-expanded="false">Read more</button>
-      ${cardMetaHTML(a)}
+      <div class="card-more" id="card-more-${i}">
+        <div class="card-paras">${a.bodyHtml}</div>
+        ${cardMetaHTML(a)}
+      </div>
+      <button type="button" class="card-read-more" data-snap="button" hidden aria-expanded="false" aria-controls="card-more-${i}">Read more</button>
     </div>
   </div>${foot}`;
 }
@@ -930,31 +934,72 @@ function wireByline(el) {
     alias.innerHTML = a;
   });
 }
+/* ---------------- Read more (desktop card) ----------------
+ * The card is always collapsed to one fixed height (text column = image height), so the stage and the grid
+ * below never move between stories. Read more opens the full story as an overlay: the card is lifted out of
+ * the flow (a spacer keeps its slot) and grows down over the More stories grid, scrolling inside itself when
+ * the story is longer than the viewport. Any navigation, Esc, Show less or a click outside collapses it. */
+const cardSpacer = document.createElement('div');
+cardSpacer.className = 'card-spacer';
+cardSpacer.setAttribute('aria-hidden', 'true');
+cardEl.after(cardSpacer);
+function readMoreExpanded() { return cardEl.classList.contains('is-expanded'); }
 function updateReadMoreState(el = cardEl) {
-  const compact = window.innerHeight <= 900 || (window.innerWidth <= 1500 && window.innerHeight <= 920);
   const paras = el.querySelector('.card-paras');
   const btn = el.querySelector('.card-read-more');
   if (!paras || !btn) return;
-  if (compact && !el.classList.contains('is-expanded')) {
-    el.classList.add('has-read-more');
-    btn.hidden = false;
-  } else {
-    el.classList.remove('has-read-more', 'is-expanded');
-    btn.hidden = true;
-    btn.setAttribute('aria-expanded', 'false');
-  }
+  if (mobileMode) { el.classList.remove('has-read-more'); btn.hidden = true; return; }
+  el.classList.add('has-read-more');
+  btn.hidden = false;
+  const open = el === cardEl && readMoreExpanded();
+  btn.textContent = open ? 'Show less' : 'Read more';
+  btn.setAttribute('aria-expanded', String(open));
 }
+function sizeExpandedCard() {
+  if (!readMoreExpanded()) return;
+  cardEl.style.setProperty('--card-top', cardSpacer.offsetTop + 'px');
+  const top = Math.max(0, cardSpacer.getBoundingClientRect().top);
+  cardEl.style.maxHeight = Math.max(cardSpacer.offsetHeight, window.innerHeight - top - 16) + 'px';
+}
+function expandReadMore() {
+  if (mobileMode || readMoreExpanded() || !cardEl.querySelector('.card-read-more')) return;
+  cardSpacer.style.height = cardEl.offsetHeight + 'px';
+  stage.classList.add('has-expanded-card');
+  cardEl.classList.add('is-expanded');
+  sizeExpandedCard();
+  updateReadMoreState();
+  readMoreStats.expanded++;
+}
+function collapseReadMore({ focus = false } = {}) {
+  if (!readMoreExpanded()) return false;
+  cardEl.classList.remove('is-expanded');
+  cardEl.style.maxHeight = '';
+  cardEl.style.removeProperty('--card-top');
+  cardEl.scrollTop = 0;
+  stage.classList.remove('has-expanded-card');
+  cardSpacer.style.height = '';
+  updateReadMoreState();
+  readMoreStats.collapsed++;
+  if (focus) cardEl.querySelector('.card-read-more')?.focus();
+  return true;
+}
+const readMoreStats = { expanded: 0, collapsed: 0 };
 cardEl.addEventListener('click', e => {
   if (e.target.closest('.card-read-more')) {
-    cardEl.classList.add('is-expanded');
-    cardEl.classList.remove('has-read-more');
-    e.target.hidden = true;
-    e.target.setAttribute('aria-expanded', 'true');
-    relayout();
+    if (readMoreExpanded()) collapseReadMore({ focus: true }); else expandReadMore();
     return;
   }
   const b = e.target.closest('[data-nav]'); if (b) navRelative(Number(b.dataset.nav));
 });
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || !readMoreExpanded() || imageModalOpen()) return;
+  e.preventDefault();
+  collapseReadMore({ focus: cardEl.contains(document.activeElement) || document.activeElement === document.body });
+});
+document.addEventListener('pointerdown', e => {
+  if (readMoreExpanded() && !cardEl.contains(e.target) && !imageModalOpen() && !e.target.closest?.('.img-modal')) collapseReadMore();
+});
+window.addEventListener('resize', () => sizeExpandedCard());
 
 function rebuildSideButtons() {
   scene.innerHTML = '';
@@ -1210,7 +1255,7 @@ function snapshot(el, i, dpr = 1.5) {
     ctx.fillStyle = '#20251f'; rr(ctx, r.left - r0.left, r.top - r0.top, r.width, r.height, 6); ctx.fill();
   });
   // clamped paragraphs (Read more on short viewports) are clipped in the flip texture just like on the card
-  const parasEl = el.classList.contains('has-read-more') && !el.classList.contains('is-expanded') ? el.querySelector('.card-paras') : null;
+  const parasEl = el.classList.contains('has-read-more') && !el.classList.contains('is-expanded') ? el.querySelector('.card-more') : null;
   const pr = parasEl?.getBoundingClientRect();
   el.querySelectorAll('[data-snap]').forEach(n => {
     const r = n.getBoundingClientRect(), x = r.left - r0.left, y = r.top - r0.top, st = getComputedStyle(n);
@@ -1569,6 +1614,7 @@ function snapFor(i) { renderCard(measureEl, i); measureEl.style.width = geom.car
 
 async function navRelative(delta, fromHash = false) {
   if (!delta || mobileMode || imageModalOpen()) return;
+  collapseReadMore();
   navQueue = Math.max(-12, Math.min(12, navQueue + delta));   // fast repeated flicks queue up (bounded)
   if (busy) ringSchedule();   // re-aim the prefetch at where the queued flicks will land
   if (busy) return;
@@ -1829,6 +1875,7 @@ let mobileLoadSeq = 0;
 let mobileLoadingId = null;
 
 function enterMobileLayout() {
+  collapseReadMore();
   if (gl?.dispose) { gl.dispose(); gl = null; }
   scene.innerHTML = '';
   sideBtns = [];
@@ -1920,7 +1967,7 @@ function fixCardHeight({ sticky = false } = {}) {
   let maxH = sticky ? stickyCardH : 0;
   FEAT.forEach((a, i) => { if (a.placeholder) return; renderCard(measureEl, i); maxH = Math.max(maxH, measureEl.getBoundingClientRect().height); });
   stickyCardH = maxH;
-  if (maxH) cardEl.style.minHeight = Math.ceil(maxH) + 'px';
+  if (maxH) cardEl.style.minHeight = maxH + 'px';   // exact (the card has one fixed height now; rounding up would nudge the grid)
 }
 async function relayout() {
   if (mobileMode) return;
@@ -1990,4 +2037,4 @@ small.addEventListener('change', async () => {
   if (id) await openStory(id, true);
   else await openLatestView(true);
 });
-window.__botzCarousel = { go, navRelative, openStory, get active() { return active; }, get busy() { return busy; }, get navQueue() { return navQueue; }, get navLog() { return window.__navLog; }, get centerKey() { return FEAT[active]?.id; }, get featIds() { return FEAT.map(a => a.id); }, get feat() { return FEAT.map((a, i) => ({ id: a.key || a.id, offset: i - active, placeholder: !!a.placeholder, seam: !!a.seam, ring: a.ringIndex })); }, get ring() { return { pos: ringPos, len: ringLen(), total: ringTotal, days: archiveIndex?.days.length || 0, wrapCrossed, pages: [...dayData.keys()].sort(), loaded: [...ringStories.values()].filter(x => x.article).length, cached: ringStories.size, keyAt: r => ringKeyAt(r), ...ringStats }; }, get modalOpen() { return imageModalOpen(); }, get showLatestSlot() { return showLatestSlot; }, get latestIsArchiveTop() { return latestIsArchiveTop; }, get newestArchiveKey() { return newestArchiveKey; }, get mode() { return gl ? 'webgl' : (reduced ? 'reduced' : 'css'); }, get editorialRequestCount() { return editorialRequestCount; }, get store() { return { days: dayData.size, stories: storyEntries.size, urls: [...archiveUrlsSeen] }; }, get latestSlotId() { return LATEST_SLOT_ID; }, get mobileMode() { return mobileMode; }, ready: true };
+window.__botzCarousel = { go, navRelative, openStory, get active() { return active; }, get busy() { return busy; }, get navQueue() { return navQueue; }, get navLog() { return window.__navLog; }, get centerKey() { return FEAT[active]?.id; }, get featIds() { return FEAT.map(a => a.id); }, get feat() { return FEAT.map((a, i) => ({ id: a.key || a.id, offset: i - active, placeholder: !!a.placeholder, seam: !!a.seam, ring: a.ringIndex })); }, get ring() { return { pos: ringPos, len: ringLen(), total: ringTotal, days: archiveIndex?.days.length || 0, wrapCrossed, pages: [...dayData.keys()].sort(), loaded: [...ringStories.values()].filter(x => x.article).length, cached: ringStories.size, keyAt: r => ringKeyAt(r), ...ringStats }; }, get modalOpen() { return imageModalOpen(); }, get readMore() { return { expanded: readMoreExpanded(), ...readMoreStats }; }, get showLatestSlot() { return showLatestSlot; }, get latestIsArchiveTop() { return latestIsArchiveTop; }, get newestArchiveKey() { return newestArchiveKey; }, get mode() { return gl ? 'webgl' : (reduced ? 'reduced' : 'css'); }, get editorialRequestCount() { return editorialRequestCount; }, get store() { return { days: dayData.size, stories: storyEntries.size, urls: [...archiveUrlsSeen] }; }, get latestSlotId() { return LATEST_SLOT_ID; }, get mobileMode() { return mobileMode; }, ready: true };

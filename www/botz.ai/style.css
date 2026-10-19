@@ -141,10 +141,6 @@ a:hover{color:var(--green-hi)}
   padding:8px 16px; font:bold var(--fs-ui)/1.4 Arial, sans-serif; cursor:pointer;
 }
 .card-read-more:hover{background:var(--btn-hi)}
-.card.has-read-more:not(.is-expanded) .card-paras{
-  max-height:min(28vh, 210px); overflow:hidden; position:relative;
-  mask-image:linear-gradient(180deg, #000 62%, transparent);
-}
 
 .stage.is-loading .card{opacity:.55}
 
@@ -257,11 +253,6 @@ a:hover{color:var(--green-hi)}
 .skel-meta{margin-top:18px; padding-top:12px; border-top:1px solid var(--line)}
 .skel-meta-line{font-size:var(--fs-meta); height:1em; margin:0 0 .55em; width:46%}
 .skel-meta-line:nth-child(2){width:62%} .skel-meta-line:nth-child(3){width:54%} .skel-meta-line:nth-child(4){width:36%; margin-bottom:0}
-/* same height rule as updateReadMoreState(): short viewports clamp the paragraphs and show Read more */
-@media (max-height:900px), (max-width:1500px) and (max-height:920px){
-  .skel-paras{max-height:min(28vh, 210px); overflow:hidden}
-  .skel-readmore{display:block}
-}
 /* faint side-card placeholders on the wide carousel (positioned by the same slot maths as the real side cards) */
 .scene .side-skel{pointer-events:none; cursor:default; background:var(--card); border:1px solid var(--line); border-radius:14px; overflow:hidden}
 .mode-gl .scene .side-skel > *{visibility:visible}
@@ -275,14 +266,6 @@ a:hover{color:var(--green-hi)}
   .skel-head, .skel-readmore{display:none !important}
   .skel-paras{max-height:none}
   .browse.awaiting-top .grid > .tile-skel:nth-child(n+3){display:none}
-}
-/* reserve the carousel card's typical footprint while loading (calibrated against the live card at
-   1280x800, 1920x1080, 2560x1080 and 3440x1440) so the grid below doesn't jump when the story lands */
-@media (min-width:961px){ .card.is-skeleton{min-height:976px} }
-@media (min-width:2200px){ .card.is-skeleton{min-height:858px} }
-@media (min-width:3000px){ .card.is-skeleton{min-height:1035px} }
-@media (min-width:961px) and (max-height:900px), (min-width:961px) and (max-width:1500px) and (max-height:920px){
-  .card.is-skeleton{min-height:644px}
 }
 /* card skeleton when a flick outruns the prefetch buffer */
 .card.is-story-loading .card-text{width:100%}
@@ -313,3 +296,40 @@ html.modal-open{overflow:hidden}
 @media (max-height:920px){ .card-foot{margin-top:12px; padding-top:10px} }
 @media (max-width:760px){ .skel-foot{display:none !important} }
 .site-head h1 img.site-logo{background:#2a2f2b}
+
+.card-spacer{display:none}
+/* ---------- Read more (desktop, above 760px) ----------
+   Collapsed is the default and has ONE fixed height: the text column is exactly as tall as the image, the story
+   (paragraphs + source details) is clipped inside it and Read more stays visible underneath. The skeleton uses
+   the same box, so loading, every story and the grid below line up without any per-story measuring.
+   Expanded lifts the card out of the flow (a spacer holds its slot) and lets it grow down over the grid. */
+@media (min-width:761px){
+  .card{--text-h:var(--img-w)}
+  .card-text, .card.is-skeleton .skel-body .card-text, .card.is-story-loading .skel-body .card-text{display:flex; flex-direction:column; height:var(--text-h); min-height:0}
+  .card-title, .card-agent, .card-read-more{flex:none}
+  .card-more, .skel-paras{flex:1 1 auto; min-height:0; overflow:hidden}
+  .card.has-read-more:not(.is-expanded) .card-more{mask-image:linear-gradient(180deg, #000 70%, transparent); -webkit-mask-image:linear-gradient(180deg, #000 70%, transparent)}
+  .skel-readmore{display:block; flex:none; height:calc(1.4em + 16px); margin:12px 0 0 auto}
+  .skel-body .skel-meta{display:none}
+
+  .stage.has-expanded-card{z-index:6}   /* above the grid (z-index 4), which overlaps the stage bottom */
+  .stage.has-expanded-card .card-spacer{display:block}
+  .card.is-expanded{
+    position:absolute; left:0; right:0; top:var(--card-top, 0); margin:0 auto; z-index:30;
+    overflow-x:hidden; overflow-y:auto; overscroll-behavior:contain; scrollbar-gutter:stable;
+    touch-action:pan-y pinch-zoom;   /* it is its own scroll container: keep horizontal swipes for Older/Newer */
+    box-shadow:0 40px 120px rgba(0,0,0,.85), 0 0 0 1px rgba(47,207,55,.25);
+    background:linear-gradient(180deg, var(--card-2), var(--card) 420px, var(--card));
+  }
+  .card.is-expanded .card-text{height:auto}
+  .card.is-expanded .card-more{overflow:visible}
+  .card.is-expanded .card-read-more{position:sticky; bottom:10px; box-shadow:0 6px 18px rgba(0,0,0,.55)}
+}
+@media (min-width:761px) and (max-width:960px){ .card{--text-h:300px} }
+@media (min-width:761px) and (prefers-reduced-motion: no-preference){
+  .card.is-expanded{animation:card-expand 160ms ease-out}
+}
+@keyframes card-expand{from{opacity:.6} to{opacity:1}}
+/* header bar: kicker and its skeleton share one line box, so loading -> story never changes the card height */
+.kicker{line-height:1.4}
+.skel-head .skel-kicker{margin:.125em 0}

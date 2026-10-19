@@ -6,9 +6,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IMAGE="${BOTZ_DOCKER_VERIFY_IMAGE:-zoto-botz-ci-verify:ci}"
 
-# Dockerfile COPYs host node_modules (same as production deploy on the droplet).
-yarn --cwd "$ROOT/backends/botz.ai" install --frozen-lockfile --production
-
+# Dependencies (including sharp's musl binaries) are installed inside the image from yarn.lock; host node_modules are not used.
 docker build -t "$IMAGE" -f "$ROOT/backends/botz.ai/Dockerfile" "$ROOT"
 
 docker run --rm -i --entrypoint node "$IMAGE" --input-type=module <<'NODE'
@@ -50,3 +48,22 @@ console.log(`Verified ${relImports.length} relative module(s) in botz Docker ima
 NODE
 
 docker run --rm --entrypoint node "$IMAGE" /home/root/scripts/backfill-editorials.mjs --help
+
+# sharp: the musl x64 build loads in node:18-alpine and converts a PNG to WebP; the variant backfill runs (dry run, then
+# for real) against a throwaway directory inside the container only.
+docker run --rm -i --entrypoint sh "$IMAGE" <<'SH'
+set -eu
+cd /home/root
+node -e "const s=require('sharp'); console.log('sharp', s.versions.sharp, 'libvips', s.versions.vips)"
+test -d node_modules/@img/sharp-linuxmusl-x64
+mkdir -p /tmp/v/images
+node --input-type=module -e "
+import sharp from 'sharp';
+await sharp({ create: { width: 1024, height: 1024, channels: 3, background: '#2fcf37' } }).png().toFile('/tmp/v/images/2026-01-01-00-ab.png');
+"
+node scripts/backfill-image-variants.mjs --dir /tmp/v/images --dry-run
+node scripts/backfill-image-variants.mjs --dir /tmp/v/images --delay-ms 0
+for w in 480 768 1024; do
+  node -e "require('sharp')('/tmp/v/images/2026-01-01-00-ab-${w}w.webp').metadata().then(m => { if (m.format !== 'webp' || m.width !== ${w}) { console.error(m); process.exit(1); } console.log('variant ${w}w ok'); })"
+done
+SH

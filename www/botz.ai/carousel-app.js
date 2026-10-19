@@ -17,6 +17,11 @@ const wide = matchMedia('(min-width: 1600px)');
  */
 const small = matchMedia('(max-width: 760px)');
 let mobileMode = small.matches;
+/** Bumped whenever the layout mode flips; in-flight loads started under an older epoch must not render. */
+let layoutEpoch = 0;
+const layoutIsStale = epoch => epoch !== layoutEpoch;
+/** Story a desktop openStory() is still loading (its hash is only pushed once it renders). */
+let pendingDesktopKey = null;
 const FLIP_MS = 520;
 const PERSP = 2200;
 const SIDE_W0 = 440, SIDE_ASPECT = 704 / 512;
@@ -357,6 +362,7 @@ async function ensureArchivePageLoaded(page) {
     rebuildArchiveKeysChrono();
     appendArchiveTiles(data.editorials || []);
     refreshArchiveTileTitles();
+    hideRepeatedFirstTile();
     archiveHasMore = !!data.pagination?.has_next;
     archivePage = page;
     archivePagesLoaded = page;
@@ -582,6 +588,7 @@ function normalizeArticle(entry, cacheKey) {
     showAgent: parsed.showAgent,
     bodyHtml,
     generated: entry.article.generated_at || entry.article.published_at,
+    generatedAt: entry.article.generated_at || '',
     storyIdentityKey: `${ident.generated_at}|${ident.headline}`,
     source: entry.article.source,
     published: entry.article.published_at,
@@ -837,7 +844,20 @@ function updateEndMarker() {
   endMarker.tabIndex = atNewest ? 0 : -1;
 }
 function markActiveTile() {
-  document.querySelectorAll('.tile').forEach(t => t.classList.toggle('is-active', t.dataset.id === FEAT[active]?.id));
+  const cur = FEAT[active];
+  document.querySelectorAll('.tile').forEach(t => t.classList.toggle('is-active', t.dataset.id === cur?.id));
+  hideRepeatedFirstTile();
+}
+/** The newest archive tile usually repeats the story shown at the top; hide it while that story is showing. */
+function hideRepeatedFirstTile() {
+  const cur = FEAT[active];
+  const first = gridEl.querySelector('.tile');
+  gridEl.querySelectorAll('.tile.is-dup-top').forEach(t => { if (t !== first) t.classList.remove('is-dup-top'); });
+  if (!first) return;
+  const sameKey = !!cur && first.dataset.id === cur.id;
+  const sameLatest = !!cur && cur.id === LATEST_SLOT_ID && !!first.dataset.generatedAt
+    && first.dataset.generatedAt === (cur.generatedAt || '');
+  first.classList.toggle('is-dup-top', sameKey || sameLatest);
 }
 let toastT;
 function toast(msg) {
@@ -1294,7 +1314,8 @@ async function stepRelative(delta, fromHash = false, { instant = false } = {}) {
 }
 
 async function goToIndex(target, fromHash = false, { instant = false } = {}) {
-  if (target === active || target < 0 || target >= FEAT.length) return;
+  if (mobileMode || target === active || target < 0 || target >= FEAT.length) return;
+  const epoch = layoutEpoch;
   const from = active, dir = Math.sign(target - from);
   const start = FEAT.map((_, i) => i - from), end = FEAT.map((_, i) => i - target);
   const setOff = e => { offsets = start.map((s, i) => s + (end[i] - s) * e); layoutButtons(); };
@@ -1309,12 +1330,14 @@ async function goToIndex(target, fromHash = false, { instant = false } = {}) {
     const backSnap = snapFor(target);
     cardEl.style.opacity = '0';
     await gl.flipTo(target, dir, backSnap, setOff);
+    if (mobileMode || layoutIsStale(epoch)) return;
     active = target; renderCard(cardEl, target); cardEl.style.opacity = '1';
     gl.endFlip(backSnap);
   } else if (instant || reduced) {
     if (!instant && reduced) {
       cardEl.classList.add('fade-out'); scene.classList.add('fading');
       await wait(180);
+      if (mobileMode || layoutIsStale(epoch)) { cardEl.classList.remove('fade-out'); scene.classList.remove('fading'); return; }
     }
     active = target; renderCard(cardEl, target); setOff(1);
     cardEl.style.opacity = '1';
@@ -1323,6 +1346,7 @@ async function goToIndex(target, fromHash = false, { instant = false } = {}) {
     cardEl.style.setProperty('--flip-to', dir > 0 ? '90deg' : '-90deg');
     cardEl.classList.add('css-flip-out');
     await animate(FLIP_MS / 2, e => setOff(e * 0.5));
+    if (mobileMode || layoutIsStale(epoch)) { cardEl.classList.remove('css-flip-out'); return; }
     active = target; renderCard(cardEl, target);
     cardEl.classList.remove('css-flip-out');
     cardEl.style.transition = 'none'; cardEl.style.transform = `perspective(2000px) rotateY(${dir > 0 ? -90 : 90}deg)`;
@@ -1331,6 +1355,7 @@ async function goToIndex(target, fromHash = false, { instant = false } = {}) {
     await animate(FLIP_MS / 2, e => setOff(0.5 + e * 0.5));
     cardEl.classList.remove('css-flip-in');
   }
+  if (mobileMode || layoutIsStale(epoch)) return;
   offsets = end; layoutButtons(); markActiveTile();
   const activeId = FEAT[active]?.id;
   document.title = activeId && activeId !== LATEST_SLOT_ID
@@ -1400,7 +1425,8 @@ function trackPageView() {
   }
 }
 
-async function applyFeaturedState(feat, activeIndex, fromHash, { omitHash = false } = {}) {
+async function applyFeaturedState(feat, activeIndex, fromHash, { omitHash = false, epoch = layoutEpoch } = {}) {
+  if (mobileMode || layoutIsStale(epoch)) return false;
   if (gl?.dispose) { gl.dispose(); gl = null; }
   document.documentElement.classList.remove('mode-mobile');
   FEAT = feat;
@@ -1408,7 +1434,12 @@ async function applyFeaturedState(feat, activeIndex, fromHash, { omitHash = fals
   offsets = FEAT.map((_, i) => i - active);
   rebuildSideButtons();
   await preloadImages();
-  if (!reduced && params.get('mode') !== 'css') gl = await initGL();
+  if (mobileMode || layoutIsStale(epoch)) return false;
+  if (!reduced && params.get('mode') !== 'css') {
+    const nextGl = await initGL();
+    if (mobileMode || layoutIsStale(epoch)) { nextGl?.dispose?.(); return false; }
+    gl = nextGl;
+  }
   document.documentElement.classList.toggle('mode-gl', !!gl);
   document.documentElement.classList.toggle('mode-css', !gl && !reduced);
   document.documentElement.classList.toggle('mode-reduced', reduced);
@@ -1434,20 +1465,22 @@ async function applyFeaturedState(feat, activeIndex, fromHash, { omitHash = fals
 
 async function openLatestView(fromHash = false) {
   if (mobileMode) return openStoryMobile(null, fromHash);
+  const epoch = layoutEpoch;
   window.scrollTo(0, 0);
   stage.classList.add('is-loading');
   try {
     await ensureLatestSlotResolved();
     const feat = await buildFeaturedWindow(null, { centerOnLatest: true });
+    if (mobileMode || layoutIsStale(epoch)) return;
     let activeIndex;
     if (showLatestSlot) {
       activeIndex = feat.findIndex(a => a.id === LATEST_SLOT_ID);
       if (activeIndex < 0) activeIndex = feat.length - 1;
-      await applyFeaturedState(feat, activeIndex, fromHash, { omitHash: true });
+      await applyFeaturedState(feat, activeIndex, fromHash, { omitHash: true, epoch });
     } else {
       activeIndex = feat.findIndex(a => a.id === newestArchiveKey);
       if (activeIndex < 0) activeIndex = Math.max(0, feat.length - 1);
-      await applyFeaturedState(feat, activeIndex, fromHash, { omitHash: true });
+      await applyFeaturedState(feat, activeIndex, fromHash, { omitHash: true, epoch });
     }
   } catch (err) {
     console.error(err);
@@ -1459,6 +1492,7 @@ async function openLatestView(fromHash = false) {
 
 async function openStory(cacheKey, fromHash = false) {
   if (mobileMode) return openStoryMobile(cacheKey, fromHash);
+  const epoch = layoutEpoch;
   window.scrollTo(0, 0);
   await ensureLatestSlotResolved();
   if (!cacheKey) {
@@ -1474,6 +1508,7 @@ async function openStory(cacheKey, fromHash = false) {
     if (existing !== active) await goToIndex(existing, fromHash, { instant: navQueue !== 0 });
     return;
   }
+  pendingDesktopKey = cacheKey;
   stage.classList.add('is-loading');
   cardEl.classList.add('card-loading');
   cardEl.setAttribute('aria-busy', 'true');
@@ -1500,13 +1535,14 @@ async function openStory(cacheKey, fromHash = false) {
       return;
     }
     const feat = await buildFeaturedWindow(cacheKey, { anchorPayload });
+    if (mobileMode || layoutIsStale(epoch)) return;
     let activeIndex = feat.findIndex(a => a.id === cacheKey);
     if (activeIndex < 0) {
       if (showLatestSlot) activeIndex = Math.max(0, feat.findIndex(a => a.id === LATEST_SLOT_ID) - 1);
       else activeIndex = feat.findIndex(a => a.id === newestArchiveKey);
     }
     if (activeIndex < 0) activeIndex = 0;
-    await applyFeaturedState(feat, activeIndex, fromHash);
+    await applyFeaturedState(feat, activeIndex, fromHash, { epoch });
   } catch (err) {
     console.error(err);
     toast('Could not load that story.');
@@ -1515,6 +1551,7 @@ async function openStory(cacheKey, fromHash = false) {
     cardEl.classList.remove('card-loading');
     cardEl.removeAttribute('aria-busy');
     if (ownedBusy) busy = false;
+    if (!layoutIsStale(epoch) && pendingDesktopKey === cacheKey) pendingDesktopKey = null;
     await pumpNavQueue(fromHash);
   }
 }
@@ -1572,12 +1609,12 @@ async function openStoryMobile(cacheKey, fromHash = false) {
   cardEl.innerHTML = '<div class="spinner" role="status" aria-label="Loading story"><div class="bounce1"></div><div class="bounce2"></div></div>';
   try {
     let payload = await fetchStoryForMobile(key);
-    if (seq !== mobileLoadSeq) return;
+    if (seq !== mobileLoadSeq || !mobileMode) return;
     let shownId = id;
     if (!payload?.[0] && key) {
       toast('Could not load that story.');
       payload = await fetchLatestEditorial();
-      if (seq !== mobileLoadSeq) return;
+      if (seq !== mobileLoadSeq || !mobileMode) return;
       shownId = LATEST_SLOT_ID;
       history.replaceState(null, '', location.pathname + location.search);
     }
@@ -1598,7 +1635,7 @@ async function openStoryMobile(cacheKey, fromHash = false) {
     refreshArchiveTileTitles();
   } catch (err) {
     console.error(err);
-    if (seq === mobileLoadSeq) cardEl.innerHTML = '<p class="mobile-error">Failed to load articles</p>';
+    if (seq === mobileLoadSeq && mobileMode) cardEl.innerHTML = '<p class="mobile-error">Failed to load articles</p>';
   } finally {
     if (seq === mobileLoadSeq) {
       mobileLoadingId = null;
@@ -1651,9 +1688,18 @@ wide.addEventListener('change', relayout);
 small.addEventListener('change', async () => {
   if (mobileMode === small.matches) return;
   mobileMode = small.matches;
+  // invalidate whatever the previous layout still has in flight (desktop window build, flip, or mobile fetch)
+  layoutEpoch++;
+  mobileLoadSeq++;
+  mobileLoadingId = null;
+  navQueue = 0;
   const id = decodeURIComponent(location.hash.slice(1)) || null;
   if (mobileMode) {
-    await openStoryMobile(id, true);
+    // a desktop story load that was cut off by the switch: open that story instead of the old hash
+    const pending = pendingDesktopKey;
+    pendingDesktopKey = null;
+    if (pending && pending !== id) await openStoryMobile(pending, false);
+    else await openStoryMobile(id, true);
     return;
   }
   // back to the desktop/tablet carousel: rebuild the featured window around the current story

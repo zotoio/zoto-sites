@@ -97,5 +97,8 @@ jobs:
       - name: botz.ai arrow navigation guards
         run: node --test scripts/botz-arrow-nav.test.mjs
 
+      - name: botz.ai review fixes + next-story countdown guards
+        run: node --test scripts/botz-review-fixes.test.mjs
+
       - name: Verify botz Docker image includes runtime modules
         run: bash scripts/verify-botz-docker-image.sh

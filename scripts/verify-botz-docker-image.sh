@@ -49,13 +49,13 @@ NODE
 
 docker run --rm --entrypoint node "$IMAGE" /home/root/scripts/backfill-editorials.mjs --help
 
-# sharp: the musl x64 build loads in node:18-alpine and converts a PNG to WebP; the variant backfill runs (dry run, then
+# sharp: the musl build for this machine's architecture loads in node:18-alpine and converts a PNG to WebP; the variant backfill runs (dry run, then
 # for real) against a throwaway directory inside the container only.
 docker run --rm -i --entrypoint sh "$IMAGE" <<'SH'
 set -eu
 cd /home/root
 node -e "const s=require('sharp'); console.log('sharp', s.versions.sharp, 'libvips', s.versions.vips)"
-test -d node_modules/@img/sharp-linuxmusl-x64
+arch=$(node -p process.arch); test -d "node_modules/@img/sharp-linuxmusl-$arch" && echo "sharp-linuxmusl-$arch present"
 mkdir -p /tmp/v/images
 node --input-type=module -e "
 import sharp from 'sharp';

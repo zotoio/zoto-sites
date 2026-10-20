@@ -48,6 +48,7 @@ import {
 import { buildRelevanceScoringPrompt } from './storySelection.js';
 import { assertNewsSourceEnv, parseNewsSource } from './newsSourceConfig.js';
 import { readRecentLiveStoryIdentifiers } from './liveStoryDedup.js';
+import { generationConfigFromEnv, generationInfo } from './generationSchedule.js';
 
 dotenv.config();
 
@@ -873,9 +874,14 @@ async function readArchiveDay(date) {
     return { date, count: files.length, older, editorials };
 }
 
+// next expected story generation (host crontab), published with the short-TTL archive endpoints
+let generationConfig = null;
+try { generationConfig = generationConfigFromEnv(); } catch (error) { console.error('GENERATION_SCHEDULE:', error.message); }
+const withGeneration = body => (generationConfig ? { ...body, generation: generationInfo(generationConfig) } : body);
+
 app.get('/archive/index', (req, res) => {
     res.setHeader('Cache-Control', CACHE_RECENT);
-    res.json(buildArchiveIndex(publicArchiveFileNames()));
+    res.json(withGeneration(buildArchiveIndex(publicArchiveFileNames())));
 });
 
 app.get('/archive/latest', async (req, res) => {
@@ -888,7 +894,7 @@ app.get('/archive/latest', async (req, res) => {
     try {
         const day = await readArchiveDay(newest.date);
         res.setHeader('Cache-Control', CACHE_RECENT);
-        res.json(day);
+        res.json(withGeneration(day));
     } catch (error) {
         res.setHeader('Cache-Control', CACHE_NONE);
         res.status(500).json({ error: 'Failed to read archive day' });

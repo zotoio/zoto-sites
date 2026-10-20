@@ -1,5 +1,30 @@
 export const DEFAULT_ARTICLE_FETCH_UA =
-    'botz.ai-editorial/1.0 (+https://botz.ai; editorial summarization; respects robots)';
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
+
+export const DEFAULT_ARTICLE_FETCH_REFERER = 'https://news.ycombinator.com/';
+
+/**
+ * Browser-like navigation headers for outbound article fetches (Chrome 141 on Windows).
+ * Accept-Encoding only lists encodings Node's built-in fetch (undici) decodes.
+ */
+export function buildBrowserHeaders({ userAgent = DEFAULT_ARTICLE_FETCH_UA, referer = DEFAULT_ARTICLE_FETCH_REFERER } = {}) {
+    return {
+        'User-Agent': userAgent,
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'cross-site',
+        'Sec-Fetch-User': '?1',
+        'sec-ch-ua': '"Chromium";v="141", "Not?A_Brand";v="8", "Google Chrome";v="141"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+        Referer: referer,
+        Connection: 'keep-alive',
+    };
+}
 
 const DEFAULT_TIMEOUT_MS = 12_000;
 const DEFAULT_MAX_BYTES = 1_500_000;
@@ -140,6 +165,7 @@ export async function fetchLinkedArticleMetadata(articleUrl, config = {}) {
     const {
         fetchImpl = fetch,
         userAgent = DEFAULT_ARTICLE_FETCH_UA,
+        referer = DEFAULT_ARTICLE_FETCH_REFERER,
         timeoutMs = DEFAULT_TIMEOUT_MS,
         maxBytes = DEFAULT_MAX_BYTES,
     } = config;
@@ -154,10 +180,7 @@ export async function fetchLinkedArticleMetadata(articleUrl, config = {}) {
     }
 
     const response = await fetchImpl(articleUrl, {
-        headers: {
-            'User-Agent': userAgent,
-            Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
-        },
+        headers: buildBrowserHeaders({ userAgent, referer }),
         redirect: 'follow',
         signal: AbortSignal.timeout(timeoutMs),
     });
@@ -210,7 +233,10 @@ export async function enrichHnCandidate(candidate, deps = {}) {
 
     if (linkUrl) {
         try {
-            const meta = await fetchArticle(linkUrl, deps);
+            const referer = candidate.hn_object_id
+                ? `https://news.ycombinator.com/item?id=${candidate.hn_object_id}`
+                : undefined;
+            const meta = await fetchArticle(linkUrl, referer ? { referer, ...deps } : deps);
             if (meta && !meta.skipped) {
                 if (meta.og_title) enriched.title = meta.og_title;
                 enriched.description = meta.og_description || meta.excerpt || '';

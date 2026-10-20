@@ -36,3 +36,34 @@ test('isRobotsFetchAllowed returns false when robots blocks path', async () => {
     });
     assert.equal(allowed, false);
 });
+
+test('buildBrowserHeaders looks like Chrome on Windows and fetchLinkedArticleMetadata uses it', async () => {
+    const { buildBrowserHeaders, fetchLinkedArticleMetadata, DEFAULT_ARTICLE_FETCH_UA } = await import('./articleEnrichment.js');
+    const h = buildBrowserHeaders();
+    assert.equal(h['User-Agent'], DEFAULT_ARTICLE_FETCH_UA);
+    assert.match(h['User-Agent'], /^Mozilla\/5\.0 \(Windows NT 10\.0; Win64; x64\).*Chrome\/141\.0\.0\.0 Safari/);
+    assert.doesNotMatch(h['User-Agent'], /botz/i);
+    assert.equal(h['Sec-Fetch-Mode'], 'navigate');
+    assert.equal(h['sec-ch-ua-platform'], '"Windows"');
+    assert.equal(h['Accept-Encoding'], 'gzip, deflate, br');
+    assert.equal(h.Referer, 'https://news.ycombinator.com/');
+
+    const seen = [];
+    const fetchImpl = async (url, opts) => {
+        seen.push({ url, headers: opts.headers, redirect: opts.redirect });
+        if (url.endsWith('/robots.txt')) return new Response('', { status: 404 });
+        return new Response('<html><head><meta property="og:title" content="T"></head></html>', {
+            status: 200,
+            headers: { 'content-type': 'text/html' },
+        });
+    };
+    const out = await fetchLinkedArticleMetadata('https://example.com/a', {
+        fetchImpl,
+        referer: 'https://news.ycombinator.com/item?id=1',
+    });
+    assert.equal(out.og_title, 'T');
+    const page = seen.find((c) => !c.url.endsWith('/robots.txt'));
+    assert.equal(page.redirect, 'follow');
+    assert.equal(page.headers.Referer, 'https://news.ycombinator.com/item?id=1');
+    assert.equal(page.headers['Sec-Fetch-Dest'], 'document');
+});

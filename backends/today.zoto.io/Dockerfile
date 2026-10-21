@@ -10,4 +10,4 @@ COPY lib ./lib
 COPY --from=deps /home/root/node_modules ./node_modules
 ENV PORT=3001
 EXPOSE 3001
-ENTRYPOINT ["node", "index.js"]
+ENTRYPOINT ["node", "--network-family-autoselection-attempt-timeout=2000", "index.js"]

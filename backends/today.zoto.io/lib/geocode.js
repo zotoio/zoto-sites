@@ -1,6 +1,10 @@
 import axios from 'axios';
 import { cached } from './cache.js';
 
+// Node 20's happy-eyeballs gives each address 250 ms, too short for the droplet's
+// RTT to Open-Meteo (EU); force IPv4 so connects don't fail with ETIMEDOUT.
+export const OPEN_METEO_FAMILY = 4;
+
 const NOMINATIM_UA = 'today.zoto.io/1.0 (zoto-sites; contact io@zoto.io)';
 
 export function locationFromCloudflareHeaders(req) {
@@ -155,6 +159,7 @@ export async function searchPlaces(query, count = 8) {
       const { data } = await axios.get('https://geocoding-api.open-meteo.com/v1/search', {
         params: { name: q, count, language: 'en', format: 'json' },
         timeout: 8000,
+        family: OPEN_METEO_FAMILY,
       });
       return (data?.results || []).map(normalizePlaceResult).filter(Boolean);
     },

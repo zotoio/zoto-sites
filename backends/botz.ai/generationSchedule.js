@@ -13,6 +13,8 @@
  */
 export const DEFAULT_GENERATION_SCHEDULE = '1 * * * *;0 20 * * *';
 export const DEFAULT_GENERATION_DELAY_S = 90;
+/** How long after a run's expected publish time clients keep waiting ("any moment now") before giving up on it. */
+export const GENERATION_GRACE_S = 600;
 
 function parseField(f, max) {
     if (f === '*') return null;   // every value
@@ -35,11 +37,11 @@ export function parseGenerationSchedule(spec = DEFAULT_GENERATION_SCHEDULE) {
 }
 
 /** The next `count` run times strictly after `now` (Date), as epoch ms, ascending and de-duplicated. */
-export function upcomingRuns(rules, now = new Date(), count = 4, tzOffsetMin = 0) {
+export function upcomingRuns(rules, now = new Date(), count = 4, tzOffsetMin = 0, lookbackMs = 0) {
     const out = new Set();
     const shift = tzOffsetMin * 60000;
     // walk whole minutes on the host clock; at most count * 24h for hourly-or-sparser rules
-    const startLocal = Math.floor((now.getTime() + shift) / 60000) * 60000 + 60000;
+    const startLocal = Math.floor((now.getTime() - lookbackMs + shift) / 60000) * 60000 + 60000;
     for (let t = startLocal, end = startLocal + 2 * 86400000 * count; t < end && out.size < count; t += 60000) {
         const d = new Date(t), m = d.getUTCMinutes(), h = d.getUTCHours();
         if (rules.some(r => r.minutes.includes(m) && (!r.hours || r.hours.includes(h)))) out.add(t - shift);
@@ -55,11 +57,22 @@ export function generationConfigFromEnv(env = process.env) {
 }
 
 /** The `generation` field of /archive/index and /archive/latest. */
-export function generationInfo(config, now = new Date()) {
+/**
+ * `upcoming` starts with any run still inside its wait window (started less than delay + grace ago): a story whose
+ * publishing overruns the typical delay is still awaited instead of the countdown jumping to the next run.
+ * `stamp_tz_offset_min` is the offset of the clock that writes stories' `generated_at` (local wall time, no zone):
+ * clients convert those stamps with it rather than assuming UTC.
+ */
+export function generationInfo(config, now = new Date(), stampTzOffsetMin = -now.getTimezoneOffset()) {
+    const lookbackMs = (config.delayS + GENERATION_GRACE_S) * 1000;
+    const runs = upcomingRuns(config.rules, now, 8, config.tzOffsetMin, lookbackMs);
+    const future = runs.filter(ms => ms > now.getTime()).slice(0, 4);
     return {
         schedule: config.schedule,
         tz_offset_min: config.tzOffsetMin,
+        stamp_tz_offset_min: stampTzOffsetMin,
         typical_delay_s: config.delayS,
-        upcoming: upcomingRuns(config.rules, now, 4, config.tzOffsetMin).map(ms => new Date(ms).toISOString()),
+        grace_s: GENERATION_GRACE_S,
+        upcoming: [...runs.filter(ms => ms <= now.getTime()), ...future].map(ms => new Date(ms).toISOString()),
     };
 }

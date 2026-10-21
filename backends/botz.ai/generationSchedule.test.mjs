@@ -26,7 +26,25 @@ test('bad schedules are rejected', () => {
 test('config from env with defaults, and the published field', () => {
     const c = generationConfigFromEnv({});
     assert.equal(c.schedule, DEFAULT_GENERATION_SCHEDULE); assert.equal(c.delayS, 90); assert.equal(c.tzOffsetMin, 0);
-    const g = generationInfo(generationConfigFromEnv({ GENERATION_SCHEDULE: '30 * * * *', GENERATION_DELAY_S: '60' }), new Date('2026-10-20T10:40:00Z'));
-    assert.deepEqual(g, { schedule: '30 * * * *', tz_offset_min: 0, typical_delay_s: 60,
-        upcoming: ['2026-10-20T11:30:00.000Z', '2026-10-20T12:30:00.000Z', '2026-10-20T13:30:00.000Z', '2026-10-20T14:30:00.000Z'] });
+    const g = generationInfo(generationConfigFromEnv({ GENERATION_SCHEDULE: '30 * * * *', GENERATION_DELAY_S: '60' }), new Date('2026-10-20T10:40:00Z'), 0);
+    assert.deepEqual(g, { schedule: '30 * * * *', tz_offset_min: 0, stamp_tz_offset_min: 0, typical_delay_s: 60, grace_s: 600,
+        // 10:30 started 10 min ago: still inside delay (1 min) + grace (10 min), so it is still awaited
+        upcoming: ['2026-10-20T10:30:00.000Z', '2026-10-20T11:30:00.000Z', '2026-10-20T12:30:00.000Z', '2026-10-20T13:30:00.000Z', '2026-10-20T14:30:00.000Z'] });
+});
+
+test('a run whose publishing overruns the delay stays in upcoming until delay + grace has passed', () => {
+    const c = generationConfigFromEnv({});   // hourly :01 + 20:00, delay 90 s, grace 600 s
+    // 20:01 run, now 20:05 (past the 90 s delay, story not out yet): both 20:00 and 20:01 still listed first
+    let g = generationInfo(c, new Date('2026-10-20T20:05:00Z'), 0);
+    assert.deepEqual(g.upcoming.slice(0, 3), ['2026-10-20T20:00:00.000Z', '2026-10-20T20:01:00.000Z', '2026-10-20T21:01:00.000Z']);
+    assert.equal(g.upcoming.filter(t => Date.parse(t) > Date.parse('2026-10-20T20:05:00Z')).length, 4);
+    // 20:13 = 20:01 + 90 s + 600 s + 30 s: given up, the next run leads
+    g = generationInfo(c, new Date('2026-10-20T20:13:00Z'), 0);
+    assert.equal(g.upcoming[0], '2026-10-20T21:01:00.000Z');
+});
+
+test('stamp offset comes from the clock writing generated_at (default: this process)', () => {
+    const now = new Date('2026-10-20T10:00:00Z');
+    assert.equal(generationInfo(generationConfigFromEnv({}), now).stamp_tz_offset_min, -now.getTimezoneOffset());
+    assert.equal(generationInfo(generationConfigFromEnv({}), now, 660).stamp_tz_offset_min, 660);
 });

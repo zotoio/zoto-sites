@@ -92,3 +92,15 @@ test('edge cards are pre-rendered: wider window than visible, buffer past it, te
   assert.match(app, /const SIDE_TEX_MAX = 24;/, 'texture LRU bound unchanged');
   assert.match(app, /edgeStats\.popIns\+\+/);
 });
+
+test('countdown review: overrun runs still awaited, same-key rewrites picked up, stamps use the backend offset', async () => {
+  const { generationConfigFromEnv, generationInfo } = await import('../backends/botz.ai/generationSchedule.js');
+  const g = generationInfo(generationConfigFromEnv({}), new Date('2026-10-20T20:05:00Z'), 0);
+  assert.equal(g.upcoming[1], '2026-10-20T20:01:00.000Z', 'the 20:01 run is still listed 4 min later');
+  assert.equal(g.grace_s, 600);
+  assert.match(app, /top\.cache_key !== cur\?\.cache_key \|\| \(top\.generated_at \|\| ''\) !== \(cur\?\.generated_at \|\| ''\)/);
+  assert.match(app, /ringStories\.delete\(replaced\); imgs\.delete\(replaced\); gl\?\.evictStory\(replaced\);/);
+  assert.match(app, /- \(generation\?\.stampOffsetMs \|\| 0\)/);
+  assert.match(app, /due \+ generation\.graceMs > now/);
+  assert.doesNotMatch(app, /if \(top && archiveIndex && !storyEntries\.has\(top\)\)/);
+});

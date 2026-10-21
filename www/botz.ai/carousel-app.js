@@ -1240,7 +1240,7 @@ window.addEventListener('resize', () => sizeExpandedCard());
  * place). The visible text is aria-hidden; screen readers get a polite status at most once a minute. The ticker
  * only runs while the card is on screen and the tab is visible. */
 const NEXT_STORY_HTML = '<div class="side-next-box"><span class="side-next-l">next story in</span><span class="side-next-t">--:--</span></div>';
-const NEXT_GRACE_MS = 10 * 60e3;   // a run that published nothing: move on to the following run after this
+const NEXT_GRACE_MS = 10 * 60e3;   // default wait past a run's due time before moving on (the backend sends grace_s)
 const NEXT_POLL_MS = Math.max(1000, Number(params.get('nextpoll')) || 30e3);   // ?nextpoll= shortens it for tests
 let generation = null;             // { upcoming: ms[], delayMs }
 let nextTick = 0, nextPollAt = 0, nextPollFlight = null, nextSrMinute = null;
@@ -1252,22 +1252,31 @@ function noteGeneration(g) {
   if (!g || !Array.isArray(g.upcoming)) return;
   const upcoming = g.upcoming.map(t => Date.parse(t)).filter(Number.isFinite).sort((a, b) => a - b);
   if (!upcoming.length) return;
-  generation = { upcoming, delayMs: Math.max(0, Number(g.typical_delay_s) || 0) * 1000 };
+  const num = (v, d) => (Number.isFinite(Number(v)) && v !== null && v !== '' ? Number(v) : d);
+  generation = {
+    upcoming,
+    delayMs: Math.max(0, num(g.typical_delay_s, 0)) * 1000,
+    graceMs: Math.max(0, num(g.grace_s, NEXT_GRACE_MS / 1000)) * 1000,
+    // generated_at is wall time of the clock that wrote it (no zone): its offset, else the schedule clock's
+    stampOffsetMs: num(g.stamp_tz_offset_min, num(g.tz_offset_min, 0)) * 60e3,
+  };
   nextStoryRefresh();
 }
 function centreIsNewest() { return !mobileMode && ringPos >= 0 && ringPos === ringLen() - 1; }
-function newestGeneratedMs() {
-  const it = archiveIndex?.days[0] && dayData.peek(archiveIndex.days[0].date)?.editorials?.[0];
-  const m = /^(\d{4})-(\d{2})-(\d{2})-(\d{2})-(\d{2})-(\d{2})/.exec(it?.generated_at || '');
-  return m ? Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : 0;
+/** generated_at ("YYYY-MM-DD-HH-mm-ss", wall time of the writing clock) -> epoch ms, using the backend's offset. */
+function stampMs(stamp) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})-(\d{2})-(\d{2})-(\d{2})/.exec(stamp || '');
+  return m ? Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) - (generation?.stampOffsetMs || 0) : 0;
 }
+function newestItem() { return archiveIndex?.days[0] && dayData.peek(archiveIndex.days[0].date)?.editorials?.[0]; }
+function newestGeneratedMs() { return stampMs(newestItem()?.generated_at); }
 /** When the next story should appear (epoch ms): the first run after the newest story, unless it is long overdue. */
 function nextStoryDue(now = Date.now()) {
   if (!generation) return null;
   const newest = newestGeneratedMs();
   for (const run of generation.upcoming) {
     const due = run + generation.delayMs;
-    if (run > newest && due + NEXT_GRACE_MS > now) return due;
+    if (run > newest && due + generation.graceMs > now) return due;
   }
   return null;
 }
@@ -1314,8 +1323,10 @@ function pollForNewStory() {
   nextPollAt = Date.now() + NEXT_POLL_MS; nextStats.polls++;
   nextPollFlight = fetch('/archive/latest', { cache: 'no-cache' }).then(r => (r.ok ? r.json() : null)).then(day => {
     noteGeneration(day?.generation);
-    const top = day?.editorials?.[0]?.cache_key;
-    if (top && archiveIndex && !storyEntries.has(top)) pickUpNewStory(day);
+    // identity is the file key AND its generated_at: a later run in the same hour (the daily run then the hourly one)
+    // rewrites the same hourly key with a new story
+    const top = day?.editorials?.[0], cur = newestItem();
+    if (top?.cache_key && archiveIndex && (top.cache_key !== cur?.cache_key || (top.generated_at || '') !== (cur?.generated_at || ''))) pickUpNewStory(day);
   }).catch(() => {}).finally(() => { nextPollFlight = null; });
 }
 /** A newer day body arrived: extend the index and the ring. Chrono positions count from the oldest story, so every
@@ -1325,16 +1336,25 @@ function pickUpNewStory(day) {
   const days = archiveIndex.days.map(d => ({ ...d }));
   const i = days.findIndex(d => d.date === day.date);
   if (i > 0) return;                        // an older day changed: not a new newest story
-  if (i === 0) { if (day.count <= days[0].count) return; days[0].count = day.count; }
+  const top = day.editorials[0], cur = newestItem();
+  if (stampMs(top?.generated_at) <= newestGeneratedMs()) return;   // not newer than what we show
+  // same hourly file rewritten by a later run: the story behind that key is replaced in place
+  const replaced = i === 0 && day.count === days[0].count && top.cache_key === cur?.cache_key ? top.cache_key : null;
+  if (i === 0) { if (day.count < days[0].count || (day.count === days[0].count && !replaced)) return; days[0].count = day.count; }
   else if (day.date > days[0].date) days.unshift({ date: day.date, count: day.count });
   else return;
   ingestDay(day);
+  if (replaced) {   // drop everything cached for the old story under that key; the ring reloads it from the store
+    ringStories.delete(replaced); imgs.delete(replaced); gl?.evictStory(replaced);
+    const r = ringIndexOfKey(replaced);
+    if (r >= 0 && !mobileMode && ringPos >= 0) ringEnsureStory(r);
+  }
   setArchiveIndex(days);
   latestFlight = Promise.resolve(day);
   newestArchiveKey = day.editorials[0].cache_key;
   if (day.editorials[0].entry) { globalLatestPayload = [day.editorials[0].entry]; latestIdentity = storyIdentity(globalLatestPayload[0]); }
   if (ringReady) ringTotal = archiveIndex.total;
-  nextStats.pickedUp++;
+  nextStats.pickedUp++; if (replaced) nextStats.replaced = (nextStats.replaced || 0) + 1;
   if (storyAnnouncer) storyAnnouncer.textContent = `New story: ${day.editorials[0].title || ''}`;
   if (!mobileMode && ringPos >= 0 && FEAT.length) {
     if (busy || applyingWindow) arrivalsPending = true; else ringRefresh();

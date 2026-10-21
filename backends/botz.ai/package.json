@@ -13,7 +13,8 @@
     "openai": "^4.19.0",
     "sanitize-filename": "^1.6.3",
     "sanitize-html": "^2.13.0",
-    "sharp": "0.33.5"
+    "sharp": "0.33.5",
+    "undici": "^6.29.1"
   },
   "type": "module",
   "devDependencies": {
@@ -22,6 +23,6 @@
   },
   "scripts": {
     "start:dev": "kill-port 3000 && nodemon index.js",
-    "test": "node --test openaiImages.test.mjs cloudflarePurge.test.mjs noCurlirize.test.mjs backfillDates.test.mjs openaiUsageLog.test.mjs storySelection.test.mjs editorialReplace.test.mjs cacheListing.test.mjs stripUsageFromCache.test.mjs newsApiErrors.test.mjs newsFetchPlan.test.mjs newsEditorialFetch.test.mjs hnAlgolia.test.mjs hnEditorialFetch.test.mjs articleEnrichment.test.mjs newsSourceConfig.test.mjs liveStoryDedup.test.mjs archiveListing.test.mjs imageVariants.test.mjs ../../scripts/lib/backfillHttp.test.mjs"
+    "test": "node --test openaiImages.test.mjs cloudflarePurge.test.mjs noCurlirize.test.mjs backfillDates.test.mjs openaiUsageLog.test.mjs storySelection.test.mjs editorialReplace.test.mjs cacheListing.test.mjs stripUsageFromCache.test.mjs newsApiErrors.test.mjs newsFetchPlan.test.mjs newsEditorialFetch.test.mjs hnAlgolia.test.mjs hnEditorialFetch.test.mjs articleEnrichment.test.mjs articleFetchRouteStore.test.mjs newsSourceConfig.test.mjs keywordWeights.test.mjs newsProviders.test.mjs liveStoryDedup.test.mjs archiveListing.test.mjs imageVariants.test.mjs ../../scripts/lib/backfillHttp.test.mjs"
   }
 }

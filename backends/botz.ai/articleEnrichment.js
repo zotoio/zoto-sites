@@ -1,5 +1,31 @@
+import { routeHostKey, getDefaultRouteStore } from './articleFetchRouteStore.js';
 export const DEFAULT_ARTICLE_FETCH_UA =
-    'botz.ai-editorial/1.0 (+https://botz.ai; editorial summarization; respects robots)';
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
+
+export const DEFAULT_ARTICLE_FETCH_REFERER = 'https://news.ycombinator.com/';
+
+/**
+ * Browser-like navigation headers for outbound article fetches (Chrome 141 on Windows).
+ * Accept-Encoding only lists encodings Node's built-in fetch (undici) decodes.
+ */
+export function buildBrowserHeaders({ userAgent = DEFAULT_ARTICLE_FETCH_UA, referer = DEFAULT_ARTICLE_FETCH_REFERER } = {}) {
+    return {
+        'User-Agent': userAgent,
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'cross-site',
+        'Sec-Fetch-User': '?1',
+        'sec-ch-ua': '"Chromium";v="141", "Not?A_Brand";v="8", "Google Chrome";v="141"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+        Referer: referer,
+        Connection: 'keep-alive',
+    };
+}
 
 const DEFAULT_TIMEOUT_MS = 12_000;
 const DEFAULT_MAX_BYTES = 1_500_000;
@@ -10,54 +36,6 @@ export function domainFromUrl(url) {
     } catch {
         return '';
     }
-}
-
-/**
- * Very small robots.txt check: if Disallow matches the article path for our UA or *, skip fetch.
- */
-export async function isRobotsFetchAllowed(articleUrl, { fetchImpl = fetch, userAgent = DEFAULT_ARTICLE_FETCH_UA } = {}) {
-    try {
-        const url = new URL(articleUrl);
-        if (!url.protocol.startsWith('http')) {
-            return false;
-        }
-        const robotsUrl = `${url.origin}/robots.txt`;
-        const response = await fetchImpl(robotsUrl, {
-            headers: { 'User-Agent': userAgent, Accept: 'text/plain,*/*' },
-            signal: AbortSignal.timeout(5000),
-        });
-        if (!response.ok) {
-            return true;
-        }
-        const text = await response.text();
-        const path = url.pathname || '/';
-        return !robotsDisallowsPath(text, path);
-    } catch {
-        return true;
-    }
-}
-
-export function robotsDisallowsPath(robotsTxt, path) {
-    const lines = robotsTxt.split('\n');
-    let applies = false;
-    for (const raw of lines) {
-        const line = raw.split('#')[0].trim();
-        if (!line) continue;
-        const agentMatch = /^User-agent:\s*(.+)$/i.exec(line);
-        if (agentMatch) {
-            const agent = agentMatch[1].trim();
-            applies = agent === '*' || /botz/i.test(agent);
-            continue;
-        }
-        const disallowMatch = /^Disallow:\s*(.*)$/i.exec(line);
-        if (applies && disallowMatch) {
-            const prefix = disallowMatch[1].trim();
-            if (!prefix) continue;
-            if (prefix === '/') return true;
-            if (path.startsWith(prefix)) return true;
-        }
-    }
-    return false;
 }
 
 export async function readResponseWithByteCap(response, maxBytes) {
@@ -133,6 +111,53 @@ export function extractOpenGraphAndExcerpt(html, { maxExcerptChars = 500 } = {})
     };
 }
 
+export function parseArticleFetchProxyMode(raw) {
+    const value = (raw || 'fallback').trim().toLowerCase();
+    return value === 'always' ? 'always' : 'fallback';
+}
+
+/** Retry via proxy only on 403, 429 or a Cloudflare challenge (cf-mitigated header). */
+export function shouldRetryViaProxy(response) {
+    return (
+        response.status === 403 ||
+        response.status === 429 ||
+        Boolean(response.headers?.get?.('cf-mitigated'))
+    );
+}
+
+export const DEFAULT_429_RETRIES = 3;
+export const DEFAULT_429_BASE_MS = 1000;
+export const DEFAULT_429_MAX_MS = 30000;
+
+function envInt(raw, fallback) {
+    const n = Number.parseInt(String(raw ?? '').trim(), 10);
+    return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+/**
+ * Delay before 429 retry `attempt` (0-based): min(base * 2^attempt, max), or a numeric
+ * Retry-After (seconds) clamped to max. Up to 20% jitter is added, never exceeding max.
+ */
+export function compute429DelayMs({ attempt, baseMs, maxMs, retryAfter = null, random = Math.random }) {
+    const ra = retryAfter == null ? NaN : Number(String(retryAfter).trim());
+    const raw = Number.isFinite(ra) && ra >= 0 ? ra * 1000 : baseMs * 2 ** attempt;
+    const capped = Math.min(raw, maxMs);
+    return Math.min(Math.round(capped * (1 + 0.2 * random())), maxMs);
+}
+
+const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const proxyAgents = new Map();
+
+/** Lazily builds an undici ProxyAgent (undici is only imported when a proxy is actually used). */
+async function defaultGetProxyDispatcher(proxyUrl) {
+    if (!proxyAgents.has(proxyUrl)) {
+        const { ProxyAgent } = await import('undici');
+        proxyAgents.set(proxyUrl, new ProxyAgent(proxyUrl));
+    }
+    return proxyAgents.get(proxyUrl);
+}
+
 /**
  * @param {string} articleUrl
  */
@@ -140,27 +165,102 @@ export async function fetchLinkedArticleMetadata(articleUrl, config = {}) {
     const {
         fetchImpl = fetch,
         userAgent = DEFAULT_ARTICLE_FETCH_UA,
+        referer = DEFAULT_ARTICLE_FETCH_REFERER,
         timeoutMs = DEFAULT_TIMEOUT_MS,
         maxBytes = DEFAULT_MAX_BYTES,
+        env = process.env,
+        log = () => {},
+        getProxyDispatcher = defaultGetProxyDispatcher,
+        sleep = defaultSleep,
+        random = Math.random,
     } = config;
+    const retries429 = envInt(env.ARTICLE_FETCH_429_RETRIES, DEFAULT_429_RETRIES);
+    const base429 = envInt(env.ARTICLE_FETCH_429_BASE_MS, DEFAULT_429_BASE_MS);
+    const max429 = envInt(env.ARTICLE_FETCH_429_MAX_MS, DEFAULT_429_MAX_MS);
 
     if (!articleUrl || !articleUrl.startsWith('http')) {
         return null;
     }
 
-    const allowed = await isRobotsFetchAllowed(articleUrl, { fetchImpl, userAgent });
-    if (!allowed) {
-        return { skipped: 'robots' };
-    }
+    const proxyUrl = (env.ARTICLE_FETCH_PROXY || '').trim();
+    const proxyMode = parseArticleFetchProxyMode(env.ARTICLE_FETCH_PROXY_MODE);
 
-    const response = await fetchImpl(articleUrl, {
-        headers: {
-            'User-Agent': userAgent,
-            Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
-        },
-        redirect: 'follow',
-        signal: AbortSignal.timeout(timeoutMs),
-    });
+    const doFetch = async (dispatcher) =>
+        fetchImpl(articleUrl, {
+            headers: buildBrowserHeaders({ userAgent, referer }),
+            redirect: 'follow',
+            signal: AbortSignal.timeout(timeoutMs),
+            ...(dispatcher ? { dispatcher } : {}),
+        });
+
+    // Exponential backoff on HTTP 429 (article page fetches only).
+    const fetchWithBackoff = async (routeName, dispatcher) => {
+        let response = await doFetch(dispatcher);
+        for (let attempt = 0; attempt < retries429 && response.status === 429; attempt += 1) {
+            const delayMs = compute429DelayMs({
+                attempt,
+                baseMs: base429,
+                maxMs: max429,
+                retryAfter: response.headers?.get?.('retry-after'),
+                random,
+            });
+            log(
+                `article_fetch_retry route=${routeName} attempt=${attempt + 1} delay_ms=${delayMs} status=429 host=${domainFromUrl(articleUrl)}`,
+            );
+            await sleep(delayMs);
+            response = await doFetch(dispatcher);
+        }
+        return response;
+    };
+
+    // The proxy applies to this article PAGE fetch only (never HN/Algolia/OpenAI/news API/search/Jev).
+    let response;
+    let route = 'direct';
+    if (proxyUrl && proxyMode === 'always') {
+        route = 'proxy';
+        response = await fetchWithBackoff('proxy', await getProxyDispatcher(proxyUrl));
+    } else if (proxyUrl) {
+        // Fallback mode: host-level route memory (article page fetches only).
+        const hostKey = routeHostKey(articleUrl);
+        const store = hostKey ? (config.routeStore || getDefaultRouteStore(env, log)) : null;
+        const remembered = store ? store.get(hostKey) : null;
+        const remember = (r) => {
+            if (store) store.set(hostKey, r);
+        };
+        const viaProxy = async () => fetchWithBackoff('proxy', await getProxyDispatcher(proxyUrl));
+        const reasonOf = (res) => (res.headers?.get?.('cf-mitigated') ? 'cf_challenge' : `http_${res.status}`);
+        const chosen = remembered === 'proxy' ? 'proxy' : 'direct';
+        log(`article_fetch_route host=${hostKey || domainFromUrl(articleUrl)} remembered=${remembered || 'none'} chosen=${chosen}`);
+        if (chosen === 'proxy') {
+            route = 'proxy(remembered)';
+            response = await viaProxy();
+            if (shouldRetryViaProxy(response)) {
+                const reason = reasonOf(response);
+                const proxied = response;
+                response = await fetchWithBackoff('direct', null); // direct once, with 429 backoff
+                if (response.ok) {
+                    route = `proxy(${reason})->direct`;
+                    remember('direct');
+                } else {
+                    route = `proxy(${reason})->direct(failed)`;
+                    response = proxied.ok ? proxied : response;
+                }
+            }
+        } else {
+            response = await fetchWithBackoff('direct', null);
+            if (!shouldRetryViaProxy(response)) {
+                if (response.ok) remember('direct');
+            } else {
+                const reason = reasonOf(response);
+                route = `direct->proxy(${reason})`;
+                response = await viaProxy(); // single retry, no loop
+                if (response.ok) remember('proxy');
+            }
+        }
+    } else {
+        response = await fetchWithBackoff('direct', null);
+    }
+    log(`article_fetch: route=${route} status=${response.status} host=${domainFromUrl(articleUrl)}`);
     if (!response.ok) {
         return { skipped: `http_${response.status}` };
     }
@@ -210,7 +310,10 @@ export async function enrichHnCandidate(candidate, deps = {}) {
 
     if (linkUrl) {
         try {
-            const meta = await fetchArticle(linkUrl, deps);
+            const referer = candidate.hn_object_id
+                ? `https://news.ycombinator.com/item?id=${candidate.hn_object_id}`
+                : undefined;
+            const meta = await fetchArticle(linkUrl, referer ? { referer, ...deps } : deps);
             if (meta && !meta.skipped) {
                 if (meta.og_title) enriched.title = meta.og_title;
                 enriched.description = meta.og_description || meta.excerpt || '';

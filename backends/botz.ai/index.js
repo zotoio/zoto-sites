@@ -47,11 +47,15 @@ import {
 } from './archiveDays.js';
 import { buildRelevanceScoringPrompt } from './storySelection.js';
 import { assertNewsSourceEnv, parseNewsSource } from './newsSourceConfig.js';
+import { isMultiProviderConfig, parseNewsProviders } from './newsProviders/index.js';
 import { readRecentLiveStoryIdentifiers } from './liveStoryDedup.js';
 
 dotenv.config();
 
 const NEWS_SOURCE = parseNewsSource();
+// NEWS_PROVIDERS (e.g. hn,thenewsapi,ddg). Unset or hn-only => original single-source path (NEWS_SOURCE).
+const NEWS_PROVIDERS = parseNewsProviders();
+const NEWS_PROVIDERS_MULTI = isMultiProviderConfig(NEWS_PROVIDERS);
 
 const {
     OPENAI_API_KEY,
@@ -78,7 +82,9 @@ if (!OPENAI_API_KEY || !SHARED_SECRET) {
     process.exit(1);
 }
 try {
-    assertNewsSourceEnv({ newsSource: NEWS_SOURCE, newsApiKey: NEWS_API_KEY });
+    if (!NEWS_PROVIDERS_MULTI) {
+        assertNewsSourceEnv({ newsSource: NEWS_SOURCE, newsApiKey: NEWS_API_KEY });
+    }
 } catch (error) {
     console.error(error.message);
     process.exit(1);
@@ -190,6 +196,7 @@ const fetchAiNews = async (req) => {
     try {
         const result = await fetchQualifyingStoryForEditorial({
             newsSource: NEWS_SOURCE,
+            newsProviders: NEWS_PROVIDERS,
             asOfDate,
             isWeekend: isWeekend(),
             newsApiKey: NEWS_API_KEY,
@@ -197,7 +204,7 @@ const fetchAiNews = async (req) => {
                 const startTime = Date.now();
                 const response = await axios.get(url, { params });
                 console.log(
-                    `${NEWS_SOURCE} news fetch took ${Date.now() - startTime} ms (${url.split('/').slice(-2).join('/')})`
+                    `${NEWS_PROVIDERS_MULTI ? NEWS_PROVIDERS.join('+') : NEWS_SOURCE} news fetch took ${Date.now() - startTime} ms (${url.split('/').slice(-2).join('/')})`
                 );
                 return response;
             },

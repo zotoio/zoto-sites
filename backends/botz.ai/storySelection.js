@@ -2,6 +2,9 @@
  * GenAI news story filtering and ranking (testable without network).
  */
 
+import { KEYWORD_PASS_THRESHOLD, KEYWORD_SCORE_CAP, scoreKeywords } from './keywordWeights.js';
+import { COMBINED_PASS_THRESHOLD, combineScores, createJevClassifierFromEnv } from './jevClassifier.js';
+
 export const GENAI_NEWS_CATEGORIES = 'tech';
 
 /** Stricter OR-search for The News API (AI vendor/product terms only). */
@@ -32,9 +35,6 @@ export function buildGenAiNewsSearchQuery() {
     ].join('|');
 }
 
-const AI_TERM_PATTERN =
-    /\b(openai|chatgpt|gpt[- ]?[3456o]|claude|anthropic|gemini|deepmind|llama|mistral|genai|generative ai|large language model|\bllm\b|sora|midjourney|stable diffusion|copilot|hugging\s*face|xai|grok|runway\s*ml|dall[- ]?e)\b/i;
-
 const SENSITIVE_HARM_PATTERN =
     /\b(sexual assault|rape|molest|murder|homicide|shooting|stabbing|kidnap|domestic violence|assault charge|crime scene)\b/i;
 
@@ -44,7 +44,12 @@ export function articleTextForMatching(article) {
     return `${title} ${description}`.trim();
 }
 
-/** Require AI/GenAI terms in title or description before LLM scoring. */
+/** Weighted keyword score (see keywordWeights.js) over title + snippet + URL slug + domain. */
+export function keywordScoreForArticle(article) {
+    return scoreKeywords(article);
+}
+
+/** Keyword-only gate: sensitive-harm text is rejected, otherwise score >= KEYWORD_PASS_THRESHOLD. */
 export function passesLocalAiTermGate(article) {
     const text = articleTextForMatching(article);
     if (!text) {
@@ -53,7 +58,35 @@ export function passesLocalAiTermGate(article) {
     if (SENSITIVE_HARM_PATTERN.test(text)) {
         return false;
     }
-    return AI_TERM_PATTERN.test(text);
+    return scoreKeywords(article).score >= KEYWORD_PASS_THRESHOLD;
+}
+
+/**
+ * Classification + gate. Optional Jev classifier (probability 0..1) is scored BEFORE the gate decides:
+ *  - no classifier / classifier error / null answer: keyword score >= KEYWORD_PASS_THRESHOLD
+ *  - with Jev: 0.4 * keyword/KEYWORD_SCORE_CAP + 0.6 * jev >= COMBINED_PASS_THRESHOLD
+ * Sensitive-harm text is always rejected.
+ * @returns {Promise<{ passes: boolean, keywordScore: number, jev: number|null, combined: number|null, mode: string }>}
+ */
+export async function classifyCandidate(article, { jevClassifier = null, log = () => {} } = {}) {
+    const text = articleTextForMatching(article);
+    const { score: keywordScore } = scoreKeywords(article);
+    if (!text || SENSITIVE_HARM_PATTERN.test(text)) {
+        return { passes: false, keywordScore, jev: null, combined: null, mode: 'sensitive_or_empty' };
+    }
+    let jev = null;
+    if (jevClassifier) {
+        try {
+            jev = await jevClassifier(article);
+        } catch (error) {
+            log(`jev_classifier: failed (${error.message}); falling back to keyword score`);
+        }
+    }
+    if (typeof jev === 'number') {
+        const combined = combineScores({ keywordScore, keywordCap: KEYWORD_SCORE_CAP, jev });
+        return { passes: combined >= COMBINED_PASS_THRESHOLD, keywordScore, jev, combined, mode: 'keyword+jev' };
+    }
+    return { passes: keywordScore >= KEYWORD_PASS_THRESHOLD, keywordScore, jev: null, combined: null, mode: 'keyword' };
 }
 
 const ASK_SHOW_HN = /^(ask hn|show hn)\s*:/i;
@@ -128,13 +161,21 @@ export function isVerdictAcceptable(verdict) {
  */
 export async function selectBestQualifyingStory(
     candidates,
-    { scoreArticle, log = () => {}, preferEngagement = false } = {}
+    { scoreArticle, log = () => {}, preferEngagement = false, jevClassifier } = {}
 ) {
     if (!candidates?.length) {
         return null;
     }
 
-    const gated = candidates.filter(passesLocalAiTermGate);
+    // jevClassifier: undefined => build from env (null when TYPESAFE_API_KEY unset); null => keyword only.
+    const classifier = jevClassifier === undefined ? createJevClassifierFromEnv({ log }) : jevClassifier;
+    const gated = [];
+    for (const candidate of candidates) {
+        const verdict = await classifyCandidate(candidate, { jevClassifier: classifier, log });
+        if (verdict.passes) {
+            gated.push(candidate);
+        }
+    }
     if (!gated.length) {
         log('story_selection: no candidates passed local AI term gate');
         return null;

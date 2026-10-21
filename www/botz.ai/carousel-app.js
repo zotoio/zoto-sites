@@ -1239,7 +1239,8 @@ window.addEventListener('resize', () => sizeExpandedCard());
  * /archive/latest every NEXT_POLL_MS until the new story is there, then adds it to the ring (it takes that card's
  * place). The visible text is aria-hidden; screen readers get a polite status at most once a minute. The ticker
  * only runs while the card is on screen and the tab is visible. */
-const NEXT_STORY_HTML = '<div class="side-next-box"><span class="side-next-l">next story in</span><span class="side-next-t">--:--</span></div>';
+// same shape as a side card: the 7:8 image box (a static skeleton) carries the LARGE time, the text band the label
+const NEXT_STORY_HTML = '<div class="side-next-img"><span class="side-next-t">--:--</span></div><div class="side-next-txt"><span class="side-next-l">next story in</span></div>';
 const NEXT_GRACE_MS = 10 * 60e3;   // default wait past a run's due time before moving on (the backend sends grace_s)
 const NEXT_POLL_MS = Math.max(1000, Number(params.get('nextpoll')) || 30e3);   // ?nextpoll= shortens it for tests
 let generation = null;             // { upcoming: ms[], delayMs }

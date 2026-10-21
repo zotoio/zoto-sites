@@ -96,11 +96,20 @@ test('edge cards are pre-rendered: wider window than visible, buffer past it, te
 test('countdown review: overrun runs still awaited, same-key rewrites picked up, stamps use the backend offset', async () => {
   const { generationConfigFromEnv, generationInfo } = await import('../backends/botz.ai/generationSchedule.js');
   const g = generationInfo(generationConfigFromEnv({}), new Date('2026-10-20T20:05:00Z'), 0);
-  assert.equal(g.upcoming[1], '2026-10-20T20:01:00.000Z', 'the 20:01 run is still listed 4 min later');
+  assert.equal(g.upcoming[0], '2026-10-20T20:01:00.000Z', 'the 20:01 run is still listed 4 min later');
   assert.equal(g.grace_s, 600);
   assert.match(app, /top\.cache_key !== cur\?\.cache_key \|\| \(top\.generated_at \|\| ''\) !== \(cur\?\.generated_at \|\| ''\)/);
   assert.match(app, /ringStories\.delete\(replaced\); imgs\.delete\(replaced\); gl\?\.evictStory\(replaced\);/);
   assert.match(app, /- \(generation\?\.stampOffsetMs \|\| 0\)/);
   assert.match(app, /due \+ generation\.graceMs > now/);
   assert.doesNotMatch(app, /if \(top && archiveIndex && !storyEntries\.has\(top\)\)/);
+});
+
+test('countdown: large time centred over the 7:8 image box, small label in the text band', () => {
+  assert.match(app, /<div class="side-next-img"><span class="side-next-t">--:--<\/span><\/div><div class="side-next-txt"><span class="side-next-l">next story in<\/span><\/div>/);
+  const box = /\.scene \.side-next \.side-next-img\{[^}]*\}/.exec(css)?.[0] || '';
+  assert.match(box, /aspect-ratio:var\(--img-ar\)/); assert.match(box, /place-items:center/);
+  const t = /\.scene \.side-next \.side-next-t\{[^}]*\}/.exec(css)?.[0] || '';
+  assert.match(t, /calc\(var\(--sw, 300px\) \* \.2\)/); assert.match(t, /tabular-nums/); assert.match(t, /rgba\(236,241,236,\.82\)/);
+  assert.match(css, /\.mode-gl \.scene \.side-next > \*\{visibility:visible\}/);
 });

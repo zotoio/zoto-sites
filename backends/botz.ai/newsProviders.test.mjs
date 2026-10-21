@@ -11,6 +11,8 @@ import { hnProvider } from './newsProviders/hn.js';
 import { thenewsapiProvider } from './newsProviders/thenewsapi.js';
 import { bingnewsProvider, ddgProvider, gnewsProvider, parseDdgHtml, parseNewsRss, unwrapDdgUrl } from './newsProviders/keyless.js';
 import { fetchQualifyingStoryFromProviders } from './multiProviderEditorialFetch.js';
+import { NewsQuotaExhaustedError } from './newsApiErrors.js';
+import { makeCandidate } from './newsProviders/normalize.js';
 
 const noSleep = async () => {};
 
@@ -249,4 +251,77 @@ test('fetchQualifyingStoryFromProviders runs the unchanged selection pipeline ov
     assert.equal(result.article.provider, 'ddg');
     assert.ok(!scored.includes('Gardening tips'), 'keyword gate still filters non-AI candidates');
     assert.ok(result.newsRequestCount >= 4);
+});
+
+// ---- PR #32 review fixes ----
+const quota402 = () => Object.assign(new Error('Request failed with status code 402'), { response: { status: 402, data: { error: { code: 'usage_limit_reached' } } } });
+const fakeProvider = (name, impl) => ({ name, isAvailable: () => ({ ok: true }), fetchCandidates: impl });
+const okCandidate = (name) => makeCandidate(name, { title: 'GenAI news', url: `https://${name}.example.com/a`, source: name });
+
+test('quota: sole provider 402 => NewsQuotaExhaustedError (503 NEWS_QUOTA_EXHAUSTED), not swallowed', async () => {
+    const logs = [];
+    const registry = { thenewsapi: fakeProvider('thenewsapi', async () => { throw quota402(); }) };
+    await assert.rejects(
+        fetchCandidatesFromProviders({ names: ['thenewsapi'], registry, log: (m) => logs.push(m) }),
+        (e) => e instanceof NewsQuotaExhaustedError && e.statusCode === 503 && e.code === 'NEWS_QUOTA_EXHAUSTED'
+    );
+    assert.ok(logs.some((l) => l.includes('news_provider_quota_exhausted')));
+    await assert.rejects(
+        fetchQualifyingStoryFromProviders({
+            newsProviders: ['thenewsapi'],
+            httpGet: async () => { throw quota402(); },
+            env: { NEWS_API_KEY: 'k' },
+            scoreArticle: async () => ({}),
+        }),
+        (e) => e.code === 'NEWS_QUOTA_EXHAUSTED'
+    );
+});
+
+test('quota: 402 plus another provider ok => candidates returned and news_provider_quota_exhausted logged', async () => {
+    const logs = [];
+    const registry = {
+        hn: fakeProvider('hn', async () => ({ candidates: [okCandidate('hn')], requests: 1 })),
+        thenewsapi: fakeProvider('thenewsapi', async () => { throw quota402(); }),
+    };
+    const out = await fetchCandidatesFromProviders({ names: ['hn', 'thenewsapi'], registry, log: (m) => logs.push(m) });
+    assert.equal(out.candidates.length, 1);
+    assert.ok(logs.some((l) => l.includes('news_provider_quota_exhausted') && l.includes('thenewsapi')));
+});
+
+function budgetRegistry(calls) {
+    const mk = (name) => fakeProvider(name, async ({ queries }) => {
+        calls.push({ name, queries });
+        return { candidates: [okCandidate(name)], requests: queries ? queries.length : 1 };
+    });
+    return { hn: mk('hn'), thenewsapi: mk('thenewsapi'), ddg: mk('ddg') };
+}
+
+test('budget: maxNewsRequests 1 => only the first provider runs; actual requests reported', async () => {
+    const calls = [];
+    const out = await fetchCandidatesFromProviders({ names: ['hn', 'thenewsapi', 'ddg'], registry: budgetRegistry(calls), env: {}, maxNewsRequests: 1 });
+    assert.deepEqual(calls.map((c) => c.name), ['hn']);
+    assert.equal(out.requests, 1);
+});
+
+test('budget: keyless query count is limited by the remaining budget', async () => {
+    const calls = [];
+    const out = await fetchCandidatesFromProviders({ names: ['hn', 'ddg'], registry: budgetRegistry(calls), env: {}, maxNewsRequests: 3 });
+    assert.deepEqual(calls.find((c) => c.name === 'ddg').queries, ['generative AI', 'OpenAI']);
+    assert.equal(out.requests, 3);
+    const calls2 = [];
+    await fetchCandidatesFromProviders({ names: ['ddg'], registry: budgetRegistry(calls2), env: {}, maxNewsRequests: 2 });
+    assert.deepEqual(calls2[0].queries.length, 2);
+});
+
+test('budget: 0 => rejects with the existing budget error; unlimited when not supplied', async () => {
+    const calls = [];
+    await assert.rejects(
+        fetchCandidatesFromProviders({ names: ['hn', 'ddg'], registry: budgetRegistry(calls), env: {}, maxNewsRequests: 0 }),
+        (e) => e.code === 'NEWS_REQUEST_BUDGET_EXHAUSTED' && e.statusCode === 503 && e.clientError === 'news_request_budget_exhausted'
+    );
+    assert.equal(calls.length, 0);
+    const out = await fetchCandidatesFromProviders({ names: ['hn', 'thenewsapi', 'ddg'], registry: budgetRegistry(calls), env: {} });
+    assert.deepEqual(calls.map((c) => c.name), ['hn', 'thenewsapi', 'ddg']);
+    assert.equal(calls.find((c) => c.name === 'ddg').queries, undefined);
+    assert.equal(out.requests, 1 + 1 + 1);
 });

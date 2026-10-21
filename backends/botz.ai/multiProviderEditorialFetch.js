@@ -37,6 +37,7 @@ export async function fetchQualifyingStoryFromProviders({
     enrichDeps = {},
     excludeStoryIdentifiers = null,
     jevClassifier,
+    maxNewsRequests = Infinity,
 }) {
     const { candidates, requests, counts, newsSource } = await fetchCandidatesFromProviders({
         names: newsProviders,
@@ -45,6 +46,7 @@ export async function fetchQualifyingStoryFromProviders({
         fetchImpl,
         log,
         env,
+        maxNewsRequests,
     });
 
     if (candidates.length === 0) {

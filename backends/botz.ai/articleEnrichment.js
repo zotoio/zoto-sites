@@ -116,6 +116,11 @@ export function parseArticleFetchProxyMode(raw) {
     return value === 'always' ? 'always' : 'fallback';
 }
 
+/** A response is only usable when it is ok AND carries no cf-mitigated header (any value, any status). */
+export function isUsableArticleResponse(response) {
+    return Boolean(response.ok) && !response.headers?.get?.('cf-mitigated');
+}
+
 /** Retry via proxy only on 403, 429 or a Cloudflare challenge (cf-mitigated header). */
 export function shouldRetryViaProxy(response) {
     return (
@@ -236,33 +241,34 @@ export async function fetchLinkedArticleMetadata(articleUrl, config = {}) {
             response = await viaProxy();
             if (shouldRetryViaProxy(response)) {
                 const reason = reasonOf(response);
-                const proxied = response;
                 response = await fetchWithBackoff('direct', null); // direct once, with 429 backoff
-                if (response.ok) {
+                if (isUsableArticleResponse(response)) {
                     route = `proxy(${reason})->direct`;
                     remember('direct');
                 } else {
                     route = `proxy(${reason})->direct(failed)`;
-                    response = proxied.ok ? proxied : response;
+                    // The remembered proxy route is not good any more: forget it rather than keep it.
+                    if (store?.delete) store.delete(hostKey);
+                    else remember('direct');
                 }
             }
         } else {
             response = await fetchWithBackoff('direct', null);
             if (!shouldRetryViaProxy(response)) {
-                if (response.ok) remember('direct');
+                if (isUsableArticleResponse(response)) remember('direct');
             } else {
                 const reason = reasonOf(response);
                 route = `direct->proxy(${reason})`;
                 response = await viaProxy(); // single retry, no loop
-                if (response.ok) remember('proxy');
+                if (isUsableArticleResponse(response)) remember('proxy');
             }
         }
     } else {
         response = await fetchWithBackoff('direct', null);
     }
     log(`article_fetch: route=${route} status=${response.status} host=${domainFromUrl(articleUrl)}`);
-    if (!response.ok) {
-        return { skipped: `http_${response.status}` };
+    if (!isUsableArticleResponse(response)) {
+        return { skipped: response.headers?.get?.('cf-mitigated') ? 'cf_challenge' : `http_${response.status}` };
     }
     const contentType = response.headers.get('content-type') || '';
     if (!contentType.includes('text/html') && !contentType.includes('application/xhtml')) {

@@ -104,3 +104,12 @@ test('countdown review: overrun runs still awaited, same-key rewrites picked up,
   assert.match(app, /due \+ generation\.graceMs > now/);
   assert.doesNotMatch(app, /if \(top && archiveIndex && !storyEntries\.has\(top\)\)/);
 });
+
+test('countdown: large time centred over the 7:8 image box, small label in the text band', () => {
+  assert.match(app, /<div class="side-next-img"><span class="side-next-t">--:--<\/span><\/div><div class="side-next-txt"><span class="side-next-l">next story in<\/span><\/div>/);
+  const box = /\.scene \.side-next \.side-next-img\{[^}]*\}/.exec(css)?.[0] || '';
+  assert.match(box, /aspect-ratio:var\(--img-ar\)/); assert.match(box, /place-items:center/);
+  const t = /\.scene \.side-next \.side-next-t\{[^}]*\}/.exec(css)?.[0] || '';
+  assert.match(t, /calc\(var\(--sw, 300px\) \* \.2\)/); assert.match(t, /tabular-nums/); assert.match(t, /rgba\(236,241,236,\.82\)/);
+  assert.match(css, /\.mode-gl \.scene \.side-next > \*\{visibility:visible\}/);
+});

@@ -255,11 +255,16 @@ a:hover{color:var(--green-hi)}
 .scene .side-skel{pointer-events:none; cursor:default; background:var(--card); border:1px solid var(--line); border-radius:14px; overflow:hidden}
 /* the Newer slot beside the newest story: a pale "next story in mm:ss" (fixed box, absolutely placed text, tabular
    digits: ticking never changes any size, so no layout shift; the card's own opacity comes from its slot) */
-.scene .side-next{display:grid; place-items:center; background:linear-gradient(180deg, rgba(23,27,24,.7), rgba(16,19,17,.7)); border-style:dashed}
-.scene .side-next .side-next-box{display:grid; gap:.35em; justify-items:center; text-align:center; color:#b8c2b9; font:400 calc(var(--sw, 300px) * .05)/1.2 Arial, sans-serif; letter-spacing:.04em}
-.scene .side-next .side-next-t{font-size:calc(var(--sw, 300px) * .11); font-weight:700; color:#d6ddd6; font-variant-numeric:tabular-nums; letter-spacing:.02em; min-width:5.2ch}
-.scene .side-next.is-due .side-next-t{font-size:calc(var(--sw, 300px) * .075); min-width:0}
-.scene .side-next.is-unknown .side-next-box{visibility:hidden}
+.scene .side-next{display:block; background:var(--card); border-style:dashed}
+/* image box: the same 7:8 box as a real side card (static skeleton, no shimmer), the time centred in it, large */
+.scene .side-next .side-next-img{position:relative; width:100%; aspect-ratio:var(--img-ar); display:grid; place-items:center; overflow:hidden;
+  background:linear-gradient(180deg, #1c211d, #151916); border-radius:14px 14px 0 0}
+.scene .side-next .side-next-t{font:700 calc(var(--sw, 300px) * .2)/1 Arial, sans-serif; color:rgba(236,241,236,.82); font-variant-numeric:tabular-nums; letter-spacing:.01em;
+  white-space:nowrap; text-shadow:0 2px 12px rgba(0,0,0,.5)}
+.scene .side-next.is-due .side-next-t{font-size:calc(var(--sw, 300px) * .1)}
+/* text band below the image box: the small label */
+.scene .side-next .side-next-txt{display:block; padding:6% 6%; text-align:center; color:#b8c2b9; font:400 calc(var(--sw, 300px) * .055)/1.3 Arial, sans-serif; letter-spacing:.04em}
+.scene .side-next.is-unknown > *{visibility:hidden}
 .mode-gl .scene .side-next > *{visibility:visible}
 .mode-gl .scene .side-next.is-unknown > *{visibility:hidden}
 .mode-gl .scene .side-skel > *{visibility:visible}

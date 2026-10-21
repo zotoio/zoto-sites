@@ -1497,12 +1497,22 @@ function snapshot(el, i, dpr = 1.5) {
   ctx.save(); rr(ctx, 0.5, 0.5, w - 1, h - 1, 16);
   const grd = ctx.createLinearGradient(0, 0, 0, h); grd.addColorStop(0, '#151916'); grd.addColorStop(1, '#0f1210');
   ctx.fillStyle = grd; ctx.fill(); ctx.strokeStyle = 'rgba(255,255,255,.09)'; ctx.lineWidth = 1; ctx.stroke(); ctx.restore();
+  // clamped paragraphs (Read more) are drawn into their own layer so the CSS bottom fade can be applied to them alone
+  const parasEl = el.classList.contains('has-read-more') && !el.classList.contains('is-expanded') ? el.querySelector('.card-more') : null;
+  const pr = parasEl?.getBoundingClientRect();
+  let pcv = null, pctx = null, pTop = 0;
+  if (pr && pr.width && pr.height) {
+    pTop = pr.top - r0.top; pcv = document.createElement('canvas'); pcv.width = Math.ceil(w * dpr); pcv.height = Math.ceil(pr.height * dpr);
+    pctx = pcv.getContext('2d'); pctx.scale(dpr, dpr); pctx.translate(0, -pTop);
+  }
   // divider lines
   el.querySelectorAll('.card-head, .card-meta').forEach(d => {
-    const r = d.getBoundingClientRect(), cs2 = getComputedStyle(d);
-    ctx.fillStyle = 'rgba(255,255,255,.09)';
-    if (d.classList.contains('card-head')) ctx.fillRect(r.left - r0.left, r.bottom - r0.top - 1, r.width, 1);
-    else ctx.fillRect(r.left - r0.left, r.top - r0.top, r.width, 1);
+    const r = d.getBoundingClientRect();
+    let c = ctx;
+    if (pr && parasEl.contains(d)) { if (!pctx || r.top >= pr.bottom) return; c = pctx; }
+    c.fillStyle = 'rgba(255,255,255,.09)';
+    if (d.classList.contains('card-head')) c.fillRect(r.left - r0.left, r.bottom - r0.top - 1, r.width, 1);
+    else c.fillRect(r.left - r0.left, r.top - r0.top, r.width, 1);
   });
   // skeleton blocks: a flip onto a story that is still loading shows the skeleton, never a blank card
   el.querySelectorAll('.skel').forEach(n => {
@@ -1510,21 +1520,18 @@ function snapshot(el, i, dpr = 1.5) {
     if (!r.width || !r.height) return;
     ctx.fillStyle = '#20251f'; rr(ctx, r.left - r0.left, r.top - r0.top, r.width, r.height, 6); ctx.fill();
   });
-  // clamped paragraphs (Read more on short viewports) are clipped in the flip texture just like on the card
-  const parasEl = el.classList.contains('has-read-more') && !el.classList.contains('is-expanded') ? el.querySelector('.card-more') : null;
-  const pr = parasEl?.getBoundingClientRect();
   el.querySelectorAll('[data-snap]').forEach(n => {
     const r = n.getBoundingClientRect(), x = r.left - r0.left, y = r.top - r0.top, st = getComputedStyle(n);
     const kind = n.dataset.snap;
     if (!r.width || !r.height) return;
     if (pr && parasEl.contains(n)) {
       if (r.top >= pr.bottom) return;
-      ctx.save(); ctx.beginPath(); ctx.rect(0, pr.top - r0.top, w, pr.height); ctx.clip();
+      if (!pctx) return;
       const lh = parseFloat(st.lineHeight) || parseFloat(st.fontSize) * 1.4;
-      ctx.font = `${st.fontStyle} ${st.fontWeight} ${st.fontSize} ${st.fontFamily}`;
-      ctx.fillStyle = st.color; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
-      wrap(ctx, n.textContent.replace(/\s+/g, ' ').trim(), r.width + 1).forEach((ln, k) => ctx.fillText(ln, x, y + k * lh + lh / 2));
-      ctx.restore(); return;
+      pctx.font = `${st.fontStyle} ${st.fontWeight} ${st.fontSize} ${st.fontFamily}`;
+      pctx.fillStyle = st.color; pctx.textBaseline = 'middle'; pctx.textAlign = 'left';
+      wrap(pctx, n.textContent.replace(/\s+/g, ' ').trim(), r.width + 1).forEach((ln, k) => pctx.fillText(ln, x, y + k * lh + lh / 2));
+      return;
     }
     if (kind === 'img') {
       const im = imgs.peek(a.id); ctx.save(); rr(ctx, x, y, r.width, r.height, 10); ctx.clip();
@@ -1548,6 +1555,16 @@ function snapshot(el, i, dpr = 1.5) {
     }
     wrap(ctx, n.textContent.replace(/\s+/g, ' ').trim(), r.width + 1).forEach((ln, k) => ctx.fillText(ln, x, y + k * lh + lh / 2));
   });
+  if (pcv) {
+    // same bottom fade as the card's CSS mask (.card-more: linear-gradient(180deg,#000 70%,transparent), desktop only)
+    if (window.matchMedia('(min-width:761px)').matches) {
+      pctx.setTransform(1, 0, 0, 1, 0, 0); pctx.globalCompositeOperation = 'destination-out';
+      const fg = pctx.createLinearGradient(0, 0, 0, pcv.height);
+      fg.addColorStop(0, 'rgba(0,0,0,0)'); fg.addColorStop(0.7, 'rgba(0,0,0,0)'); fg.addColorStop(1, 'rgba(0,0,0,1)');
+      pctx.fillStyle = fg; pctx.fillRect(0, 0, pcv.width, pcv.height);
+    }
+    ctx.drawImage(pcv, 0, 0, pcv.width, pcv.height, 0, pTop, pcv.width / dpr, pcv.height / dpr);
+  }
   return { canvas: cv, w, h };
 }
 function wrap(ctx, text, maxW) {
@@ -2069,7 +2086,7 @@ async function goToIndex(target, fromHash = false, { instant = false, replace = 
 }
 
 /** The centre card's image decoded (or failed), bounded so a slow image never holds up navigation. */
-function cardImageDecoded(el, maxMs = 300) {
+function cardImageDecoded(el, maxMs = 120) {
   const im = el.querySelector('img.card-img');
   if (!im || !im.getAttribute('src') || (im.complete && im.naturalWidth && !im.decode)) return Promise.resolve();
   return Promise.race([im.decode().catch(() => {}), wait(maxMs)]);

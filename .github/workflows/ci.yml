@@ -30,6 +30,9 @@ jobs:
       - name: today.zoto.io weather utils tests
         run: node --test www/today.zoto.io/test/weather-utils.test.mjs
 
+      - name: today.zoto.io location search tests
+        run: node --test www/today.zoto.io/test/location-search.test.mjs
+
       - name: Install today.zoto.io API dependencies
         run: yarn --cwd backends/today.zoto.io install --frozen-lockfile
 

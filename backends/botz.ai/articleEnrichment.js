@@ -124,6 +124,28 @@ export function shouldRetryViaProxy(response) {
     );
 }
 
+export const DEFAULT_429_RETRIES = 3;
+export const DEFAULT_429_BASE_MS = 1000;
+export const DEFAULT_429_MAX_MS = 30000;
+
+function envInt(raw, fallback) {
+    const n = Number.parseInt(String(raw ?? '').trim(), 10);
+    return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+/**
+ * Delay before 429 retry `attempt` (0-based): min(base * 2^attempt, max), or a numeric
+ * Retry-After (seconds) clamped to max. Up to 20% jitter is added, never exceeding max.
+ */
+export function compute429DelayMs({ attempt, baseMs, maxMs, retryAfter = null, random = Math.random }) {
+    const ra = retryAfter == null ? NaN : Number(String(retryAfter).trim());
+    const raw = Number.isFinite(ra) && ra >= 0 ? ra * 1000 : baseMs * 2 ** attempt;
+    const capped = Math.min(raw, maxMs);
+    return Math.min(Math.round(capped * (1 + 0.2 * random())), maxMs);
+}
+
+const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const proxyAgents = new Map();
 
 /** Lazily builds an undici ProxyAgent (undici is only imported when a proxy is actually used). */
@@ -148,7 +170,12 @@ export async function fetchLinkedArticleMetadata(articleUrl, config = {}) {
         env = process.env,
         log = () => {},
         getProxyDispatcher = defaultGetProxyDispatcher,
+        sleep = defaultSleep,
+        random = Math.random,
     } = config;
+    const retries429 = envInt(env.ARTICLE_FETCH_429_RETRIES, DEFAULT_429_RETRIES);
+    const base429 = envInt(env.ARTICLE_FETCH_429_BASE_MS, DEFAULT_429_BASE_MS);
+    const max429 = envInt(env.ARTICLE_FETCH_429_MAX_MS, DEFAULT_429_MAX_MS);
 
     if (!articleUrl || !articleUrl.startsWith('http')) {
         return null;
@@ -165,18 +192,38 @@ export async function fetchLinkedArticleMetadata(articleUrl, config = {}) {
             ...(dispatcher ? { dispatcher } : {}),
         });
 
+    // Exponential backoff on HTTP 429 (article page fetches only).
+    const fetchWithBackoff = async (routeName, dispatcher) => {
+        let response = await doFetch(dispatcher);
+        for (let attempt = 0; attempt < retries429 && response.status === 429; attempt += 1) {
+            const delayMs = compute429DelayMs({
+                attempt,
+                baseMs: base429,
+                maxMs: max429,
+                retryAfter: response.headers?.get?.('retry-after'),
+                random,
+            });
+            log(
+                `article_fetch_retry route=${routeName} attempt=${attempt + 1} delay_ms=${delayMs} status=429 host=${domainFromUrl(articleUrl)}`,
+            );
+            await sleep(delayMs);
+            response = await doFetch(dispatcher);
+        }
+        return response;
+    };
+
     // The proxy applies to this article PAGE fetch only (never HN/Algolia/OpenAI/news API/search/Jev).
     let response;
     let route = 'direct';
     if (proxyUrl && proxyMode === 'always') {
         route = 'proxy';
-        response = await doFetch(await getProxyDispatcher(proxyUrl));
+        response = await fetchWithBackoff('proxy', await getProxyDispatcher(proxyUrl));
     } else {
-        response = await doFetch(null);
+        response = await fetchWithBackoff('direct', null);
         if (proxyUrl && shouldRetryViaProxy(response)) {
             const reason = response.headers.get('cf-mitigated') ? 'cf_challenge' : `http_${response.status}`;
             route = `direct->proxy(${reason})`;
-            response = await doFetch(await getProxyDispatcher(proxyUrl)); // single retry, no loop
+            response = await fetchWithBackoff('proxy', await getProxyDispatcher(proxyUrl)); // single retry, no loop
         }
     }
     log(`article_fetch: route=${route} status=${response.status} host=${domainFromUrl(articleUrl)}`);

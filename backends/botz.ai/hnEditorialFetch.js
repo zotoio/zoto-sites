@@ -63,7 +63,7 @@ async function fetchAlgoliaPage({ asOfDate, page, minPoints, httpGet, log }) {
     return hits;
 }
 
-async function enrichCandidatesInBatches(candidates, deps) {
+export async function enrichCandidatesInBatches(candidates, deps) {
     const out = [];
     for (let i = 0; i < candidates.length; i += ENRICH_CONCURRENCY) {
         const batch = candidates.slice(i, i + ENRICH_CONCURRENCY);

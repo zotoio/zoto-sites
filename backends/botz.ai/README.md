@@ -46,6 +46,24 @@ The script:
 
 Days with no qualifying story return HTTP **422** (`no_qualifying_story`, logged `no_articles` / `no_match`). Each backfilled editorial includes `as_of`, `backfilled: true`, display `generated_at`, and `backfilled_at`.
 
+### Multiple providers (`NEWS_PROVIDERS`)
+
+`NEWS_PROVIDERS=hn,thenewsapi,ddg` runs several candidate sources together (code: `newsProviders/`). Unset (or `hn` only) keeps the original HN-only path unchanged.
+
+| Name | Source | Key |
+| --- | --- | --- |
+| `hn` | Hacker News Algolia (same query as before) | none |
+| `thenewsapi` | `GET https://api.thenewsapi.com/v1/news/top` (`api_token`, `search`, `categories=tech`) | `NEWS_API_KEY`; skipped with a `news_provider_skipped` log line if missing |
+| `ddg` | `html.duckduckgo.com/html/` (past day) | none, live only |
+| `gnews` | Google News RSS search (`when:1d`) | none, live only |
+| `bingnews` | Bing News RSS | none, live only |
+
+Keyless providers query `generative AI`, `OpenAI`, `LLM` sequentially (500 ms apart, 8 s timeout, one attempt, no retries). Candidates are normalized (`title, url, source, published_at, snippet, points/num_comments/engagement, provider`), merged and deduped by normalized URL (scheme, `www.`, tracking params, fragment, trailing slash ignored), then go through the existing enrichment, gate and `gpt-6-luna` scoring. Logs carry `news_source` (e.g. `hn+gnews`, the providers that contributed).
+
+### Keyword gate and optional Jev classifier
+
+The gate is a weighted keyword score (`keywordWeights.js`, one table) over title + snippet + URL slug + domain; weights: vendors/models 5, GenAI concepts 3, general AI terms (case-sensitive `AI`, artificial intelligence, machine learning, neural network) 2, weak terms 1; sum capped at 10; pass at **>= 2**. If `TYPESAFE_API_KEY` is set, Jev (Typesafe.ai System One, `POST /v1/systemone`, a `noul` yes/no question, `Authorization: Bearer`) scores each candidate first and the gate becomes `0.4 * keyword/10 + 0.6 * jev >= 0.35`; without a key, or if Jev errors, the keyword score alone decides. Optional: `TYPESAFE_BASE_URL`, `JEV_MODEL` (default `jev-latest`).
+
 Preview HN picks without OpenAI: `node scripts/hn-sample-candidates.mjs 2026-06-10 2026-07-15`.
 
 OpenAI usage totals are stored under `backends/botz.ai/usage` on the host (`USAGE_LOG_DIR=/home/root/usage` in compose), not in public editorial JSON. Nginx denies `/cache/.*` dot-paths (e.g. `.replaced` archives). Legacy `_openai_usage` keys in cache files: `node scripts/strip-usage-from-cache.mjs` (dry-run; pass `--execute`). Use `--replace <cacheKey> --execute` to regenerate a single backfilled day (archives the prior file under `cache/.replaced/`).

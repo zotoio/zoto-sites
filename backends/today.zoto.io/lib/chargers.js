@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { cached } from './cache.js';
+import { OVERPASS_URL } from './http.js';
 
 export async function fetchEvChargers(lat, lon, radiusM = 5000) {
   const key = `ev:${lat.toFixed(3)}:${lon.toFixed(3)}`;
@@ -15,7 +16,7 @@ export async function fetchEvChargers(lat, lon, radiusM = 5000) {
 out body 20;
 `;
       const { data } = await axios.post(
-        'https://overpass-api.de/api/interpreter',
+        OVERPASS_URL,
         `data=${encodeURIComponent(query)}`,
         { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 25000 }
       );

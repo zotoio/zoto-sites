@@ -206,7 +206,10 @@ export function renderTransit(mapEl, listEl, center, payload, options = {}) {
     empty.textContent =
       payload.source === 'demo'
         ? 'No demo stops.'
-        : `No transit stops found nearby for your location${radius}.`;
+        : payload.source === 'unavailable'
+          ? 'Transit stops temporarily unavailable (OpenStreetMap Overpass).'
+          : `No transit stops found nearby for your location${radius}.`;
+    if (payload.source === 'unavailable') empty.className = 'demo-badge status-pill status-error';
     listEl.appendChild(empty);
     if (options.onWidenSearch && payload.source !== 'demo') {
       const btn = document.createElement('button');

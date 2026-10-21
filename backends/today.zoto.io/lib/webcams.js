@@ -141,11 +141,11 @@ export async function fetchNearbyWebcams(lat, lon) {
 
       if (cameras.length === 0) {
         return {
-          source: 'demo',
+          source: 'live',
           configured,
           message: WINDY_WEBCAMS_KEY
-            ? 'No webcams found nearby — showing demo placeholders.'
-            : 'Windy Webcams not configured (set WINDY_WEBCAMS_KEY). Showing demo placeholders.',
+            ? 'No webcams found nearby.'
+            : 'No keyless webcams found nearby (set WINDY_WEBCAMS_KEY for global coverage).',
           cameras: [],
         };
       }

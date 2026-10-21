@@ -1,6 +1,7 @@
 import {
   attachSettingsPopover,
   renderCameraGrid,
+  skeleton,
 } from '../widget-helpers.js';
 import { getSettingsFields } from '../widget-registry.js';
 
@@ -33,7 +34,7 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
   };
 
   const load = async () => {
-    body.innerHTML = '<p class="muted-note">Loading cameras…</p>';
+    body.innerHTML = skeleton(3);
     if (type === 'nearby-webcams') {
       const data = await fetch('/api/webcams', { lat: loc.lat, lon: loc.lon });
       paint(data);

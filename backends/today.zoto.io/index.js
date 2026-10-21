@@ -48,8 +48,15 @@ import { fetchWeather } from './lib/weather.js';
 import { fetchOnThisDay, fetchWikiNearby } from './lib/wiki.js';
 import { fetchNearbyWebcams } from './lib/webcams.js';
 import { getRadarPayload } from './lib/radar.js';
+import { fetchPollen } from './lib/pollen.js';
+import { fetchTides } from './lib/tides.js';
+import { fetchHazards } from './lib/hazards.js';
+import { fetchQuoteOfDay } from './lib/quote.js';
+import { unavailable } from './lib/unavailable.js';
+import { installDefaultHeaders } from './lib/http.js';
 
 dotenv.config();
+installDefaultHeaders();
 
 const { PORT = 3001 } = process.env;
 if (!process.env.WINDY_WEBCAMS_KEY) {
@@ -149,7 +156,7 @@ app.get('/api/weather', async (req, res) => {
     const data = await fetchWeather(lat, lon);
     return res.json(data);
   } catch {
-    return res.json(demoWeather());
+    return res.json(unavailable('weather'));
   }
 });
 
@@ -193,7 +200,7 @@ app.get('/api/transit', async (req, res) => {
     const data = await fetchNearbyTransit(lat, lon, radiusM);
     return res.json({ ...data, radiusM });
   } catch {
-    return res.json({ source: 'overpass', stops: [] });
+    return res.json(unavailable('transit', { stops: [] }));
   }
 });
 
@@ -208,9 +215,9 @@ app.get('/api/air-quality', async (req, res) => {
   }
   try {
     const data = await fetchAirQuality(lat, lon);
-    return res.json({ ...data, pollen: { grass: null, tree: null, weed: null, label: 'Pollen data unavailable for this region' } });
+    return res.json(data);
   } catch {
-    return res.json(demoAirQuality());
+    return res.json(unavailable('airQuality'));
   }
 });
 
@@ -230,7 +237,7 @@ app.get('/api/holidays', async (req, res) => {
   try {
     return res.json(await fetchHolidays(country));
   } catch {
-    return res.json(demoHolidays(country));
+    return res.json(unavailable('holidays'));
   }
 });
 
@@ -241,7 +248,7 @@ app.get('/api/wiki-nearby', async (req, res) => {
   try {
     return res.json(await fetchWikiNearby(pos.lat, pos.lon));
   } catch {
-    return res.json(demoWikiNearby());
+    return res.json(unavailable('wikiNearby'));
   }
 });
 
@@ -252,7 +259,7 @@ app.get('/api/on-this-day', async (req, res) => {
   try {
     return res.json(await fetchOnThisDay(month, day));
   } catch {
-    return res.json(demoOnThisDay());
+    return res.json(unavailable('onThisDay'));
   }
 });
 
@@ -262,7 +269,7 @@ app.get('/api/country', async (req, res) => {
   try {
     return res.json(await fetchCountryFacts(code));
   } catch {
-    return res.json(demoCountry());
+    return res.json(unavailable('country'));
   }
 });
 
@@ -271,7 +278,7 @@ app.get('/api/currency', async (req, res) => {
   try {
     return res.json(await fetchExchangeRate(req.query.from, req.query.to));
   } catch {
-    return res.json(demoCurrency());
+    return res.json(unavailable('currency'));
   }
 });
 
@@ -280,7 +287,7 @@ app.get('/api/iss', async (req, res) => {
   try {
     return res.json(await fetchIssNow());
   } catch {
-    return res.json(demoIss());
+    return res.json(unavailable('iss'));
   }
 });
 
@@ -296,7 +303,7 @@ app.get('/api/iss/track', async (req, res) => {
   try {
     return res.json(await fetchIssTrack(seconds));
   } catch {
-    return res.json(demoIssTrack());
+    return res.json(unavailable('issTrack'));
   }
 });
 
@@ -307,7 +314,7 @@ app.get('/api/earthquakes', async (req, res) => {
   try {
     return res.json(await fetchEarthquakesNear(pos.lat, pos.lon));
   } catch {
-    return res.json(demoEarthquakes());
+    return res.json(unavailable('earthquakes'));
   }
 });
 
@@ -318,7 +325,7 @@ app.get('/api/marine', async (req, res) => {
   try {
     return res.json(await fetchMarine(pos.lat, pos.lon));
   } catch {
-    return res.json(demoMarine());
+    return res.json(unavailable('marine'));
   }
 });
 
@@ -329,7 +336,7 @@ app.get('/api/commons', async (req, res) => {
   try {
     return res.json(await fetchCommonsNearby(pos.lat, pos.lon));
   } catch {
-    return res.json(demoCommons());
+    return res.json(unavailable('commons'));
   }
 });
 
@@ -340,7 +347,7 @@ app.get('/api/bikes', async (req, res) => {
   try {
     return res.json(await fetchNearbyBikes(pos.lat, pos.lon));
   } catch {
-    return res.json(demoBikes());
+    return res.json(unavailable('bikes'));
   }
 });
 
@@ -351,7 +358,7 @@ app.get('/api/chargers', async (req, res) => {
   try {
     return res.json(await fetchEvChargers(pos.lat, pos.lon));
   } catch {
-    return res.json(demoChargers());
+    return res.json(unavailable('chargers'));
   }
 });
 
@@ -362,15 +369,11 @@ app.get('/api/webcams', async (req, res) => {
   try {
     const data = await fetchNearbyWebcams(pos.lat, pos.lon);
     if (!data.cameras?.length) {
-      return res.json({
-        ...demoWebcams(),
-        configured: data.configured,
-        message: data.message || demoWebcams().message,
-      });
+      return res.json({ ...data, cameras: [], message: data.message || 'No live webcams found nearby' });
     }
     return res.json(data);
   } catch {
-    return res.json(demoWebcams());
+    return res.json(unavailable('webcams'));
   }
 });
 
@@ -383,14 +386,56 @@ app.get('/api/traffic-cams', async (req, res) => {
     const data = await fetchNearbyTrafficCameras(pos.lat, pos.lon, country);
     if (!data.cameras?.length) {
       return res.json({
-        ...demoTrafficCameras(),
-        configured: data.configured,
-        messages: data.messages?.length ? data.messages : demoTrafficCameras().messages,
+        ...data,
+        cameras: [],
+        messages: data.messages?.length ? data.messages : ['No live traffic cameras found nearby'],
       });
     }
     return res.json(data);
   } catch {
-    return res.json(demoTrafficCameras());
+    return res.json(unavailable('trafficCameras'));
+  }
+});
+
+app.get('/api/pollen', async (req, res) => {
+  const pos = latLonRequired(req, res);
+  if (!pos) return;
+  if (isDemoRequest(req)) return res.json({ source: 'demo', grass: 1, tree: 1, weed: 0, label: 'Demo pollen' });
+  try {
+    return res.json(await fetchPollen(pos.lat, pos.lon));
+  } catch {
+    return res.json(unavailable('pollen', { grass: null, tree: null, weed: null }));
+  }
+});
+
+app.get('/api/tides', async (req, res) => {
+  const pos = latLonRequired(req, res);
+  if (!pos) return;
+  if (isDemoRequest(req)) return res.json({ source: 'demo', extremes: [], hourly: { time: [], sea_level_height_msl: [] } });
+  try {
+    return res.json(await fetchTides(pos.lat, pos.lon));
+  } catch {
+    return res.json(unavailable('tides', { extremes: [] }));
+  }
+});
+
+app.get('/api/hazards', async (req, res) => {
+  const pos = latLonRequired(req, res);
+  if (!pos) return;
+  if (isDemoRequest(req)) return res.json({ source: 'demo', events: [] });
+  try {
+    return res.json(await fetchHazards(pos.lat, pos.lon));
+  } catch {
+    return res.json(unavailable('hazards', { events: [] }));
+  }
+});
+
+app.get('/api/quote', async (req, res) => {
+  if (isDemoRequest(req)) return res.json({ source: 'demo', quote: 'Demo quote', author: '' });
+  try {
+    return res.json(await fetchQuoteOfDay());
+  } catch {
+    return res.json(unavailable('quote'));
   }
 });
 

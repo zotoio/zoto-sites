@@ -3,7 +3,7 @@ import {
   renderNews,
   renderTransit,
 } from '../lib-ui.js';
-import { demoBadge, attachSettingsPopover, PRODUCTIVITY_STORE } from '../widget-helpers.js';
+import { demoBadge, isUnavailable, skeleton, attachSettingsPopover, PRODUCTIVITY_STORE } from '../widget-helpers.js';
 import { formatSunTime, moonPhaseInfo, weatherIcon, weatherLabel } from '../weather-utils.js';
 import { getSettingsFields } from '../widget-registry.js';
 import { mountIssMapWidget } from '../iss-map.js';
@@ -161,11 +161,11 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
       return { resize() {}, destroy() {} };
     }
     case 'holidays': {
-      body.innerHTML = '<p>Loading holidays…</p>';
+      body.innerHTML = skeleton(4);
       const cc = (loc.countryCode || 'US').toUpperCase();
       const data = await fetch('/api/holidays', { country: cc });
       body.innerHTML =
-        demoBadge(data.source) +
+        demoBadge(data) +
         `<ul class="compact-list">${(data.holidays || [])
           .slice(0, 12)
           .map((h) => `<li><strong>${h.date}</strong> ${h.localName || h.name}</li>`)
@@ -194,8 +194,8 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
       return { resize() {}, destroy() {} };
     }
     case 'uv': {
-      const curUv = weather.current?.uv_index ?? 0;
-      body.innerHTML = `<p class="uv-now">${Number(curUv).toFixed(1)}</p><p class="uv-label">UV index</p><canvas class="uv-chart"></canvas>`;
+      const curUv = weather.current?.uv_index;
+      body.innerHTML = demoBadge(weather) + `<p class="uv-now num">${Number.isFinite(curUv) ? Number(curUv).toFixed(1) : '—'}</p><p class="uv-label">UV index</p><canvas class="uv-chart"></canvas>`;
       const canvas = body.querySelector('.uv-chart');
       const draw = () => {
         const { w, h } = fitCanvas(canvas, body);
@@ -218,7 +218,7 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
     case 'air-quality': {
       const c = airQuality.current || {};
       body.innerHTML =
-        demoBadge(airQuality.source) +
+        demoBadge(airQuality) +
         `<div class="viz-row">${aqiGaugeSvg(c.us_aqi)}</div>
         <dl class="aq-grid">
         <div><dt>US AQI</dt><dd>${c.us_aqi ?? '—'}</dd></div>
@@ -228,10 +228,13 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
       return { resize() {}, destroy() {} };
     }
     case 'pollen': {
+      body.innerHTML = skeleton(3);
+      const pollen = await fetch('/api/pollen', { lat: loc.lat, lon: loc.lon }).catch(() => ({ source: 'unavailable' }));
+      const hasPollen = !isUnavailable(pollen) && pollen.available !== false;
       body.innerHTML =
-        demoBadge('demo') +
-        pollenBarsSvg(airQuality.pollen) +
-        `<p class="muted-note">${airQuality.pollen?.label || 'Pollen data unavailable'}</p>`;
+        demoBadge(pollen) +
+        (hasPollen || pollen.source === 'demo' ? pollenBarsSvg(pollen) : '') +
+        `<p class="muted-note">${pollen.label || 'Pollen data unavailable'}</p>`;
       return { resize() {}, destroy() {} };
     }
     case 'sun-hours': {
@@ -249,7 +252,7 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
       body.innerHTML = '<div class="iss-widget-mount"></div>';
       const mapHost = body.querySelector('.iss-widget-mount');
       const first = await fetch('/api/iss').catch(() => ({ source: 'demo' }));
-      mapHost.before(document.createRange().createContextualFragment(demoBadge(first.source)));
+      mapHost.before(document.createRange().createContextualFragment(demoBadge(first)));
       return mountIssMapWidget(
         mapHost,
         () => fetch('/api/iss'),
@@ -263,16 +266,24 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
       return { resize() {}, destroy() {} };
     }
     case 'tides': {
+      body.innerHTML = skeleton(4);
+      const tides = await fetch('/api/tides', { lat: loc.lat, lon: loc.lon }).catch(() => ({ source: 'unavailable' }));
+      const ex = tides.extremes || [];
       body.innerHTML =
-        demoBadge('demo') +
-        `${tideCurveSvg()}<ul class="compact-list"><li>06:12 High 1.8m</li><li>12:04 Low 0.4m</li><li>18:30 High 1.6m</li></ul><p class="muted-note">Demo tide table — not live for all coasts</p>`;
+        demoBadge(tides) +
+        (ex.length
+          ? `${tideCurveSvg(tides.hourly?.sea_level_height_msl)}<ul class="compact-list">${ex
+              .slice(0, 4)
+              .map((e) => `<li><span class="num">${String(e.time).slice(11, 16)}</span> ${e.type} <span class="num">${Number(e.height).toFixed(2)}</span> m</li>`)
+              .join('')}</ul><p class="muted-note">${tides.note || 'Modelled sea level'} · Open-Meteo</p>`
+          : `<p class="muted-note">${tides.message || 'No tide data for this location'}</p>`);
       return { resize() {}, destroy() {} };
     }
     case 'earthquakes': {
-      body.innerHTML = '<p>Loading…</p>';
+      body.innerHTML = skeleton(4);
       const data = await fetch('/api/earthquakes', { lat: loc.lat, lon: loc.lon });
       body.innerHTML =
-        demoBadge(data.source) +
+        demoBadge(data) +
         `<div class="viz-row">${quakeMiniMapSvg({ lat: loc.lat, lon: loc.lon }, data.earthquakes)}</div>
         <ul class="compact-list">${(data.earthquakes || [])
           .map((e) => `<li>M${e.mag?.toFixed(1)} · ${e.place} (${e.distKm} km)</li>`)
@@ -280,9 +291,20 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
       return { resize() {}, destroy() {} };
     }
     case 'hazards': {
+      body.innerHTML = skeleton(3);
+      const hz = await fetch('/api/hazards', { lat: loc.lat, lon: loc.lon }).catch(() => ({ source: 'unavailable' }));
+      const evs = hz.events || [];
+      const esc = (t) => String(t || '').replace(/</g, '&lt;');
       body.innerHTML =
-        demoBadge('demo') +
-        `<p>No keyless hazard feed configured for this region.</p><p class="muted-note">Demo advisory: check local emergency services for real alerts.</p>`;
+        demoBadge(hz) +
+        (isUnavailable(hz)
+          ? ''
+          : evs.length
+            ? `<ul class="compact-list">${evs
+                .map((e) => `<li><span class="alert-dot alert-${esc(e.alert)}"></span>${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.name)}</a>` : esc(e.name)} <span class="num">(${e.distKm} km)</span></li>`)
+                .join('')}</ul>`
+            : `<p>No GDACS alerts within ${hz.radiusKm || 1500} km (last 14 days).</p>`) +
+        '<p class="muted-note">GDACS global disaster alerts — check local emergency services.</p>';
       return { resize() {}, destroy() {} };
     }
     case 'radar': {
@@ -308,7 +330,7 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
             fillOpacity: 0.12,
           }).addTo(leaflet.map);
         });
-        caption.textContent = 'Precipitation overlay unavailable (demo rings)';
+        caption.textContent = 'Precipitation overlay unavailable — rings show 40/80/120 km';
       };
 
       try {
@@ -334,13 +356,18 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
     case 'wind-feels': {
       const cur = weather.current || {};
       const deg = cur.wind_direction_10m ?? 0;
-      body.innerHTML = `<p>Feels ${Math.round(cur.apparent_temperature ?? cur.temperature_2m ?? 0)}°</p>
-        <p>Wind ${Math.round(cur.wind_speed_10m ?? 0)} km/h</p>
+      const fmt = (v) => (Number.isFinite(v) ? Math.round(v) : '—');
+      body.innerHTML = demoBadge(weather) + `<p>Feels <span class="num">${fmt(cur.apparent_temperature ?? cur.temperature_2m)}</span>°</p>
+        <p>Wind <span class="num">${fmt(cur.wind_speed_10m)}</span> km/h</p>
         <p class="wind-compass" style="transform:rotate(${deg}deg)">↑</p>`;
       return { resize() {}, destroy() {} };
     }
     case 'what-to-wear': {
-      const t = weather.current?.temperature_2m ?? 15;
+      if (!Number.isFinite(weather.current?.temperature_2m)) {
+        body.innerHTML = demoBadge(weather.source === 'unavailable' ? weather : { source: 'unavailable' });
+        return { resize() {}, destroy() {} };
+      }
+      const t = weather.current.temperature_2m;
       const code = weather.current?.weather_code ?? 0;
       let tip = 'Light layers';
       if (t < 5) tip = 'Coat, hat, gloves';
@@ -368,13 +395,13 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
       return { resize() {}, destroy() {} };
     }
     case 'marine': {
-      body.innerHTML = '<p>Loading marine…</p>';
+      body.innerHTML = skeleton(3);
       const data = await fetch('/api/marine', { lat: loc.lat, lon: loc.lon });
       const i = 0;
       body.innerHTML =
-        demoBadge(data.source) +
+        demoBadge(data) +
         `<div class="viz-row">${waveSparklineSvg(data.hourly?.wave_height)}</div>
-        <p>Wave ${data.hourly?.wave_height?.[i] ?? '—'} m</p><p>Sea ${data.hourly?.sea_surface_temperature?.[i] ?? '—'} °C</p>`;
+        <p>Wave <span class="num">${data.hourly?.wave_height?.[i] ?? '—'}</span> m</p><p>Sea <span class="num">${data.hourly?.sea_surface_temperature?.[i] ?? '—'}</span> °C</p>`;
       return { resize() {}, destroy() {} };
     }
     case 'currency': {
@@ -383,15 +410,19 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
       const amount = Number(settings.amount || 100);
       const data = await fetch('/api/currency', { from, to });
       const converted = (amount * (data.rate || 0)).toFixed(2);
+      if (isUnavailable(data)) {
+        body.innerHTML = demoBadge(data);
+        return { resize() {}, destroy() {} };
+      }
       body.innerHTML =
-        demoBadge(data.source) +
+        demoBadge(data) +
         `<p>${amount} ${from} → ${converted} ${to}</p><p class="muted-note">Rate ${data.rate} (${data.date})</p>`;
       return { resize() {}, destroy() {} };
     }
     case 'wiki-nearby': {
       const data = await fetch('/api/wiki-nearby', { lat: loc.lat, lon: loc.lon });
       body.innerHTML =
-        demoBadge(data.source) +
+        demoBadge(data) +
         `<ul class="compact-list">${(data.places || [])
           .map((p) => `<li>${p.title} (${p.distanceM} m)</li>`)
           .join('')}</ul>`;
@@ -401,7 +432,7 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
       const now = new Date();
       const data = await fetch('/api/on-this-day', { month: now.getMonth() + 1, day: now.getDate() });
       body.innerHTML =
-        demoBadge(data.source) +
+        demoBadge(data) +
         `<ul class="compact-list">${(data.events || [])
           .map((e) => `<li><strong>${e.year}</strong> ${e.text}</li>`)
           .join('')}</ul>`;
@@ -417,8 +448,12 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
     }
     case 'country-facts': {
       const data = await fetch('/api/country', { code: loc.countryCode || 'us' });
+      if (isUnavailable(data)) {
+        body.innerHTML = demoBadge(data);
+        return { resize() {}, destroy() {} };
+      }
       body.innerHTML =
-        demoBadge(data.source) +
+        demoBadge(data) +
         `<p>${data.flag || ''} ${data.name}</p><p>Capital: ${data.capital}</p><p>Population: ${data.population?.toLocaleString?.() ?? data.population}</p>`;
       return { resize() {}, destroy() {} };
     }
@@ -489,32 +524,37 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
       const data = await fetch('/api/commons', { lat: loc.lat, lon: loc.lon });
       const p = data.photos?.[0];
       body.innerHTML =
-        demoBadge(data.source) +
+        demoBadge(data) +
         (p?.thumb
           ? `<img class="commons-img" src="${p.thumb}" alt="" /><p>${p.title}</p>`
           : '<p>No photos found</p>');
       return { resize() {}, destroy() {} };
     }
     case 'daily-quote': {
-      const q = QUOTES[new Date().getDate() % QUOTES.length];
-      body.innerHTML = demoBadge('demo') + `<blockquote>${q}</blockquote>`;
+      body.innerHTML = skeleton(2);
+      const qd = await fetch('/api/quote').catch(() => ({ source: 'unavailable' }));
+      const esc = (t) => String(t || '').replace(/</g, '&lt;');
+      body.innerHTML = qd.quote
+        ? demoBadge(qd) + `<blockquote>“${esc(qd.quote)}”${qd.author ? ` — ${esc(qd.author)}` : ''}</blockquote><p class="muted-note">${esc(qd.attribution || '')}</p>`
+        : demoBadge(qd);
       return { resize() {}, destroy() {} };
     }
     case 'news-topics': {
       const topic = settings.topic || 'tech';
       const data = await fetch('/api/news', { topic });
-      body.innerHTML = demoBadge(data.source) + '<ul class="news-list"></ul>';
+      body.innerHTML = demoBadge(data) + '<ul class="news-list"></ul>';
       renderNews(body.querySelector('.news-list'), data, 8);
       return { resize() {}, destroy() {} };
     }
     case 'bikes': {
       const data = await fetch('/api/bikes', { lat: loc.lat, lon: loc.lon });
       body.innerHTML =
-        demoBadge(data.source) +
+        demoBadge(data) +
         `<div class="viz-row">${bikeBarsSvg(data.stations)}</div>
         <ul class="compact-list">${(data.stations || [])
           .map((s) => `<li>${s.name}: ${s.freeBikes ?? '?'} bikes (${s.network})</li>`)
-          .join('')}</ul>`;
+          .join('')}</ul>` +
+        (data.message ? `<p class="muted-note">${data.message}</p>` : '');
       return { resize() {}, destroy() {} };
     }
     case 'walk-rings': {
@@ -539,7 +579,7 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
     case 'ev-chargers': {
       const data = await fetch('/api/chargers', { lat: loc.lat, lon: loc.lon });
       body.innerHTML =
-        demoBadge(data.source) +
+        demoBadge(data) +
         `<div class="viz-row">${chargerDotsSvg({ lat: loc.lat, lon: loc.lon }, data.stations)}</div>
         <ul class="compact-list">${(data.stations || [])
           .slice(0, 10)

@@ -6,7 +6,7 @@ import {
   renderWeatherStats,
 } from '../lib-ui.js';
 import { weatherIcon, weatherLabel } from '../weather-utils.js';
-import { attachSettingsPopover } from '../widget-helpers.js';
+import { attachSettingsPopover, demoBadge } from '../widget-helpers.js';
 import {
   attachLocationSearch,
   clearSavedLocation,
@@ -65,13 +65,13 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
       });
       return { resize() {}, destroy: () => search.destroy() };
     case 'weather': {
-      body.innerHTML = `
+      body.innerHTML = demoBadge(weather) + `
         <div class="weather-now"><div class="wx-icon"></div><div><p class="temp"></p><p class="wx-label"></p></div></div>
         <div class="chart-wrap"><canvas class="hourly-chart"></canvas></div>
         <div class="daily-strip"></div><dl class="weather-stats"></dl>`;
       const cur = weather.current || {};
       body.querySelector('.wx-icon').textContent = weatherIcon(cur.weather_code);
-      body.querySelector('.temp').textContent = `${Math.round(cur.temperature_2m ?? 0)}°`;
+      body.querySelector('.temp').textContent = Number.isFinite(cur.temperature_2m) ? `${Math.round(cur.temperature_2m)}°` : '—';
       body.querySelector('.wx-label').textContent = weatherLabel(cur.weather_code);
       const canvas = body.querySelector('.hourly-chart');
       const chartWrap = body.querySelector('.chart-wrap');

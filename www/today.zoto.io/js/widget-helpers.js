@@ -1,8 +1,43 @@
 /** Shared demo banner + settings popover helpers for widgets. */
 
-export function demoBadge(source) {
+function relTime(iso) {
+  const t = Date.parse(iso || '');
+  if (!Number.isFinite(t)) return '';
+  const min = Math.max(0, Math.round((Date.now() - t) / 60000));
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min} min ago`;
+  const h = Math.round(min / 60);
+  return h < 48 ? `${h} h ago` : `${Math.round(h / 24)} d ago`;
+}
+
+/**
+ * Status pill for a widget payload (or bare source string).
+ * demo → "Demo sample", unavailable → explicit error, stale → "Stale · updated N min ago", live → ''.
+ * @param {string | { source?: string, stale?: boolean, staleSince?: string, message?: string } | null | undefined} input
+ */
+export function demoBadge(input) {
+  const data = input && typeof input === 'object' ? input : { source: input };
+  const source = data.source;
+  if (source === 'unavailable') {
+    const msg = String(data.message || 'Live data temporarily unavailable').replace(/</g, '&lt;');
+    return `<p class="demo-badge status-pill status-error" role="status">${msg}</p>`;
+  }
+  if (data.stale) {
+    const ago = relTime(data.staleSince);
+    return `<p class="demo-badge status-pill status-stale" role="status">Stale${ago ? ` · updated ${ago}` : ''}</p>`;
+  }
   if (source && source !== 'demo') return '';
-  return '<p class="demo-badge" role="note">Demo sample — not live data</p>';
+  return '<p class="demo-badge status-pill status-demo" role="note">Demo sample — not live data</p>';
+}
+
+/** True when a payload is an explicit upstream failure. */
+export function isUnavailable(data) {
+  return !data || data.source === 'unavailable';
+}
+
+/** Shared loading skeleton markup. */
+export function skeleton(lines = 3) {
+  return `<div class="skeleton" aria-busy="true" aria-label="Loading">${'<span class="skeleton-line"></span>'.repeat(lines)}</div>`;
 }
 
 export function attachSettingsPopover(container, { title, fields, settings, onSave }) {

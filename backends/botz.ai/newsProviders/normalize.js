@@ -116,3 +116,13 @@ export function mergeCandidates(lists) {
     }
     return order.map((key) => byKey.get(key));
 }
+
+/** Run one upstream request; on failure tag the error with err.requests = 1 (the request was attempted and counts against the budget). */
+export async function attempt(fn) {
+    try {
+        return await fn();
+    } catch (error) {
+        if (error && typeof error === 'object' && typeof error.requests !== 'number') error.requests = 1;
+        throw error;
+    }
+}

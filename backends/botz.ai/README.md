@@ -57,6 +57,11 @@ Days with no qualifying story return HTTP **422** (`no_qualifying_story`, logged
 | `ddg` | `html.duckduckgo.com/html/` (past day) | none, live only |
 | `gnews` | Google News RSS search (`when:1d`) | none, live only |
 | `bingnews` | Bing News RSS | none, live only |
+| `thenewstack` | `https://thenewstack.io/blog/feed/` RSS (title/link/pubDate/description); 1 request per run, 8 s timeout, no retries | none, live only |
+
+**Source weighting (top-25 cap).** After the Jev/keyword gates, `sourceWeighting.js` ranks survivors by
+`priority = (0.45*keyword + 0.30*recency + 0.25*engagement) * providerWeight + authorityBonus + multiProviderBonus`
+and only the top 25 go to enrichment/luna scoring (final pick is still luna score, then engagement). `keyword` = keyword score/10; `recency` = `0.5^(age_h/12)` (missing date => 0.25); `engagement` (HN only) = `min(1,(log1p(points)+0.5*log1p(comments))/9.08)`; provider weights default `hn=1.0,thenewsapi=0.9,thenewstack=0.9,gnews=0.8,bingnews=0.8,ddg=0.7`; authority bonus `+0.05` for non-HN items from reuters/apnews/bbc/theverge/arstechnica/techcrunch/wired/nytimes/ft/bloomberg/technologyreview/anthropic/openai/deepmind/thenewstack; multi-provider bonus `+0.05` per extra provider (same URL or title), max `+0.15`. Env overrides: `SOURCE_WEIGHTS`, `SOURCE_RECENCY_HALF_LIFE_HOURS`, `SOURCE_COMPONENT_WEIGHTS`, `SOURCE_AUTHORITY_BONUS`, `SOURCE_AUTHORITY_DOMAINS`, `SOURCE_MULTI_PROVIDER_BONUS`. The top 5 are logged as `{event:'source_weighting_top', items:[{url,provider,priority,components}]}`.
 
 Keyless providers query `generative AI`, `OpenAI`, `LLM` sequentially (500 ms apart, 8 s timeout, one attempt, no retries). Candidates are normalized (`title, url, source, published_at, snippet, points/num_comments/engagement, provider`), merged and deduped by normalized URL (scheme, `www.`, tracking params, fragment, trailing slash ignored), then go through the existing enrichment, gate and `gpt-6-luna` scoring. Logs carry `news_source` (e.g. `hn+gnews`, the providers that contributed).
 
@@ -70,7 +75,9 @@ Keyless providers query `generative AI`, `OpenAI`, `LLM` sequentially (500 ms ap
 
 ### Keyword gate and optional Jev classifier
 
-The gate is a weighted keyword score (`keywordWeights.js`, one table) over title + snippet + URL slug + domain; weights: vendors/models 5, GenAI concepts 3, general AI terms (case-sensitive `AI`, artificial intelligence, machine learning, neural network) 2, weak terms 1; sum capped at 10; pass at **>= 2**. If `TYPESAFE_API_KEY` is set, Jev (Typesafe.ai System One, `POST /v1/systemone`, a `noul` yes/no question, `Authorization: Bearer`) scores each candidate first and the gate becomes `0.4 * keyword/10 + 0.6 * jev >= 0.35`; without a key, or if Jev errors, the keyword score alone decides. Optional: `TYPESAFE_BASE_URL`, `JEV_MODEL` (default `jev-latest`).
+The gate is a weighted keyword score (`keywordWeights.js`, one table) over title + snippet + URL slug + domain; weights: vendors/models 5, GenAI concepts 3, general AI terms (case-sensitive `AI`, artificial intelligence, machine learning, neural network) 2, weak terms 1; sum capped at 10; pass at **>= 2**. If `TYPESAFE_API_KEY` is set, Jev (Typesafe.ai System One, `POST /v1/systemone`, a `noul` yes/no question, `Authorization: Bearer`) scores each candidate first and the gate becomes `0.4 * keyword/10 + 0.6 * jev >= 0.35`; without a key, or if Jev errors, the keyword score alone decides. Optional: `TYPESAFE_BASE_URL`, `JEV_MODEL` (default `jev-1.14.0`).
+
+**Multi-provider order (NEWS_PROVIDERS):** providers return candidates (title/snippet/url) -> merge/dedupe -> with `TYPESAFE_API_KEY`, Jev pre-filter (concurrency `JEV_PREFILTER_CONCURRENCY`, default 5; pass when `0.4*kw/10 + 0.6*jev >= JEV_PREFILTER_THRESHOLD`, default 0.35; sensitive-harm always rejected; logs `{event:'jev_prefilter', candidates_in, passed, rejected, errors, ms}`) -> only survivors get article page fetch -> Luna scoring. A Jev error keeps the candidate and the keyword rule decides after fetch. Without a key, Jev is skipped (`jev_classifier_skipped` logged once) and the flow is keyword gate -> fetch -> Luna as before.
 
 Preview HN picks without OpenAI: `node scripts/hn-sample-candidates.mjs 2026-06-10 2026-07-15`.
 

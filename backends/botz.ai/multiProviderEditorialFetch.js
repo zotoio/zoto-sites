@@ -1,9 +1,11 @@
 import { enrichCandidatesInBatches } from './hnEditorialFetch.js';
 import { filterExcludedStoryCandidates } from './liveStoryDedup.js';
 import { noQualifyingStoryError } from './newsApiErrors.js';
+import { createJevClassifierFromEnv } from './jevClassifier.js';
+import { jevPrefilterCandidates } from './jevPrefilter.js';
 import { fetchCandidatesFromProviders } from './newsProviders/index.js';
+import { selectTopByPriority } from './sourceWeighting.js';
 import {
-    keywordScoreForArticle,
     passesHnStoryTypeGate,
     selectBestQualifyingStory,
 } from './storySelection.js';
@@ -11,15 +13,11 @@ import {
 const MAX_TO_SCORE = 25;
 
 /**
- * Pre-rank merged candidates: keyword score first (non-HN candidates carry no points), then engagement.
- * Cap matches the existing HN path (25) so downstream LLM scoring cost is unchanged.
+ * Pre-rank merged candidates by cross-provider priority (sourceWeighting.js: keyword, recency, HN engagement,
+ * provider weight, authority and multi-provider bonuses) and cap at 25 so LLM scoring cost is unchanged.
  */
-export function prepareMergedCandidatesForScoring(candidates, { maxToScore = MAX_TO_SCORE } = {}) {
-    return [...candidates]
-        .map((c) => ({ c, kw: keywordScoreForArticle(c).score }))
-        .sort((a, b) => b.kw - a.kw || (b.c.engagement || 0) - (a.c.engagement || 0))
-        .slice(0, maxToScore)
-        .map(({ c }) => c);
+export function prepareMergedCandidatesForScoring(candidates, { maxToScore = MAX_TO_SCORE, env = process.env, now = Date.now(), log = () => {} } = {}) {
+    return selectTopByPriority(candidates, { maxToScore, env, now, log });
 }
 
 /**
@@ -57,7 +55,11 @@ export async function fetchQualifyingStoryFromProviders({
     }
 
     const raw = filterExcludedStoryCandidates(candidates.filter(passesHnStoryTypeGate), excludeStoryIdentifiers);
-    const toEnrich = prepareMergedCandidatesForScoring(raw);
+    // Jev pre-filter (only with TYPESAFE_API_KEY) runs on title/snippet/source/url BEFORE any article page fetch.
+    // undefined => build from env (logs jev_classifier_skipped once when no key); null => keyword only.
+    const classifier = jevClassifier === undefined ? createJevClassifierFromEnv({ env, fetchImpl, log }) : jevClassifier;
+    const survivors = classifier ? (await jevPrefilterCandidates(raw, { jevClassifier: classifier, env, log })).kept : raw;
+    const toEnrich = prepareMergedCandidatesForScoring(survivors, { env, log });
     // Candidates that already have a snippet (news APIs / RSS) skip the extra page fetch.
     const needEnrich = toEnrich.filter((c) => !c.snippet);
     const enriched = await enrichCandidatesInBatches(needEnrich, { log, ...enrichDeps });
@@ -68,7 +70,8 @@ export async function fetchQualifyingStoryFromProviders({
         scoreArticle,
         log,
         preferEngagement: true,
-        jevClassifier,
+        // Jev already ran in the pre-filter; selection must not call it again (null => keyword gate for unflagged).
+        jevClassifier: null,
     });
     if (selected) {
         log(

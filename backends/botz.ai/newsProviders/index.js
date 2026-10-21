@@ -1,7 +1,7 @@
 import { mergeCandidates } from './normalize.js';
 import { hnProvider } from './hn.js';
 import { thenewsapiProvider } from './thenewsapi.js';
-import { KEYLESS_QUERIES, bingnewsProvider, ddgProvider, gnewsProvider } from './keyless.js';
+import { KEYLESS_QUERIES, bingnewsProvider, ddgProvider, gnewsProvider, thenewstackProvider } from './keyless.js';
 import { isNewsQuotaExhaustedResponse, mapAxiosNewsApiError, NewsQuotaExhaustedError } from '../newsApiErrors.js';
 
 /**
@@ -22,6 +22,7 @@ export const PROVIDERS = {
     ddg: ddgProvider,
     gnews: gnewsProvider,
     bingnews: bingnewsProvider,
+    thenewstack: thenewstackProvider,
 };
 
 export const PROVIDER_NAMES = Object.keys(PROVIDERS);

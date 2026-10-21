@@ -38,6 +38,10 @@ export function buildGenAiNewsSearchQuery() {
 const SENSITIVE_HARM_PATTERN =
     /\b(sexual assault|rape|molest|murder|homicide|shooting|stabbing|kidnap|domestic violence|assault charge|crime scene)\b/i;
 
+export function isSensitiveHarmText(text) {
+    return SENSITIVE_HARM_PATTERN.test(text);
+}
+
 export function articleTextForMatching(article) {
     const title = article?.title || '';
     const description = article?.description || article?.snippet || '';
@@ -171,6 +175,11 @@ export async function selectBestQualifyingStory(
     const classifier = jevClassifier === undefined ? createJevClassifierFromEnv({ log }) : jevClassifier;
     const gated = [];
     for (const candidate of candidates) {
+        // Already accepted by the Jev pre-filter (before page fetch): don't re-judge or call Jev again.
+        if (candidate?.[Symbol.for('botz.jevPrefiltered')]) {
+            gated.push(candidate);
+            continue;
+        }
         const verdict = await classifyCandidate(candidate, { jevClassifier: classifier, log });
         if (verdict.passes) {
             gated.push(candidate);

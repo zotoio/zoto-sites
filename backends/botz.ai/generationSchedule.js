@@ -2,17 +2,17 @@
  * When the next story is expected: the host crontab that runs story generation, as one config value.
  *
  * GENERATION_SCHEDULE   cron "minute hour" pairs (the remaining cron fields must be *), separated by ";".
- *                       Default "1 * * * *;0 20 * * *": hourly at minute 1, plus a daily run at 20:00.
+ *                       Default "1 * * * *": hourly at minute 1 (the daily 20:00 run is disabled); e.g. "1 * * * *;0 20 * * *" adds it.
  * GENERATION_TZ_OFFSET_MIN  minutes east of UTC of the host clock the crontab runs on (default 0: the droplet is UTC).
- * GENERATION_DELAY_S    typical seconds from a run starting to its story being published (default 90).
+ * GENERATION_DELAY_S    typical seconds from a run starting to its story being published (default 180).
  *
  * The archive endpoints publish `generation: { schedule, tz_offset_min, typical_delay_s, upcoming: [ISO...] }` so
  * clients never hard-code the schedule. `upcoming` lists several runs, so a response served a few minutes stale by
  * the CDN (short TTL + stale-while-revalidate) still contains the right next run. A run does not always publish a
  * story (nothing new qualifies), so clients move on to the following run after a grace period.
  */
-export const DEFAULT_GENERATION_SCHEDULE = '1 * * * *;0 20 * * *';
-export const DEFAULT_GENERATION_DELAY_S = 90;
+export const DEFAULT_GENERATION_SCHEDULE = '1 * * * *';   // hourly; the daily 20:00 UTC run is disabled on the host
+export const DEFAULT_GENERATION_DELAY_S = 180;   // runs take ~175 s to publish
 /** How long after a run's expected publish time clients keep waiting ("any moment now") before giving up on it. */
 export const GENERATION_GRACE_S = 600;
 

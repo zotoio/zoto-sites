@@ -230,3 +230,46 @@ test('429 backoff: non-429 errors and 403/cf-mitigated are not retried with back
     await cf.run();
     assert.deepEqual(cf.sleeps, []);
 });
+
+const cfOk = () =>
+    new Response('<html><head><meta property="og:title" content="BAD"></head></html>', {
+        status: 200,
+        headers: { 'cf-mitigated': 'challenge', 'content-type': 'text/html' },
+    });
+
+test('cf-mitigated: remembered proxy returns 200+cf-mitigated and direct 403 => skipped, no metadata, proxy route cleared', async () => {
+    const { fetchLinkedArticleMetadata } = await import('./articleEnrichment.js');
+    const h = proxyHarness([cfOk, () => new Response('', { status: 403 })]);
+    h.routeStore.set('example.com', 'proxy');
+    assert.equal(h.routeStore.get('example.com'), 'proxy');
+    const out = await fetchLinkedArticleMetadata('https://example.com/a', {
+        ...h,
+        env: { ARTICLE_FETCH_PROXY: 'http://p:1', ARTICLE_FETCH_429_RETRIES: '0' },
+    });
+    assert.deepEqual(out, { skipped: 'http_403' });
+    assert.equal(out.og_title, undefined);
+    assert.equal(h.calls.length, 2);
+    assert.notEqual(h.routeStore.get('example.com'), 'proxy', 'broken proxy route must not stay remembered');
+});
+
+test('cf-mitigated: direct 200+cf-mitigated is a challenge (skipped, never success, nothing remembered)', async () => {
+    const { fetchLinkedArticleMetadata, isUsableArticleResponse } = await import('./articleEnrichment.js');
+    assert.equal(isUsableArticleResponse(cfOk()), false);
+    assert.equal(isUsableArticleResponse(htmlOk()), true);
+    // no proxy configured
+    const h = proxyHarness([cfOk]);
+    const out = await fetchLinkedArticleMetadata('https://example.com/a', { ...h, env: {} });
+    assert.deepEqual(out, { skipped: 'cf_challenge' });
+    // proxy configured, both attempts challenged
+    const h2 = proxyHarness([cfOk, cfOk]);
+    const out2 = await fetchLinkedArticleMetadata('https://example.com/a', { ...h2, env: { ARTICLE_FETCH_PROXY: 'http://p:1' } });
+    assert.deepEqual(out2, { skipped: 'cf_challenge' });
+    assert.equal(h2.routeStore.get('example.com'), null);
+    // always mode
+    const h3 = proxyHarness([cfOk]);
+    const out3 = await fetchLinkedArticleMetadata('https://example.com/a', {
+        ...h3,
+        env: { ARTICLE_FETCH_PROXY: 'http://p:1', ARTICLE_FETCH_PROXY_MODE: 'always' },
+    });
+    assert.deepEqual(out3, { skipped: 'cf_challenge' });
+});

@@ -85,6 +85,11 @@ export function createRouteStore({ filePath, ttlMs = DEFAULT_ROUTE_TTL_HOURS * 3
             m.set(host, { route, at: now() });
             save();
         },
+        /** Forget a host's remembered route (e.g. the remembered proxy route stopped working). */
+        delete(host) {
+            const m = load();
+            if (m.delete(host)) save();
+        },
     };
 }
 

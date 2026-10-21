@@ -27,6 +27,11 @@ let layoutEpoch = 0;
 const layoutIsStale = epoch => epoch !== layoutEpoch;
 /** Story a desktop openStory() is still loading (its hash is only pushed once it renders). */
 let pendingDesktopKey = null;
+/* Module state read by input handlers must be initialised before the top-level `await boot()`: listeners are
+ * live during boot, and a key press that reaches a later `let` would hit its temporal dead zone and be lost. */
+let autoplayHistoryReplace = false;   // the next ringMove is an autoplay step (replaceState, not pushState)
+let autoplayLoad = null;              // ./autoplay.js import, once started
+let rz;                               // resize debounce timer
 const FLIP_MS = 520;
 const PERSP = 2200;
 // image shape shared with the grid tiles (style.css --img-ar 7 / 8, --img-hw): height = width * IMG_HW
@@ -223,6 +228,7 @@ let latestFlight = null;
 function fetchArchiveLatest() {
   if (!latestFlight) {
     latestFlight = archiveJson('/archive/latest', '/stubs/archive/latest.json').then(d => {
+      noteGeneration(d?.generation);
       const day = ingestDay(d);
       // the newest day is now in the store: its /archive/day/<date> URL is never fetched separately
       if (day && !dayFlight.has(day.date)) dayFlight.set(day.date, Promise.resolve(day));
@@ -244,6 +250,7 @@ function ensureArchiveIndex() {
       archiveJson('/archive/index', '/stubs/archive/index.json'),
       fetchArchiveLatest().catch(err => { console.warn(err); return null; }),
     ]).then(([raw, latest]) => {
+      noteGeneration(raw?.generation);
       const days = (raw?.days || []).filter(d => d?.date && d.count > 0).map(d => ({ date: d.date, count: d.count }));
       // index and latest load in parallel and can straddle a new story: the day body wins for its own date
       if (latest?.date) {
@@ -519,7 +526,10 @@ async function resolveLatestSlot() {
  * the centre are fetched (page 1 + whichever page a position falls in; the oldest page comes from the archive
  * totals), and only ~RING_BUFFER stories each way are loaded ahead of the user. */
 const RING_VISIBLE = 3;      // side cards each way (matches the slot layout)
-const RING_BUFFER = 4;       // stories prefetched ahead in BOTH directions (crosses the wrap point)
+const RING_PRERENDER = 3;    // extra cards each way kept in the window (3: fast queued flicks outran 2) (meshes + uploaded textures, alpha 0 off the
+                             // edge) so a card sliding in from an edge fades in already textured instead of popping in
+const RING_RADIUS = RING_VISIBLE + RING_PRERENDER;
+const RING_BUFFER = RING_RADIUS + 1;   // stories prefetched ahead in BOTH directions (crosses the wrap point): past the window
 const RING_PAGE_AHEAD = 6;   // also fetch the archive page holding positions this far past the buffer
 const RING_KEEP = 12;        // loaded stories further than this from the centre are evicted
 const RING_CONCURRENCY = 4;  // parallel story prefetches
@@ -611,7 +621,14 @@ function ringEnsureStory(r) {
   ringStats.storyLoads++;
   // text first (the centre card paints from it), then the image: side cards wait for both, so a flick never
   // lands on a half-drawn side card
-  st.textPromise = loadRingText(key).then(a => { if (ringStories.get(key) === st) st.text = a; return a; });
+  st.textPromise = loadRingText(key).then(a => {
+    if (ringStories.get(key) !== st) return a;
+    st.text = a;
+    // an unbuffered centre paints from its text right away (7:8 image box reserved, the <img> streams in);
+    // side cards still wait for the image below
+    if (FEAT[active]?.placeholder && FEAT[active].key === key) ringStoryArrived(key);
+    return a;
+  });
   st.promise = st.textPromise
     .then(async a => { await loadStoryImage(a); return a; })
     .then(a => {
@@ -689,8 +706,8 @@ function ringEntry(o) {
 }
 function ringRadii() {
   const n = ringLen();
-  const left = Math.min(RING_VISIBLE, Math.floor((n - 1) / 2));
-  return [left, Math.min(RING_VISIBLE, n - 1 - left)];
+  const left = Math.min(RING_RADIUS, Math.floor((n - 1) / 2));
+  return [left, Math.min(RING_RADIUS, n - 1 - left)];
 }
 function buildRingWindow() {
   const [L, R] = ringRadii(), feat = [];
@@ -1196,7 +1213,7 @@ function positionArrows() {
   const ref = readMoreExpanded() ? cardSpacer : cardEl;
   const h = ref.getBoundingClientRect().height;
   if (!h) return;
-  const y = Math.round((ref.offsetTop + h / 2) * 100) / 100;
+  const y = Math.round(ref.offsetTop + h / 2);   // whole px: sub-pixel skeleton -> story height differences must not nudge the arrows
   if (arrowsEl._y !== y) { arrowsEl._y = y; arrowsEl.style.setProperty('--arrow-y', y + 'px'); }
 }
 if (arrowsEl) {
@@ -1214,6 +1231,137 @@ document.addEventListener('pointerdown', e => {
 });
 window.addEventListener('resize', () => sizeExpandedCard());
 
+/* ---------------- next-story countdown ----------------
+ * When the newest story is centred, the first Newer side card (where the next story will appear; across the wrap
+ * point it would otherwise be a faint skeleton, never the oldest story) shows a pale "next story in mm:ss". The
+ * schedule comes from the backend (`generation` in /archive/index and /archive/latest: the next few cron runs and
+ * the typical publish delay), never from the client. Past the due time it reads "any moment now" and polls
+ * /archive/latest every NEXT_POLL_MS until the new story is there, then adds it to the ring (it takes that card's
+ * place). The visible text is aria-hidden; screen readers get a polite status at most once a minute. The ticker
+ * only runs while the card is on screen and the tab is visible. */
+const NEXT_STORY_HTML = '<div class="side-next-box"><span class="side-next-l">next story in</span><span class="side-next-t">--:--</span></div>';
+const NEXT_GRACE_MS = 10 * 60e3;   // default wait past a run's due time before moving on (the backend sends grace_s)
+const NEXT_POLL_MS = Math.max(1000, Number(params.get('nextpoll')) || 30e3);   // ?nextpoll= shortens it for tests
+let generation = null;             // { upcoming: ms[], delayMs }
+let nextTick = 0, nextPollAt = 0, nextPollFlight = null, nextSrMinute = null;
+const nextStats = { ticks: 0, polls: 0, pickedUp: 0, srUpdates: 0 };
+const nextSr = document.createElement('div');
+nextSr.className = 'sr-only'; nextSr.id = 'next-story-status'; nextSr.setAttribute('role', 'status'); nextSr.setAttribute('aria-live', 'polite');
+document.body.appendChild(nextSr);
+function noteGeneration(g) {
+  if (!g || !Array.isArray(g.upcoming)) return;
+  const upcoming = g.upcoming.map(t => Date.parse(t)).filter(Number.isFinite).sort((a, b) => a - b);
+  if (!upcoming.length) return;
+  const num = (v, d) => (Number.isFinite(Number(v)) && v !== null && v !== '' ? Number(v) : d);
+  generation = {
+    upcoming,
+    delayMs: Math.max(0, num(g.typical_delay_s, 0)) * 1000,
+    graceMs: Math.max(0, num(g.grace_s, NEXT_GRACE_MS / 1000)) * 1000,
+    // generated_at is wall time of the clock that wrote it (no zone): its offset, else the schedule clock's
+    stampOffsetMs: num(g.stamp_tz_offset_min, num(g.tz_offset_min, 0)) * 60e3,
+  };
+  nextStoryRefresh();
+}
+function centreIsNewest() { return !mobileMode && ringPos >= 0 && ringPos === ringLen() - 1; }
+/** generated_at ("YYYY-MM-DD-HH-mm-ss", wall time of the writing clock) -> epoch ms, using the backend's offset. */
+function stampMs(stamp) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})-(\d{2})-(\d{2})-(\d{2})/.exec(stamp || '');
+  return m ? Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) - (generation?.stampOffsetMs || 0) : 0;
+}
+function newestItem() { return archiveIndex?.days[0] && dayData.peek(archiveIndex.days[0].date)?.editorials?.[0]; }
+function newestGeneratedMs() { return stampMs(newestItem()?.generated_at); }
+/** When the next story should appear (epoch ms): the first run after the newest story, unless it is long overdue. */
+function nextStoryDue(now = Date.now()) {
+  if (!generation) return null;
+  const newest = newestGeneratedMs();
+  for (const run of generation.upcoming) {
+    const due = run + generation.delayMs;
+    if (run > newest && due + generation.graceMs > now) return due;
+  }
+  return null;
+}
+function fmtCountdown(ms) {
+  const t = Math.ceil(ms / 1000), h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, sec = t % 60;
+  const p2 = n => String(n).padStart(2, '0');
+  return h ? `${h}:${p2(m)}:${p2(sec)}` : `${p2(m)}:${p2(sec)}`;
+}
+function nextStoryEl() {
+  const el = scene.querySelector('.side-next');
+  return el && !el.hidden ? el : null;
+}
+/** Paint the countdown now and (re)arm the ticker at the next whole second; stops when nothing needs it. */
+function nextStoryRefresh() {
+  clearTimeout(nextTick); nextTick = 0;
+  const el = nextStoryEl(), due = el && centreIsNewest() ? nextStoryDue() : null;
+  if (!el || due == null) {
+    if (el) el.classList.add('is-unknown');   // no schedule (stubs / old backend): a plain faint card
+    if (nextSrMinute !== null) { nextSrMinute = null; nextSr.textContent = ''; }
+    return;
+  }
+  el.classList.remove('is-unknown');
+  const now = Date.now(), left = due - now, t = el.querySelector('.side-next-t'), l = el.querySelector('.side-next-l');
+  const label = left > 0 ? 'next story in' : 'next story', time = left > 0 ? fmtCountdown(left) : 'any moment now';
+  if (l.textContent !== label) l.textContent = label;
+  if (t.textContent !== time) t.textContent = time;
+  el.classList.toggle('is-due', left <= 0);
+  nextStats.ticks++;
+  // screen readers: one polite update per whole minute at most
+  const mins = left > 0 ? Math.ceil(left / 60e3) : 0;
+  if (mins !== nextSrMinute) {
+    nextSrMinute = mins; nextStats.srUpdates++;
+    nextSr.textContent = mins ? `Next story expected in about ${mins} minute${mins === 1 ? '' : 's'}` : 'Next story expected any moment now';
+  }
+  if (left <= 0 && now >= nextPollAt) pollForNewStory();
+  if (document.visibilityState !== 'hidden') nextTick = setTimeout(nextStoryRefresh, 1000 - (now % 1000) + 5);
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') { clearTimeout(nextTick); nextTick = 0; } else nextStoryRefresh();
+});
+/** Past the due time: re-read /archive/latest (bypassing the browser cache) until the newest story changes. */
+function pollForNewStory() {
+  if (nextPollFlight || useLocalStubs) return;
+  nextPollAt = Date.now() + NEXT_POLL_MS; nextStats.polls++;
+  nextPollFlight = fetch('/archive/latest', { cache: 'no-cache' }).then(r => (r.ok ? r.json() : null)).then(day => {
+    noteGeneration(day?.generation);
+    // identity is the file key AND its generated_at: a later run in the same hour (the daily run then the hourly one)
+    // rewrites the same hourly key with a new story
+    const top = day?.editorials?.[0], cur = newestItem();
+    if (top?.cache_key && archiveIndex && (top.cache_key !== cur?.cache_key || (top.generated_at || '') !== (cur?.generated_at || ''))) pickUpNewStory(day);
+  }).catch(() => {}).finally(() => { nextPollFlight = null; });
+}
+/** A newer day body arrived: extend the index and the ring. Chrono positions count from the oldest story, so every
+ *  existing position (and the centre) stays put; the new story takes the countdown card's slot on the Newer side. */
+function pickUpNewStory(day) {
+  if (!day?.date || !Array.isArray(day.editorials) || !archiveIndex) return;
+  const days = archiveIndex.days.map(d => ({ ...d }));
+  const i = days.findIndex(d => d.date === day.date);
+  if (i > 0) return;                        // an older day changed: not a new newest story
+  const top = day.editorials[0], cur = newestItem();
+  if (stampMs(top?.generated_at) <= newestGeneratedMs()) return;   // not newer than what we show
+  // same hourly file rewritten by a later run: the story behind that key is replaced in place
+  const replaced = i === 0 && day.count === days[0].count && top.cache_key === cur?.cache_key ? top.cache_key : null;
+  if (i === 0) { if (day.count < days[0].count || (day.count === days[0].count && !replaced)) return; days[0].count = day.count; }
+  else if (day.date > days[0].date) days.unshift({ date: day.date, count: day.count });
+  else return;
+  ingestDay(day);
+  if (replaced) {   // drop everything cached for the old story under that key; the ring reloads it from the store
+    ringStories.delete(replaced); imgs.delete(replaced); gl?.evictStory(replaced);
+    const r = ringIndexOfKey(replaced);
+    if (r >= 0 && !mobileMode && ringPos >= 0) ringEnsureStory(r);
+  }
+  setArchiveIndex(days);
+  latestFlight = Promise.resolve(day);
+  newestArchiveKey = day.editorials[0].cache_key;
+  if (day.editorials[0].entry) { globalLatestPayload = [day.editorials[0].entry]; latestIdentity = storyIdentity(globalLatestPayload[0]); }
+  if (ringReady) ringTotal = archiveIndex.total;
+  nextStats.pickedUp++; if (replaced) nextStats.replaced = (nextStats.replaced || 0) + 1;
+  if (storyAnnouncer) storyAnnouncer.textContent = `New story: ${day.editorials[0].title || ''}`;
+  if (!mobileMode && ringPos >= 0 && FEAT.length) {
+    if (busy || applyingWindow) arrivalsPending = true; else ringRefresh();
+    ringSchedule();
+  }
+}
+
 const SIDE_SKEL_HTML = '<div class="skel side-skel-img"></div><div class="side-skel-txt"><div class="skel skel-line"></div><div class="skel skel-line skel-w60"></div></div>';
 /** Side cards: nodes are reused by story (a flick only re-orders them), listeners are delegated on the scene. */
 function rebuildSideButtons() {
@@ -1221,10 +1369,12 @@ function rebuildSideButtons() {
   for (const n of scene.children) if (n._storyId && !reuse.has(n._storyId)) reuse.set(n._storyId, n);
   sideBtns = FEAT.map((a, i) => {
     if (a.placeholder) {
-      // not loaded yet, or across the wrap point while the latest story is centred: faint CSS skeleton card
+      // not loaded yet, or across the wrap point while the latest story is centred: faint CSS skeleton card.
+      // The first Newer slot beside the newest story is where the next story will land: it shows the countdown.
       const d = document.createElement('div');
       d.className = 'side side-skel'; d.dataset.i = String(i); d.setAttribute('aria-hidden', 'true');
-      d.innerHTML = SIDE_SKEL_HTML;
+      if (i === active + 1 && a.seam && centreIsNewest()) { d.classList.add('side-next'); d.innerHTML = NEXT_STORY_HTML; }
+      else d.innerHTML = SIDE_SKEL_HTML;
       return d;
     }
     let b = reuse.get(a.id);
@@ -1240,6 +1390,7 @@ function rebuildSideButtons() {
     return b;
   });
   scene.replaceChildren(...sideBtns);
+  nextStoryRefresh();
 }
 scene.addEventListener('click', e => {
   const b = e.target.closest?.('button.side[data-i]');
@@ -1483,6 +1634,7 @@ function layoutButtons() {
     if (b._label !== label) { b._label = label; b.setAttribute('aria-label', label); }
   });
   updateEndMarker();
+  if (!nextTick) nextStoryRefresh();   // the countdown card can become visible on resize
 }
 
 /* ---------------- card snapshot -> canvas (texture for the WebGL flip surface) ---------------- */
@@ -1618,6 +1770,7 @@ function sideTexture(i) {
 let gl = null;
 let glFlight = null;
 const glStats = { renderersCreated: 0 };
+const edgeStats = { popIns: 0, untextured: 0, placeholders: 0 };
 function ensureGL() {
   if (reduced || params.get('mode') === 'css') return Promise.resolve(null);
   if (!glFlight) glFlight = initGL().then(g => { if (!g) glFlight = null; return g; });
@@ -1785,8 +1938,22 @@ async function initGL() {
   function update() {
     const g = geom;
     texStats.frames++;
+    const seen = new Map();
+    const win = new Set(FEAT.map(a => a?.id));
+    queueMicrotask(() => { prevAlpha = seen; prevWindow = win; });
     sides.forEach((s, i) => {
       const L = slot(offsets[i]), vis = g.showSides && !FEAT[i]?.placeholder && L.alpha > 0.004 && Math.abs(offsets[i]) > 0.02;
+      // edge pop-in accounting (cheap; read by the frame-sampling checks): a card drawn at a clear alpha that was not
+      // drawn in the previous frame, a visible card without its texture, or a loading placeholder in a visible slot
+      // (the centre card handing over to/from the flip surface near offset 0 is not an edge)
+      if (vis) seen.set(FEAT[i]?.id, L.alpha);
+      if (g.showSides && Math.abs(offsets[i]) > 1.5) {
+        const id = FEAT[i]?.id;
+        if (vis) {
+          if (L.alpha > 0.15 && !(prevAlpha.get(id) > 0) && !prevWindow.has(id)) edgeStats.popIns++;   // was not even pre-rendered
+          if (s.main.material.uniforms.uTex.value === blank) edgeStats.untextured++;
+        } else if (FEAT[i]?.placeholder && !FEAT[i].seam && L.alpha > 0.15) edgeStats.placeholders++;
+      }
       s.hi += (s.hiT - s.hi) * 0.25;
       [s.main, s.refl].forEach(m => {
         m.visible = vis; if (!vis) return;
@@ -1844,6 +2011,7 @@ async function initGL() {
   stageIO.observe(stage);
   canvas.addEventListener('webglcontextlost', e => { e.preventDefault(); contextLost = true; halt(); });
   canvas.addEventListener('webglcontextrestored', () => { contextLost = false; needs = true; kick(); });
+  let prevAlpha = new Map(), prevWindow = new Set();
   function bindSides() {
     // point the mesh pool at the current window's textures; textures that dropped out stay cached (LRU)
     sides.length = 0;
@@ -1853,6 +2021,8 @@ async function initGL() {
       if (k) inUse.add(k);
       s.key = k; s.hi = 0; s.hiT = 0;
       [s.main, s.refl].forEach(m => { m.material.uniforms.uTex.value = tex; });
+      // upload now, not on the first frame the (still invisible) edge card turns visible mid-animation
+      if (tex !== blank && !tex.__uploaded) { renderer.initTexture(tex); tex.__uploaded = true; texStats.preUploads = (texStats.preUploads || 0) + 1; }
       sides.push(s);
     });
     for (let j = FEAT.length; j < pool.length; j++) {
@@ -1888,7 +2058,7 @@ async function initGL() {
     stats() {
       const info = renderer.info;
       return { textures: info.memory.textures, geometries: info.memory.geometries, programs: info.programs?.length ?? null,
-        sideTexturesCached: sideTex.size, sideTexturesInUse: inUse.size, sideMeshPool: pool.length, ...texStats,
+        edge: { ...edgeStats }, sideTexturesCached: sideTex.size, sideTexturesInUse: inUse.size, sideMeshPool: pool.length, ...texStats,
         loop: { ...loopStats, hidden, offscreen, suspended, contextLost, rafPending: !!raf }, flipDrawn };
     },
     dispose() {
@@ -2088,8 +2258,15 @@ async function goToIndex(target, fromHash = false, { instant = false, replace = 
 /** The centre card's image decoded (or failed), bounded so a slow image never holds up navigation. */
 function cardImageDecoded(el, maxMs = 120) {
   const im = el.querySelector('img.card-img');
-  if (!im || !im.getAttribute('src') || (im.complete && im.naturalWidth && !im.decode)) return Promise.resolve();
-  return Promise.race([im.decode().catch(() => {}), wait(maxMs)]);
+  if (!im || !im.getAttribute('src')) return Promise.resolve();
+  let ready;
+  try {
+    // decode() where it exists (a rejection still counts as done); otherwise complete, or the load/error event
+    ready = typeof im.decode === 'function' ? Promise.resolve(im.decode()).catch(() => {})
+      : im.complete ? Promise.resolve()
+      : new Promise(res => { im.addEventListener('load', res, { once: true }); im.addEventListener('error', res, { once: true }); });
+  } catch { ready = Promise.resolve(); }   // a decode() that throws synchronously
+  return Promise.race([ready, wait(maxMs)]);   // capped: the caller always shows the card afterwards
 }
 
 async function go(target, fromHash = false) {
@@ -2465,7 +2642,7 @@ endMarker?.addEventListener('click', () => {
 endMarker?.addEventListener('keydown', e => {
   if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); endMarker?.click(); }
 });
-let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(relayout, 120); });
+window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(relayout, 120); });
 wide.addEventListener('change', relayout);
 small.addEventListener('change', async () => {
   if (mobileMode === small.matches) return;
@@ -2494,8 +2671,6 @@ small.addEventListener('change', async () => {
 /* idle autoplay (desktop only; ./autoplay.js, loaded on the desktop layout unless reduced motion or ?autoplay=0):
    after AUTOPLAY_IDLE_MS without input, one step towards older stories every AUTOPLAY_STEP_MS through navRelative(-1),
    the same path as ArrowLeft, so wrap-around, prefetch and the day JSON behave as usual */
-let autoplayHistoryReplace = false;
-let autoplayLoad = null;
 function autoplayBlocked() {
   if (mobileMode) return 'mobile';
   if (readMoreExpanded()) return 'read-more';
@@ -2514,4 +2689,4 @@ function maybeStartAutoplay() {
 }
 small.addEventListener('change', maybeStartAutoplay);
 maybeStartAutoplay();
-window.__botzCarousel = { go, navRelative, openStory, get active() { return active; }, get busy() { return busy; }, get navQueue() { return navQueue; }, get navLog() { return window.__navLog; }, get centerKey() { return FEAT[active]?.id; }, get featIds() { return FEAT.map(a => a.id); }, get feat() { return FEAT.map((a, i) => ({ id: a.key || a.id, offset: i - active, placeholder: !!a.placeholder, seam: !!a.seam, ring: a.ringIndex })); }, get ring() { return { pos: ringPos, len: ringLen(), total: ringTotal, days: archiveIndex?.days.length || 0, wrapCrossed, pages: [...dayData.keys()].sort(), loaded: [...ringStories.values()].filter(x => x.article).length, cached: ringStories.size, keyAt: r => ringKeyAt(r), ...ringStats }; }, get modalOpen() { return imageModalOpen(); }, get readMore() { return { expanded: readMoreExpanded(), ...readMoreStats }; }, get showLatestSlot() { return showLatestSlot; }, get latestIsArchiveTop() { return latestIsArchiveTop; }, get newestArchiveKey() { return newestArchiveKey; }, get mode() { return gl ? 'webgl' : (reduced ? 'reduced' : 'css'); }, get editorialRequestCount() { return editorialRequestCount; }, get store() { return { days: dayData.size, stories: storyEntries.size, urls: [...archiveUrlsSeen], storyCount: dayStoreStories, max: DAY_STORE_MAX_STORIES, inFlight: jsonFlight.size, ...dayStoreStats }; }, get perf() { return { gl: gl?.stats() || null, renderersCreated: glStats.renderersCreated, imgs: imgs.size, imgMax: IMG_CACHE_MAX, ringStories: ringStories.size, cardHeights: cardHeightCache.size, measure: { ...measureStats }, snapshots: snapStats.count, images: { ...imageStats, variantMisses: variantMisses.size }, paint: { ...paintStats }, navLog: window.__navLog.length, tiles: tileIds.size }; }, get latestSlotId() { return LATEST_SLOT_ID; }, get mobileMode() { return mobileMode; }, ready: true };
+window.__botzCarousel = { go, navRelative, openStory, get active() { return active; }, get busy() { return busy; }, get navQueue() { return navQueue; }, get navLog() { return window.__navLog; }, get centerKey() { return FEAT[active]?.id; }, get featIds() { return FEAT.map(a => a.id); }, get feat() { return FEAT.map((a, i) => ({ id: a.key || a.id, offset: i - active, placeholder: !!a.placeholder, seam: !!a.seam, ring: a.ringIndex })); }, get ring() { return { pos: ringPos, len: ringLen(), total: ringTotal, days: archiveIndex?.days.length || 0, wrapCrossed, pages: [...dayData.keys()].sort(), loaded: [...ringStories.values()].filter(x => x.article).length, cached: ringStories.size, keyAt: r => ringKeyAt(r), ...ringStats }; }, get modalOpen() { return imageModalOpen(); }, get readMore() { return { expanded: readMoreExpanded(), ...readMoreStats }; }, get showLatestSlot() { return showLatestSlot; }, get latestIsArchiveTop() { return latestIsArchiveTop; }, get newestArchiveKey() { return newestArchiveKey; }, get mode() { return gl ? 'webgl' : (reduced ? 'reduced' : 'css'); }, get editorialRequestCount() { return editorialRequestCount; }, get store() { return { days: dayData.size, stories: storyEntries.size, urls: [...archiveUrlsSeen], storyCount: dayStoreStories, max: DAY_STORE_MAX_STORIES, inFlight: jsonFlight.size, ...dayStoreStats }; }, get perf() { return { gl: gl?.stats() || null, renderersCreated: glStats.renderersCreated, imgs: imgs.size, imgMax: IMG_CACHE_MAX, ringStories: ringStories.size, cardHeights: cardHeightCache.size, measure: { ...measureStats }, snapshots: snapStats.count, images: { ...imageStats, variantMisses: variantMisses.size }, paint: { ...paintStats }, navLog: window.__navLog.length, tiles: tileIds.size }; }, get latestSlotId() { return LATEST_SLOT_ID; }, get mobileMode() { return mobileMode; }, get next() { return { ...nextStats, due: nextStoryDue(), centreIsNewest: centreIsNewest(), sr: nextSr.textContent }; }, ready: true };

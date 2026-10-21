@@ -169,7 +169,7 @@ a:hover{color:var(--green-hi)}
   .card-head{margin-bottom:14px; padding-bottom:10px}
   .card-agent{margin-bottom:10px}
 }
-.browse h2{font-size:18px; color:var(--muted); font-weight:bold; margin:0 0 14px; letter-spacing:.03em}
+.browse h2{font-size:18px; color:#e3e8e3; text-shadow:0 1px 2px rgba(0,0,0,.6); font-weight:bold; margin:0 0 14px; letter-spacing:.03em}
 .grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:20px}
 .tile{display:block; background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:hidden; color:var(--text); transition:transform .2s ease, border-color .2s ease}
 .tile:hover{transform:translateY(-3px); border-color:rgba(47,207,55,.45); color:var(--text)}
@@ -253,6 +253,15 @@ a:hover{color:var(--green-hi)}
 .skel-meta-line:nth-child(2){width:62%} .skel-meta-line:nth-child(3){width:54%} .skel-meta-line:nth-child(4){width:36%; margin-bottom:0}
 /* faint side-card placeholders on the wide carousel (positioned by the same slot maths as the real side cards) */
 .scene .side-skel{pointer-events:none; cursor:default; background:var(--card); border:1px solid var(--line); border-radius:14px; overflow:hidden}
+/* the Newer slot beside the newest story: a pale "next story in mm:ss" (fixed box, absolutely placed text, tabular
+   digits: ticking never changes any size, so no layout shift; the card's own opacity comes from its slot) */
+.scene .side-next{display:grid; place-items:center; background:linear-gradient(180deg, rgba(23,27,24,.7), rgba(16,19,17,.7)); border-style:dashed}
+.scene .side-next .side-next-box{display:grid; gap:.35em; justify-items:center; text-align:center; color:#b8c2b9; font:400 calc(var(--sw, 300px) * .05)/1.2 Arial, sans-serif; letter-spacing:.04em}
+.scene .side-next .side-next-t{font-size:calc(var(--sw, 300px) * .11); font-weight:700; color:#d6ddd6; font-variant-numeric:tabular-nums; letter-spacing:.02em; min-width:5.2ch}
+.scene .side-next.is-due .side-next-t{font-size:calc(var(--sw, 300px) * .075); min-width:0}
+.scene .side-next.is-unknown .side-next-box{visibility:hidden}
+.mode-gl .scene .side-next > *{visibility:visible}
+.mode-gl .scene .side-next.is-unknown > *{visibility:hidden}
 .mode-gl .scene .side-skel > *{visibility:visible}
 .side-skel-img{width:100%; aspect-ratio:var(--img-ar); border-radius:0}
 .side-skel-txt{padding:6% 6%}
@@ -270,7 +279,7 @@ a:hover{color:var(--green-hi)}
 /* centred carousel card image opens the modal viewer */
 .card-img-btn{display:block; width:100%; padding:0; margin:0; border:0; background:none; border-radius:10px; cursor:zoom-in; line-height:0}
 .card-img-btn:focus-visible{outline:3px solid var(--green-hi); outline-offset:3px}
-html.modal-open{overflow:hidden}
+html.modal-open{overflow:hidden; scrollbar-gutter:stable}   /* classic scrollbars: the lock leaves an equal gutter, so the page width (and every vw size) does not jump */
 .img-modal{position:fixed; inset:0; z-index:2000; display:grid; place-items:center; padding:clamp(16px, 4vh, 48px) clamp(16px, 4vw, 64px);
   background:rgba(4,6,5,.88); opacity:0; transition:opacity 200ms ease}
 .img-modal[hidden]{display:none}
@@ -305,7 +314,11 @@ html.modal-open{overflow:hidden}
   .skel-readmore{display:block; flex:none; height:calc(1.4em + 16px); margin:12px 0 0 auto}
   .skel-body .skel-meta{display:none}
 
-  .stage.has-expanded-card{z-index:6}   /* above the grid (z-index 4), which overlaps the stage bottom */
+  /* Expanded: only the card (z 30) and arrows (z 35) rise above the grid (z 4). The stage stops being a stacking
+     context, so its own floor layers (canvas 0, scene 1, bottom fade 2) stay under the grid exactly as when
+     collapsed: the "More stories" heading is never dimmed by the fade, and the whole overlay, including the part
+     over the grid, is the top hit target for clicks, links and text selection. */
+  .stage.has-expanded-card{isolation:auto; z-index:auto}
   .stage.has-expanded-card .card-spacer{display:block}
   .card.is-expanded{
     position:absolute; left:0; right:0; top:var(--card-top, 0); margin:0 auto; z-index:30;

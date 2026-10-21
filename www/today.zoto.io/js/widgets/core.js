@@ -7,6 +7,12 @@ import {
 } from '../lib-ui.js';
 import { weatherIcon, weatherLabel } from '../weather-utils.js';
 import { attachSettingsPopover } from '../widget-helpers.js';
+import {
+  attachLocationSearch,
+  clearSavedLocation,
+  loadSavedLocation,
+  saveLocation,
+} from '../location-search.js';
 import { getSettingsFields } from '../widget-registry.js';
 import { setWidgetGridHeight } from '../widget-grid-resize.js';
 
@@ -35,12 +41,29 @@ export async function mount(type, body, ctx, settings = {}, onSettings) {
   switch (type) {
     case 'location':
       body.innerHTML = `
+        <div class="loc-row">
+        <div class="loc-info">
         <p class="eyebrow">Today</p>
         <h1 class="loc-title">${loc.placeName || 'Today'}</h1>
         <p class="meta loc-meta">${[loc.city, loc.region, loc.country, loc.timezone, loc.source ? `via ${loc.source}` : '']
           .filter(Boolean)
-          .join(' · ')}</p>`;
-      return { resize() {}, destroy() {} };
+          .join(' · ')}</p>
+        </div>
+        <div class="loc-search-slot"></div>
+        </div>`;
+      const search = attachLocationSearch(body.querySelector('.loc-search-slot'), {
+        fetchJson: ctx.fetch,
+        hasSaved: Boolean(loadSavedLocation()),
+        onSelect: (place) => {
+          saveLocation(place);
+          window.location.reload();
+        },
+        onReset: () => {
+          clearSavedLocation();
+          window.location.reload();
+        },
+      });
+      return { resize() {}, destroy: () => search.destroy() };
     case 'weather': {
       body.innerHTML = `
         <div class="weather-now"><div class="wx-icon"></div><div><p class="temp"></p><p class="wx-label"></p></div></div>

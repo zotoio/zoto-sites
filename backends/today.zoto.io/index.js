@@ -36,6 +36,7 @@ import {
   enrichPlaceName,
   locationFromCloudflareHeaders,
   locationFromIp,
+  searchPlaces,
 } from './lib/geocode.js';
 import { fetchHolidays } from './lib/holidays.js';
 import { fetchIssNow, fetchIssTrack } from './lib/iss.js';
@@ -93,6 +94,26 @@ app.get('/api/place', async (req, res) => {
     return res.json(loc);
   } catch {
     return res.json(demoLocation());
+  }
+});
+
+app.get('/api/places/search', async (req, res) => {
+  const q = (req.query.q || '').toString().trim().slice(0, 100);
+  if (q.length < 2) {
+    return res.json({ results: [] });
+  }
+  if (isDemoRequest(req)) {
+    const demo = demoLocation();
+    return res.json({
+      results: [{ id: 'demo', name: demo.city || demo.placeName, region: demo.region || '', country: demo.country || '',
+        countryCode: demo.countryCode || '', lat: demo.lat, lon: demo.lon, timezone: demo.timezone || '', placeName: demo.placeName }],
+    });
+  }
+  try {
+    const results = await searchPlaces(q);
+    return res.json({ results });
+  } catch {
+    return res.status(502).json({ error: 'Place search unavailable' });
   }
 });
 

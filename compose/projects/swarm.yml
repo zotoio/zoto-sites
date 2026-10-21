@@ -1,0 +1,30 @@
+# swarm.botz.ai — botz-mcp-swarm dashboard/scheduler (zotoio/botz-mcp-swarm, private).
+#
+# Source: a gitignored checkout at backends/botz-mcp-swarm (with submodules), e.g.
+#   git clone --recurse-submodules https://github.com/zotoio/botz-mcp-swarm.git backends/botz-mcp-swarm
+#   git -C backends/botz-mcp-swarm pull --ff-only && git -C backends/botz-mcp-swarm submodule update --init
+# The image is built from that repo's Dockerfile. Config/secrets: backends/swarm/.env
+# (copy backends/swarm/.env.example). State persists in backends/swarm/data.
+services:
+  swarm:
+    build:
+      context: ./backends/botz-mcp-swarm
+      dockerfile: Dockerfile
+    image: zoto-sites-swarm
+    container_name: swarm
+    restart: unless-stopped
+    env_file:
+      - ./backends/swarm/.env
+    environment:
+      PORT: 4310
+      SWARM_BASE_URL: https://swarm.botz.ai
+    expose:
+      - "4310"
+    volumes:
+      - ./backends/swarm/data:/data/.botz
+    mem_limit: 1536m
+
+  # nginx resolves http://swarm:4310 at startup; make sure the container exists first.
+  nginx:
+    depends_on:
+      - swarm

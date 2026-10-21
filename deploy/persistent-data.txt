@@ -4,9 +4,13 @@
 # DATA — editorial archive (*.json + images/*.png). If non-empty before deploy, must stay non-empty.
 backends/botz.ai/cache
 
+# DATA — swarm.botz.ai service state (policy, sessions, worker tokens, runs, as json). Must stay non-empty once populated.
+backends/swarm/data
+
 # CONFIG — secrets and service configuration (not file-count guarded by deploy-safe.sh).
 backends/botz.ai/.env
 backends/discord/.env
+backends/swarm/.env
 
 # DERIVED — optional origin TLS (sync-ssl.sh, Origin CA, etc.). Empty ssl/ is ok (self-signed at start). Never commit.
 ssl
@@ -14,4 +18,5 @@ ssl
 # ALLOWED_COMPOSE_BIND_SOURCES — host paths that may appear as bind-mount sources in docker-compose.yml.
 ./backends/botz.ai/cache
 ./backends/botz.ai/usage
+./backends/swarm/data
 ${SSL_CERT_DIR:-./ssl}

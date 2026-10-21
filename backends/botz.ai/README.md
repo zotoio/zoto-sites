@@ -57,6 +57,11 @@ Days with no qualifying story return HTTP **422** (`no_qualifying_story`, logged
 | `ddg` | `html.duckduckgo.com/html/` (past day) | none, live only |
 | `gnews` | Google News RSS search (`when:1d`) | none, live only |
 | `bingnews` | Bing News RSS | none, live only |
+| `thenewstack` | `https://thenewstack.io/blog/feed/` RSS (title/link/pubDate/description); 1 request per run, 8 s timeout, no retries | none, live only |
+
+**Source weighting (top-25 cap).** After the Jev/keyword gates, `sourceWeighting.js` ranks survivors by
+`priority = (0.45*keyword + 0.30*recency + 0.25*engagement) * providerWeight + authorityBonus + multiProviderBonus`
+and only the top 25 go to enrichment/luna scoring (final pick is still luna score, then engagement). `keyword` = keyword score/10; `recency` = `0.5^(age_h/12)` (missing date => 0.25); `engagement` (HN only) = `min(1,(log1p(points)+0.5*log1p(comments))/9.08)`; provider weights default `hn=1.0,thenewsapi=0.9,thenewstack=0.9,gnews=0.8,bingnews=0.8,ddg=0.7`; authority bonus `+0.05` for non-HN items from reuters/apnews/bbc/theverge/arstechnica/techcrunch/wired/nytimes/ft/bloomberg/technologyreview/anthropic/openai/deepmind/thenewstack; multi-provider bonus `+0.05` per extra provider (same URL or title), max `+0.15`. Env overrides: `SOURCE_WEIGHTS`, `SOURCE_RECENCY_HALF_LIFE_HOURS`, `SOURCE_COMPONENT_WEIGHTS`, `SOURCE_AUTHORITY_BONUS`, `SOURCE_AUTHORITY_DOMAINS`, `SOURCE_MULTI_PROVIDER_BONUS`. The top 5 are logged as `{event:'source_weighting_top', items:[{url,provider,priority,components}]}`.
 
 Keyless providers query `generative AI`, `OpenAI`, `LLM` sequentially (500 ms apart, 8 s timeout, one attempt, no retries). Candidates are normalized (`title, url, source, published_at, snippet, points/num_comments/engagement, provider`), merged and deduped by normalized URL (scheme, `www.`, tracking params, fragment, trailing slash ignored), then go through the existing enrichment, gate and `gpt-6-luna` scoring. Logs carry `news_source` (e.g. `hn+gnews`, the providers that contributed).
 

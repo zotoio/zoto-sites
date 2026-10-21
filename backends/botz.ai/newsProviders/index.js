@@ -1,7 +1,7 @@
 import { mergeCandidates } from './normalize.js';
 import { hnProvider } from './hn.js';
 import { thenewsapiProvider } from './thenewsapi.js';
-import { bingnewsProvider, ddgProvider, gnewsProvider } from './keyless.js';
+import { bingnewsProvider, ddgProvider, gnewsProvider, thenewstackProvider } from './keyless.js';
 
 /**
  * Multi-provider news candidate sources.
@@ -21,6 +21,7 @@ export const PROVIDERS = {
     ddg: ddgProvider,
     gnews: gnewsProvider,
     bingnews: bingnewsProvider,
+    thenewstack: thenewstackProvider,
 };
 
 export const PROVIDER_NAMES = Object.keys(PROVIDERS);

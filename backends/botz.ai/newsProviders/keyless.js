@@ -172,3 +172,31 @@ export const bingnewsProvider = makeKeylessProvider({
     buildUrl: (q) => `https://www.bing.com/news/search?${new URLSearchParams({ q, format: 'rss' })}`,
     parse: (xml) => parseNewsRss(xml),
 });
+
+/**
+ * The New Stack blog RSS: one request per run, 8 s timeout, no retries, live only, keyless.
+ * Items carry title/link/pubDate/description; description HTML is stripped to text.
+ */
+export const THENEWSTACK_FEED_URL = 'https://thenewstack.io/blog/feed/';
+
+export const thenewstackProvider = {
+    name: 'thenewstack',
+    isAvailable: () => ({ ok: true }),
+    async fetchCandidates({ asOfDate = null, fetchImpl = fetch, log = () => {} }) {
+        if (asOfDate) {
+            log(JSON.stringify({ event: 'news_provider_skipped', provider: 'thenewstack', reason: 'live_only' }));
+            return { candidates: [], requests: 0 };
+        }
+        try {
+            const xml = await fetchText(fetchImpl, THENEWSTACK_FEED_URL, 'application/rss+xml,application/xml,text/xml');
+            const items = parseNewsRss(xml, { max: 50 });
+            return {
+                candidates: items.map((item) => makeCandidate('thenewstack', { ...item, source: 'thenewstack.io' })),
+                requests: 1,
+            };
+        } catch (error) {
+            log(JSON.stringify({ event: 'news_provider_query_failed', provider: 'thenewstack', error: error.message }));
+            return { candidates: [], requests: 1 };
+        }
+    },
+};

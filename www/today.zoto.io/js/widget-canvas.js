@@ -15,6 +15,19 @@ import {
 import { GRID_GUTTER_PX } from './grid-config.js';
 import { normalizeWidgetLayout } from './layout-normalize.js';
 
+/** Shared header icon per widget category (consistent card chrome). */
+const CATEGORY_ICONS = {
+  core: '★',
+  time: '◷',
+  sky: '☾',
+  weather: '☁',
+  info: 'ℹ',
+  productivity: '✎',
+  fun: '✦',
+  transport: '⇄',
+  cameras: '◉',
+};
+
 const MOBILE_MQ = window.matchMedia('(max-width: 768px)');
 
 function gridColumnsForViewport(ultrawideActive) {
@@ -146,7 +159,7 @@ export function initWidgetCanvas(ctx, options = {}) {
     item.setAttribute('gs-min-h', String(def.minH));
 
     const content = document.createElement('div');
-    content.className = 'grid-stack-item-content widget';
+    content.className = `grid-stack-item-content widget widget-cat-${def.category || 'core'}`;
     const settingsBtn =
       getSettingsFields(entry.type).length > 0
         ? `<button type="button" class="widget-settings" aria-label="Settings for ${def.title}">⚙</button>`
@@ -155,6 +168,7 @@ export function initWidgetCanvas(ctx, options = {}) {
       <header class="widget-head">
         <button type="button" class="widget-drag-handle" aria-label="Move ${def.title} widget">
           <span class="handle-grip" aria-hidden="true">⋮⋮</span>
+          <span class="widget-icon" aria-hidden="true">${CATEGORY_ICONS[def.category] || '◆'}</span>
           <span class="widget-title">${def.title}</span>
         </button>
         <div class="widget-actions">

@@ -20,12 +20,19 @@ export async function fetchIssNow() {
   );
 }
 
+export function issTrackTimestamps(seconds = 360, now = Date.now()) {
+  const end = Math.floor(now / 1000);
+  const span = Math.max(60, Math.min(5400, Number(seconds) || 360));
+  return Array.from({ length: 10 }, (_, i) => Math.round(end - span + (span * i) / 9));
+}
+
 export async function fetchIssTrack(seconds = 360) {
   return cached(
     `iss:track:${seconds}`,
     async () => {
       const { data } = await axios.get('https://api.wheretheiss.at/v1/satellites/25544/positions', {
-        params: { seconds },
+        // API takes up to 10 unix timestamps (it rejects a `seconds` param).
+        params: { timestamps: issTrackTimestamps(seconds).join(',') },
         timeout: 10000,
       });
       const positions = (data || []).map((p) => ({

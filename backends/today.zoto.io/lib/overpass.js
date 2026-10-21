@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { cached } from './cache.js';
+import { OVERPASS_URL } from './http.js';
 
 function haversineM(lat1, lon1, lat2, lon2) {
   const R = 6371000;
@@ -50,7 +51,7 @@ export async function fetchNearbyTransit(lat, lon, radiusM = 900) {
 out body 40;
 `;
       const { data } = await axios.post(
-        'https://overpass-api.de/api/interpreter',
+        OVERPASS_URL,
         `data=${encodeURIComponent(query)}`,
         {
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

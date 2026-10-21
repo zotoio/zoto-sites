@@ -221,7 +221,7 @@ export async function fetchNearbyTrafficCameras(lat, lon, countryCode = '') {
 
       if (all.length === 0) {
         return {
-          source: 'demo',
+          source: 'live',
           configured,
           messages,
           providers: [],

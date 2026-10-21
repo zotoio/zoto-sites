@@ -79,8 +79,8 @@ export function bikeBarsSvg(stations, w = 200, h = 72) {
 
 export function pollenBarsSvg(pollen) {
   const items = [
-    { label: 'Grass', v: pollen?.grass ?? 1 },
-    { label: 'Tree', v: pollen?.tree ?? 1 },
+    { label: 'Grass', v: pollen?.grass ?? 0 },
+    { label: 'Tree', v: pollen?.tree ?? 0 },
     { label: 'Weed', v: pollen?.weed ?? 0 },
   ];
   const rows = items
@@ -92,9 +92,15 @@ export function pollenBarsSvg(pollen) {
   return `<ul class="pollen-bars">${rows}</ul>`;
 }
 
-export function tideCurveSvg(w = 200, h = 64) {
-  const path =
-    'M 4 40 C 30 10, 50 55, 75 35 S 120 8, 150 38 S 185 58, 196 28 L 196 60 L 4 60 Z';
+export function tideCurveSvg(series) {
+  const vals = (Array.isArray(series) ? series : []).filter((v) => typeof v === 'number');
+  let path = 'M 4 40 C 30 10, 50 55, 75 35 S 120 8, 150 38 S 185 58, 196 28 L 196 60 L 4 60 Z';
+  if (vals.length > 1) {
+    const min = Math.min(...vals);
+    const span = Math.max(...vals) - min || 1;
+    const pts = vals.map((v, i) => `${(4 + (i / (vals.length - 1)) * 192).toFixed(1)} ${(56 - ((v - min) / span) * 48).toFixed(1)}`);
+    path = `M ${pts.join(' L ')} L 196 60 L 4 60 Z`;
+  }
   return `<svg class="viz-tide" viewBox="0 0 200 64" aria-hidden="true">
     <path d="${path}" fill="rgba(56,189,248,0.2)" stroke="#38bdf8" stroke-width="1.5"/>
     <line x1="4" y1="48" x2="196" y2="48" stroke="rgba(255,255,255,0.15)" stroke-dasharray="3 3"/>

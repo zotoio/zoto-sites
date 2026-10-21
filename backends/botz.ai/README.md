@@ -42,7 +42,7 @@ The script:
 | **hn** (default) | No API key; optional `HN_MIN_POINTS` (default 20) | **1** HN Algolia request (page 2 only if none qualify) |
 | **thenewsapi** (legacy) | `NEWS_API_KEY` required | **1** typical (limit 25), **2** worst case |
 
-**Hacker News path:** Algolia `search_by_date` (backfill) or `search` (live ~24h), `tags=story`, UTC `created_at_i` window, points threshold. Candidates pass a local AI-term gate, skip Ask/Show HN unless clearly AI, then `gpt-6-luna` relevance scoring; ties break toward higher points/comments. Linked articles are fetched server-side (timeout, size cap, robots-aware UA) for `og:title` / `og:description` / excerpt; fallback uses HN comment context. Editorials store `hn_url`, `source` (domain), and `url`.
+**Hacker News path:** Algolia `search_by_date` (backfill) or `search` (live ~24h), `tags=story`, UTC `created_at_i` window, points threshold. Candidates pass a local AI-term gate, skip Ask/Show HN unless clearly AI, then `gpt-6-luna` relevance scoring; ties break toward higher points/comments. Linked articles are fetched server-side (timeout, size cap, browser-like headers, no robots.txt check) for `og:title` / `og:description` / excerpt; fallback uses HN comment context. Editorials store `hn_url`, `source` (domain), and `url`.
 
 Days with no qualifying story return HTTP **422** (`no_qualifying_story`, logged `no_articles` / `no_match`). Each backfilled editorial includes `as_of`, `backfilled: true`, display `generated_at`, and `backfilled_at`.
 

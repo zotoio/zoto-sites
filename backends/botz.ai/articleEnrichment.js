@@ -37,54 +37,6 @@ export function domainFromUrl(url) {
     }
 }
 
-/**
- * Very small robots.txt check: if Disallow matches the article path for our UA or *, skip fetch.
- */
-export async function isRobotsFetchAllowed(articleUrl, { fetchImpl = fetch, userAgent = DEFAULT_ARTICLE_FETCH_UA } = {}) {
-    try {
-        const url = new URL(articleUrl);
-        if (!url.protocol.startsWith('http')) {
-            return false;
-        }
-        const robotsUrl = `${url.origin}/robots.txt`;
-        const response = await fetchImpl(robotsUrl, {
-            headers: { 'User-Agent': userAgent, Accept: 'text/plain,*/*' },
-            signal: AbortSignal.timeout(5000),
-        });
-        if (!response.ok) {
-            return true;
-        }
-        const text = await response.text();
-        const path = url.pathname || '/';
-        return !robotsDisallowsPath(text, path);
-    } catch {
-        return true;
-    }
-}
-
-export function robotsDisallowsPath(robotsTxt, path) {
-    const lines = robotsTxt.split('\n');
-    let applies = false;
-    for (const raw of lines) {
-        const line = raw.split('#')[0].trim();
-        if (!line) continue;
-        const agentMatch = /^User-agent:\s*(.+)$/i.exec(line);
-        if (agentMatch) {
-            const agent = agentMatch[1].trim();
-            applies = agent === '*' || /botz/i.test(agent);
-            continue;
-        }
-        const disallowMatch = /^Disallow:\s*(.*)$/i.exec(line);
-        if (applies && disallowMatch) {
-            const prefix = disallowMatch[1].trim();
-            if (!prefix) continue;
-            if (prefix === '/') return true;
-            if (path.startsWith(prefix)) return true;
-        }
-    }
-    return false;
-}
-
 export async function readResponseWithByteCap(response, maxBytes) {
     const reader = response.body?.getReader?.();
     if (!reader) {
@@ -172,11 +124,6 @@ export async function fetchLinkedArticleMetadata(articleUrl, config = {}) {
 
     if (!articleUrl || !articleUrl.startsWith('http')) {
         return null;
-    }
-
-    const allowed = await isRobotsFetchAllowed(articleUrl, { fetchImpl, userAgent });
-    if (!allowed) {
-        return { skipped: 'robots' };
     }
 
     const response = await fetchImpl(articleUrl, {

@@ -60,6 +60,10 @@ Days with no qualifying story return HTTP **422** (`no_qualifying_story`, logged
 
 Keyless providers query `generative AI`, `OpenAI`, `LLM` sequentially (500 ms apart, 8 s timeout, one attempt, no retries). Candidates are normalized (`title, url, source, published_at, snippet, points/num_comments/engagement, provider`), merged and deduped by normalized URL (scheme, `www.`, tracking params, fragment, trailing slash ignored), then go through the existing enrichment, gate and `gpt-6-luna` scoring. Logs carry `news_source` (e.g. `hn+gnews`, the providers that contributed).
 
+### Article fetch proxy (optional)
+
+`ARTICLE_FETCH_PROXY=http://100.x.y.z:8888` routes linked **article page** fetches (`fetchLinkedArticleMetadata`) through an undici `ProxyAgent`; nothing else uses it. `ARTICLE_FETCH_PROXY_MODE=fallback` (default) tries direct first and retries once via the proxy on 403, 429 or a Cloudflare challenge (`cf-mitigated`); `always` uses the proxy only. Each fetch logs `article_fetch: route=direct|proxy|direct->proxy(reason) status=...`.
+
 ### Keyword gate and optional Jev classifier
 
 The gate is a weighted keyword score (`keywordWeights.js`, one table) over title + snippet + URL slug + domain; weights: vendors/models 5, GenAI concepts 3, general AI terms (case-sensitive `AI`, artificial intelligence, machine learning, neural network) 2, weak terms 1; sum capped at 10; pass at **>= 2**. If `TYPESAFE_API_KEY` is set, Jev (Typesafe.ai System One, `POST /v1/systemone`, a `noul` yes/no question, `Authorization: Bearer`) scores each candidate first and the gate becomes `0.4 * keyword/10 + 0.6 * jev >= 0.35`; without a key, or if Jev errors, the keyword score alone decides. Optional: `TYPESAFE_BASE_URL`, `JEV_MODEL` (default `jev-latest`).

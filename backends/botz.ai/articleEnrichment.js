@@ -110,6 +110,31 @@ export function extractOpenGraphAndExcerpt(html, { maxExcerptChars = 500 } = {})
     };
 }
 
+export function parseArticleFetchProxyMode(raw) {
+    const value = (raw || 'fallback').trim().toLowerCase();
+    return value === 'always' ? 'always' : 'fallback';
+}
+
+/** Retry via proxy only on 403, 429 or a Cloudflare challenge (cf-mitigated header). */
+export function shouldRetryViaProxy(response) {
+    return (
+        response.status === 403 ||
+        response.status === 429 ||
+        Boolean(response.headers?.get?.('cf-mitigated'))
+    );
+}
+
+const proxyAgents = new Map();
+
+/** Lazily builds an undici ProxyAgent (undici is only imported when a proxy is actually used). */
+async function defaultGetProxyDispatcher(proxyUrl) {
+    if (!proxyAgents.has(proxyUrl)) {
+        const { ProxyAgent } = await import('undici');
+        proxyAgents.set(proxyUrl, new ProxyAgent(proxyUrl));
+    }
+    return proxyAgents.get(proxyUrl);
+}
+
 /**
  * @param {string} articleUrl
  */
@@ -120,17 +145,41 @@ export async function fetchLinkedArticleMetadata(articleUrl, config = {}) {
         referer = DEFAULT_ARTICLE_FETCH_REFERER,
         timeoutMs = DEFAULT_TIMEOUT_MS,
         maxBytes = DEFAULT_MAX_BYTES,
+        env = process.env,
+        log = () => {},
+        getProxyDispatcher = defaultGetProxyDispatcher,
     } = config;
 
     if (!articleUrl || !articleUrl.startsWith('http')) {
         return null;
     }
 
-    const response = await fetchImpl(articleUrl, {
-        headers: buildBrowserHeaders({ userAgent, referer }),
-        redirect: 'follow',
-        signal: AbortSignal.timeout(timeoutMs),
-    });
+    const proxyUrl = (env.ARTICLE_FETCH_PROXY || '').trim();
+    const proxyMode = parseArticleFetchProxyMode(env.ARTICLE_FETCH_PROXY_MODE);
+
+    const doFetch = async (dispatcher) =>
+        fetchImpl(articleUrl, {
+            headers: buildBrowserHeaders({ userAgent, referer }),
+            redirect: 'follow',
+            signal: AbortSignal.timeout(timeoutMs),
+            ...(dispatcher ? { dispatcher } : {}),
+        });
+
+    // The proxy applies to this article PAGE fetch only (never HN/Algolia/OpenAI/news API/search/Jev).
+    let response;
+    let route = 'direct';
+    if (proxyUrl && proxyMode === 'always') {
+        route = 'proxy';
+        response = await doFetch(await getProxyDispatcher(proxyUrl));
+    } else {
+        response = await doFetch(null);
+        if (proxyUrl && shouldRetryViaProxy(response)) {
+            const reason = response.headers.get('cf-mitigated') ? 'cf_challenge' : `http_${response.status}`;
+            route = `direct->proxy(${reason})`;
+            response = await doFetch(await getProxyDispatcher(proxyUrl)); // single retry, no loop
+        }
+    }
+    log(`article_fetch: route=${route} status=${response.status} host=${domainFromUrl(articleUrl)}`);
     if (!response.ok) {
         return { skipped: `http_${response.status}` };
     }

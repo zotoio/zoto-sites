@@ -5,7 +5,7 @@ import {
     mapAlgoliaHitToCandidate,
 } from '../hnAlgolia.js';
 import { passesHnStoryTypeGate } from '../storySelection.js';
-import { makeCandidate } from './normalize.js';
+import { attempt, makeCandidate } from './normalize.js';
 
 const HITS_PER_PAGE = 100;
 
@@ -17,7 +17,7 @@ export const hnProvider = {
         const minPoints = Number(env.HN_MIN_POINTS) || 20;
         const params = buildHnAlgoliaParams({ asOfDate, minPoints, page: 0, hitsPerPage: HITS_PER_PAGE });
         const url = asOfDate ? HN_ALGOLIA_SEARCH_BY_DATE_URL : HN_ALGOLIA_SEARCH_URL;
-        const response = await httpGet({ url, params });
+        const response = await attempt(() => httpGet({ url, params }));
         const hits = response?.data?.hits || [];
         const candidates = hits
             .map(mapAlgoliaHitToCandidate)

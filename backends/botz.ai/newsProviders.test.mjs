@@ -225,7 +225,7 @@ test('fetchCandidatesFromProviders: skips missing-key provider with a log, survi
     };
     const out = await fetchCandidatesFromProviders({ names: ['hn', 'thenewsapi', 'ddg', 'gnews'], registry, log: (m) => logs.push(m) });
     assert.equal(out.candidates.length, 2);
-    assert.equal(out.requests, 4);
+    assert.equal(out.requests, 7); // hn 1 + gnews 3 + rejected ddg planned 3 (thenewsapi skipped = 0)
     assert.equal(out.newsSource, 'hn+gnews');
     assert.ok(logs.some((l) => /news_provider_skipped.*thenewsapi.*missing NEWS_API_KEY/.test(l)));
     assert.ok(logs.some((l) => /news_provider_failed.*ddg.*boom/.test(l)));
@@ -324,4 +324,50 @@ test('budget: 0 => rejects with the existing budget error; unlimited when not su
     assert.deepEqual(calls.map((c) => c.name), ['hn', 'thenewsapi', 'ddg']);
     assert.equal(calls.find((c) => c.name === 'ddg').queries, undefined);
     assert.equal(out.requests, 1 + 1 + 1);
+});
+
+const okCand = (p) => [{ title: `T-${p}`, url: `https://${p}.com/1`, provider: p, providers: [p] }];
+const okProv = (name, requests = 1) => ({ name, isAvailable: () => ({ ok: true }), fetchCandidates: async () => ({ candidates: okCand(name), requests }) });
+const failProv = (name, make) => ({ name, isAvailable: () => ({ ok: true }), fetchCandidates: async () => { throw make(); } });
+
+test('rejected provider (HTTP 500 via real hn provider) counts its attempt alongside a successful one', async () => {
+    const httpGet = async () => { const e = new Error('Request failed with status code 500'); e.response = { status: 500 }; throw e; };
+    const registry = { hn: hnProvider, thenewsapi: okProv('thenewsapi') };
+    const out = await fetchCandidatesFromProviders({ names: ['hn', 'thenewsapi'], registry, httpGet, env: {} });
+    assert.equal(out.requests, 2);
+    assert.equal(out.candidates.length, 1);
+});
+
+test('rejected provider: err.requests is respected over planned cost', async () => {
+    const registry = { hn: okProv('hn'), ddg: failProv('ddg', () => Object.assign(new Error('boom'), { requests: 2 })) };
+    const out = await fetchCandidatesFromProviders({ names: ['hn', 'ddg'], registry, env: {} });
+    assert.equal(out.requests, 1 + 2);
+    const zero = { hn: okProv('hn'), ddg: failProv('ddg', () => Object.assign(new Error('boom'), { requests: 0 })) };
+    assert.equal((await fetchCandidatesFromProviders({ names: ['hn', 'ddg'], registry: zero, env: {} })).requests, 1);
+});
+
+test('rejected provider without err.requests falls back to planned cost (hn 1, thenewsapi 1, keyless = query count, budget-trimmed)', async () => {
+    const registry = { hn: okProv('hn'), thenewsapi: failProv('thenewsapi', () => new Error('x')), ddg: failProv('ddg', () => new Error('y')) };
+    assert.equal((await fetchCandidatesFromProviders({ names: ['hn', 'thenewsapi', 'ddg'], registry, env: {} })).requests, 1 + 1 + 3);
+    const trimmed = await fetchCandidatesFromProviders({ names: ['hn', 'ddg'], registry, env: {}, maxNewsRequests: 3 });
+    assert.equal(trimmed.requests, 1 + 2);
+    assert.ok(trimmed.requests <= 3);
+});
+
+test('skipped providers (no key, budget, asOfDate live-only) count 0; sole rejected provider is still charged', async () => {
+    const never = (name, avail = { ok: true }) => ({ name, isAvailable: () => avail, fetchCandidates: async () => { throw new Error('should not run'); } });
+    const registry = { hn: okProv('hn'), thenewsapi: never('thenewsapi', { ok: false, reason: 'missing NEWS_API_KEY' }), gnews: never('gnews') };
+    const budgeted = await fetchCandidatesFromProviders({ names: ['hn', 'thenewsapi', 'gnews'], registry, env: {}, maxNewsRequests: 1 });
+    assert.equal(budgeted.requests, 1);
+    const historical = { hn: okProv('hn'), ddg: { name: 'ddg', isAvailable: () => ({ ok: true }), fetchCandidates: async () => ({ candidates: [], requests: 0 }) } };
+    assert.equal((await fetchCandidatesFromProviders({ names: ['hn', 'ddg'], registry: historical, asOfDate: '2026-10-01', env: {} })).requests, 1);
+    const sole = { hn: failProv('hn', () => new Error('500')) };
+    await assert.rejects(fetchCandidatesFromProviders({ names: ['hn'], registry: sole, env: {} }).then((o) => { assert.equal(o.requests, 1); throw new Error('resolved'); }), /resolved/);
+});
+
+test('rejected attempts propagate into newsRequestCount so backfill budget (max - used) is not overspent', async () => {
+    const registry = { hn: failProv('hn', () => Object.assign(new Error('500'), { requests: 1 })), thenewsapi: failProv('thenewsapi', () => new Error('500')) };
+    const out = await fetchCandidatesFromProviders({ names: ['hn', 'thenewsapi'], registry, env: {}, maxNewsRequests: 5 });
+    assert.equal(out.requests, 2);
+    assert.equal(Math.max(0, 5 - out.requests), 3); // remaining budget backfill passes to the next editorial
 });

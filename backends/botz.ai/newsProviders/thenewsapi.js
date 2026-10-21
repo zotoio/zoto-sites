@@ -1,7 +1,7 @@
 import { buildTopNewsParams, TOP_NEWS_URL } from '../newsApi.js';
 import { NEWS_CANDIDATE_LIMIT_PER_REQUEST } from '../newsFetchPlan.js';
 import { buildGenAiNewsSearchQuery, GENAI_NEWS_CATEGORIES } from '../storySelection.js';
-import { makeCandidate } from './normalize.js';
+import { attempt, makeCandidate } from './normalize.js';
 
 /**
  * Legacy The News API provider (GET https://api.thenewsapi.com/v1/news/top, api_token=NEWS_API_KEY).
@@ -22,7 +22,7 @@ export const thenewsapiProvider = {
             asOfDate,
             categories: GENAI_NEWS_CATEGORIES,
         });
-        const response = await httpGet({ url: TOP_NEWS_URL, params });
+        const response = await attempt(() => httpGet({ url: TOP_NEWS_URL, params }));
         const items = Array.isArray(response?.data?.data) ? response.data.data : [];
         const candidates = items.map((item) =>
             makeCandidate('thenewsapi', {

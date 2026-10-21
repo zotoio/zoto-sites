@@ -69,6 +69,12 @@ function isQuotaFailure(reason) {
     return isNewsQuotaExhaustedResponse(reason.response?.status, reason.response?.data);
 }
 
+/** Requests to charge for a rejected provider: err.requests when a non-negative finite number, else the planned cost. */
+export function rejectedRequestCost(reason, planned = 0) {
+    const attempted = reason?.requests;
+    return typeof attempted === 'number' && Number.isFinite(attempted) && attempted >= 0 ? attempted : planned;
+}
+
 function requestBudgetError(requests = 0) {
     const err = new Error('The news request budget was exhausted for this editorial');
     err.statusCode = 503;
@@ -96,6 +102,7 @@ export async function fetchCandidatesFromProviders({
     const budgetLimited = Number.isFinite(maxNewsRequests);
     let remaining = budgetLimited ? Math.max(0, maxNewsRequests) : Infinity;
     const queriesFor = new Map();
+    const plannedCost = new Map();
     let skippedForBudget = 0;
     const active = [];
     for (const name of names) {
@@ -109,6 +116,7 @@ export async function fetchCandidatesFromProviders({
         if (cost > remaining) {
             if (KEYLESS_NAMES.has(name) && remaining > 0) {
                 queriesFor.set(provider, KEYLESS_QUERIES.slice(0, remaining));
+                plannedCost.set(provider, remaining);
                 remaining = 0;
                 active.push(provider);
                 continue;
@@ -118,6 +126,7 @@ export async function fetchCandidatesFromProviders({
             continue;
         }
         remaining -= cost;
+        plannedCost.set(provider, cost);
         active.push(provider);
     }
     if (budgetLimited && active.length === 0 && skippedForBudget > 0) {
@@ -149,6 +158,9 @@ export async function fetchCandidatesFromProviders({
             requests += result.value.requests || 0;
         } else {
             counts[name] = 0;
+            // A rejected provider still spent upstream requests: prefer the attempted count the provider attached
+            // to the error (err.requests), else its planned (scheduled) cost. Skipped providers never reach here.
+            requests += rejectedRequestCost(result.reason, plannedCost.get(active[i]) ?? 0);
             if (isQuotaFailure(result.reason)) {
                 quotaFailure = quotaFailure || result.reason;
                 log(JSON.stringify({ event: 'news_provider_quota_exhausted', provider: name, error: result.reason?.message || String(result.reason) }));

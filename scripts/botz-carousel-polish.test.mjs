@@ -52,3 +52,14 @@ test('loading never dims a freshly painted story; dark first paint', () => {
   assert.match(html, /<meta name="color-scheme" content="dark">/);
   assert.ok(html.indexOf('<style>html{background:') < html.indexOf('href="style.css'), 'inline dark background before the stylesheet');
 });
+
+test('flip snapshot fades clamped .card-more text like the CSS mask and the decode wait is short', () => {
+  const snap = js.slice(js.indexOf('function snapshot('), js.indexOf('function wrap('));
+  assert.match(snap, /\.card-more/);
+  assert.match(snap, /destination-out/, 'fade erases the bottom of the paragraph layer');
+  assert.match(snap, /addColorStop\(0\.7,/, 'fade starts at 70% like the mask');
+  assert.match(snap, /min-width:761px/, 'fade only on desktop, like the CSS');
+  assert.match(rule('.card.has-read-more:not(.is-expanded) .card-more').replace(/\s/g, ''), /#00070%/, 'CSS mask still 70%');
+  const m = /function cardImageDecoded\(el, maxMs = (\d+)\)/.exec(js);
+  assert.ok(m && +m[1] <= 120, 'decode wait <= 120ms');
+});

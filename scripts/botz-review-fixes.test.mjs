@@ -32,7 +32,7 @@ test('cardImageDecoded: decode() optional, rejection/throw tolerated, load/error
   assert.match(fn, /addEventListener\('error'/);
   assert.match(fn, /catch \{/);
   assert.match(fn, /Promise\.race\(\[ready, wait\(maxMs\)\]\)/);
-  assert.match(fn, /maxMs = 300/);
+  assert.match(fn, /maxMs = \d+\)/);   // capped (main shortened it from 300 to 120 ms)
   assert.doesNotMatch(fn, /return Promise\.race\(\[im\.decode\(\)/);
 });
 

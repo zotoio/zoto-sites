@@ -1,3 +1,4 @@
+import { routeHostKey, getDefaultRouteStore } from './articleFetchRouteStore.js';
 export const DEFAULT_ARTICLE_FETCH_UA =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
 
@@ -218,13 +219,46 @@ export async function fetchLinkedArticleMetadata(articleUrl, config = {}) {
     if (proxyUrl && proxyMode === 'always') {
         route = 'proxy';
         response = await fetchWithBackoff('proxy', await getProxyDispatcher(proxyUrl));
+    } else if (proxyUrl) {
+        // Fallback mode: host-level route memory (article page fetches only).
+        const hostKey = routeHostKey(articleUrl);
+        const store = hostKey ? (config.routeStore || getDefaultRouteStore(env, log)) : null;
+        const remembered = store ? store.get(hostKey) : null;
+        const remember = (r) => {
+            if (store) store.set(hostKey, r);
+        };
+        const viaProxy = async () => fetchWithBackoff('proxy', await getProxyDispatcher(proxyUrl));
+        const reasonOf = (res) => (res.headers?.get?.('cf-mitigated') ? 'cf_challenge' : `http_${res.status}`);
+        const chosen = remembered === 'proxy' ? 'proxy' : 'direct';
+        log(`article_fetch_route host=${hostKey || domainFromUrl(articleUrl)} remembered=${remembered || 'none'} chosen=${chosen}`);
+        if (chosen === 'proxy') {
+            route = 'proxy(remembered)';
+            response = await viaProxy();
+            if (shouldRetryViaProxy(response)) {
+                const reason = reasonOf(response);
+                const proxied = response;
+                response = await fetchWithBackoff('direct', null); // direct once, with 429 backoff
+                if (response.ok) {
+                    route = `proxy(${reason})->direct`;
+                    remember('direct');
+                } else {
+                    route = `proxy(${reason})->direct(failed)`;
+                    response = proxied.ok ? proxied : response;
+                }
+            }
+        } else {
+            response = await fetchWithBackoff('direct', null);
+            if (!shouldRetryViaProxy(response)) {
+                if (response.ok) remember('direct');
+            } else {
+                const reason = reasonOf(response);
+                route = `direct->proxy(${reason})`;
+                response = await viaProxy(); // single retry, no loop
+                if (response.ok) remember('proxy');
+            }
+        }
     } else {
         response = await fetchWithBackoff('direct', null);
-        if (proxyUrl && shouldRetryViaProxy(response)) {
-            const reason = response.headers.get('cf-mitigated') ? 'cf_challenge' : `http_${response.status}`;
-            route = `direct->proxy(${reason})`;
-            response = await fetchWithBackoff('proxy', await getProxyDispatcher(proxyUrl)); // single retry, no loop
-        }
     }
     log(`article_fetch: route=${route} status=${response.status} host=${domainFromUrl(articleUrl)}`);
     if (!response.ok) {

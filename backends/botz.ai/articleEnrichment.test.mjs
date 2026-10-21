@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createRouteStore } from './articleFetchRouteStore.js';
 import { extractOpenGraphAndExcerpt } from './articleEnrichment.js';
 
 test('extractOpenGraphAndExcerpt reads og tags and excerpt', () => {
@@ -64,7 +65,7 @@ function proxyHarness(responses) {
         proxyCalls.push(proxyUrl);
         return { proxy: proxyUrl };
     };
-    return { calls, fetchImpl, proxyCalls, getProxyDispatcher };
+    return { calls, fetchImpl, proxyCalls, getProxyDispatcher, routeStore: createRouteStore({}) };
 }
 
 test('article proxy: not set => direct only, 403 is not retried', async () => {
@@ -95,7 +96,7 @@ test('article proxy: fallback mode retries once via proxy on 403, 429 and cf-mit
         assert.equal(h.calls.length, 2, reason);
         assert.equal(h.calls[0].dispatcher, undefined, 'first attempt is direct');
         assert.deepEqual(h.calls[1].dispatcher, { proxy: 'http://100.64.0.1:8888' });
-        assert.match(logs[0], new RegExp(`route=direct->proxy\\(${reason}\\)`));
+        assert.match(logs.find((l) => l.startsWith('article_fetch:')), new RegExp(`route=direct->proxy\\(${reason}\\)`));
     }
     // a proxy failure is not retried again, and a 404 does not trigger the proxy
     const h2 = proxyHarness([() => new Response('', { status: 403 }), () => new Response('', { status: 403 })]);

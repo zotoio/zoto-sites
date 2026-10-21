@@ -8,10 +8,21 @@ import {
 } from './display-mode.js';
 import { demoShowcaseLayout, loadLayout, STORAGE_KEY, ultrawideShowcaseLayout } from './layout-storage.js';
 import { initWidgetCanvas } from './widget-canvas.js';
+import { loadSavedLocation } from './location-search.js';
 
 async function resolveLocation() {
   if (forceDemo) {
     return fetchJson('/api/location');
+  }
+
+  // A place chosen via name search wins over geolocation and IP lookup.
+  const saved = loadSavedLocation();
+  if (saved) {
+    try {
+      return { ...(await fetchJson('/api/place', { lat: saved.lat, lon: saved.lon })), placeName: saved.placeName || undefined, source: 'search' };
+    } catch {
+      return { ...saved, source: 'search' };
+    }
   }
 
   const browserLoc = await new Promise((resolve) => {

@@ -124,3 +124,40 @@ export async function enrichPlaceName(location) {
     placeName: geo.placeName || location.placeName,
   };
 }
+
+export function normalizePlaceResult(r) {
+  if (!r || !Number.isFinite(r.latitude) || !Number.isFinite(r.longitude)) {
+    return null;
+  }
+  return {
+    id: r.id ?? `${r.latitude},${r.longitude}`,
+    name: r.name || '',
+    region: r.admin1 || '',
+    country: r.country || '',
+    countryCode: (r.country_code || '').toLowerCase(),
+    lat: r.latitude,
+    lon: r.longitude,
+    timezone: r.timezone || '',
+    placeName: [r.name, r.admin1, r.country].filter(Boolean).join(', '),
+  };
+}
+
+/** Forward geocode a place name via Open-Meteo (same provider as reverseGeocode). */
+export async function searchPlaces(query, count = 8) {
+  const q = String(query || '').trim();
+  if (q.length < 2) {
+    return [];
+  }
+  const key = `search:${q.toLowerCase()}:${count}`;
+  return cached(
+    key,
+    async () => {
+      const { data } = await axios.get('https://geocoding-api.open-meteo.com/v1/search', {
+        params: { name: q, count, language: 'en', format: 'json' },
+        timeout: 8000,
+      });
+      return (data?.results || []).map(normalizePlaceResult).filter(Boolean);
+    },
+    86400000
+  );
+}

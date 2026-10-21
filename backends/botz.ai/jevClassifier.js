@@ -4,7 +4,7 @@
  * Source of truth: github.com/zotoio/jev-feature-demo (README, packages/jev-demo/lib/*):
  *   POST {TYPESAFE_BASE_URL|https://api.typesafe.ai}/v1/systemone
  *   Authorization: Bearer <TYPESAFE_API_KEY>
- *   body: { model: "jev-latest"|"jev-1.13.0", state: <string>, questions: { <id>: { type: "noul", instructions } } }
+ *   body: { model: "jev-1.14.0"|"jev-1.13.0", state: <string>, questions: { <id>: { type: "noul", instructions } } }
  *   200:  { model, answers: { <id>: { type: "noul", noul: 0..1, confidence? } }, usage: { input_tokens, output_tokens } }
  * "Jev proposes, code promotes": we only use the answer as a score; our code decides.
  *
@@ -14,13 +14,14 @@
  */
 
 export const JEV_DEFAULT_BASE_URL = 'https://api.typesafe.ai';
+export const JEV_DEFAULT_MODEL = 'jev-1.14.0'; // docs.typesafe.ai/models: jev-1.14.0, jev-1.13.0
 export const JEV_SYSTEMONE_PATH = '/v1/systemone';
 export const JEV_QUESTION_ID = 'relevant';
 export const JEV_QUESTION =
     'Is this news item primarily about generative AI / LLM technology, AI products or models, AI research, ' +
     'AI policy, or the AI industry (as opposed to crime, general politics, markets, or an incidental AI mention)?';
 
-export function buildJevRequest(article, { model = 'jev-latest' } = {}) {
+export function buildJevRequest(article, { model = JEV_DEFAULT_MODEL } = {}) {
     const state = JSON.stringify({
         title: article?.title || '',
         description: (article?.description || article?.snippet || '').slice(0, 600),
@@ -52,7 +53,7 @@ export function createJevClassifierFromEnv({ env = process.env, fetchImpl = fetc
         return null;
     }
     const baseUrl = (env.TYPESAFE_BASE_URL || JEV_DEFAULT_BASE_URL).replace(/\/+$/, '');
-    const model = env.JEV_MODEL || 'jev-latest';
+    const model = env.JEV_MODEL || JEV_DEFAULT_MODEL;
     return async (article) => {
         const response = await fetchImpl(`${baseUrl}${JEV_SYSTEMONE_PATH}`, {
             method: 'POST',

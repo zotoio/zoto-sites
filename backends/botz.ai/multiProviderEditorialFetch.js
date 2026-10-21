@@ -1,6 +1,8 @@
 import { enrichCandidatesInBatches } from './hnEditorialFetch.js';
 import { filterExcludedStoryCandidates } from './liveStoryDedup.js';
 import { noQualifyingStoryError } from './newsApiErrors.js';
+import { createJevClassifierFromEnv } from './jevClassifier.js';
+import { jevPrefilterCandidates } from './jevPrefilter.js';
 import { fetchCandidatesFromProviders } from './newsProviders/index.js';
 import {
     keywordScoreForArticle,
@@ -55,7 +57,11 @@ export async function fetchQualifyingStoryFromProviders({
     }
 
     const raw = filterExcludedStoryCandidates(candidates.filter(passesHnStoryTypeGate), excludeStoryIdentifiers);
-    const toEnrich = prepareMergedCandidatesForScoring(raw);
+    // Jev pre-filter (only with TYPESAFE_API_KEY) runs on title/snippet/source/url BEFORE any article page fetch.
+    // undefined => build from env (logs jev_classifier_skipped once when no key); null => keyword only.
+    const classifier = jevClassifier === undefined ? createJevClassifierFromEnv({ env, fetchImpl, log }) : jevClassifier;
+    const survivors = classifier ? (await jevPrefilterCandidates(raw, { jevClassifier: classifier, env, log })).kept : raw;
+    const toEnrich = prepareMergedCandidatesForScoring(survivors);
     // Candidates that already have a snippet (news APIs / RSS) skip the extra page fetch.
     const needEnrich = toEnrich.filter((c) => !c.snippet);
     const enriched = await enrichCandidatesInBatches(needEnrich, { log, ...enrichDeps });
@@ -66,7 +72,8 @@ export async function fetchQualifyingStoryFromProviders({
         scoreArticle,
         log,
         preferEngagement: true,
-        jevClassifier,
+        // Jev already ran in the pre-filter; selection must not call it again (null => keyword gate for unflagged).
+        jevClassifier: null,
     });
     if (selected) {
         log(

@@ -85,3 +85,6 @@ backends/botz.ai/usage/
 
 .vscode/
 ast.json
+# swarm.botz.ai: private source checkout and service state (see compose/projects/swarm.yml)
+backends/botz-mcp-swarm/
+backends/swarm/data/

@@ -1,0 +1,6 @@
+enabled: true
+type: proxy
+title: swarm.botz.ai
+proxy:
+  upstream: http://swarm:4310
+  websocket: true

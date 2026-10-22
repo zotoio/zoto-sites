@@ -1,6 +1,8 @@
 enabled: true
 type: proxy
 title: swarm.botz.ai
+# Authenticated app: never cache at Cloudflare or in browsers.
+cache: no-store
 proxy:
   upstream: http://swarm:4310
   websocket: true

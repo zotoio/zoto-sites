@@ -89,6 +89,46 @@ function renderProxyBlock(proxy, { apiFallbackName } = {}) {
     }`;
 }
 
+/**
+ * `cache: no-store` in project.yml: tell browsers and Cloudflare never to store responses
+ * (Cloudflare-CDN-Cache-Control / CDN-Cache-Control govern the edge; Cache-Control the browser).
+ * Upstream Cache-Control is hidden so the app cannot accidentally re-enable caching.
+ */
+function renderCacheHeaders(cache) {
+  if (cache !== 'no-store') return '';
+  return `
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "private, no-store" always;
+        add_header CDN-Cache-Control "no-store" always;
+        add_header Cloudflare-CDN-Cache-Control "no-store" always;`;
+}
+
+function renderLazyProjectProxyBlock({ upstream, websocket, fallbackName }) {
+  const wsHeaders = websocket
+    ? `
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";`
+    : '';
+  return `    location / {
+        resolver 127.0.0.11 valid=30s ipv6=off;
+        set $project_upstream "${upstream}";
+        proxy_set_header Host $host;
+        proxy_read_timeout 900s;
+        proxy_connect_timeout 75s;
+        proxy_set_header X-Real-IP $remote_addr;${wsHeaders}
+        proxy_pass $project_upstream;
+        error_page 502 504 = ${fallbackName};
+    }
+
+    location ${fallbackName} {
+        internal;
+        default_type text/plain;
+        add_header Cache-Control "no-store" always;
+        return 503 "Service temporarily unavailable. Please retry shortly.";
+    }`;
+}
+
 function renderExtraHeaders(headers) {
   if (!headers || typeof headers !== 'object') {
     return '';
@@ -159,17 +199,16 @@ ${ERROR_PAGE_BLOCK}
 
 function renderBotzSubdomainProject(project) {
   const { name, hostname, manifest } = project;
-  const extraHeaders = renderExtraHeaders(manifest.headers);
+  const extraHeaders = renderExtraHeaders(manifest.headers) + renderCacheHeaders(manifest.cache);
   const titleComment = manifest.title ? ` # ${manifest.title}` : '';
 
   if (manifest.type === 'proxy') {
     const upstream = manifest.proxy.upstream;
     const websocket = manifest.proxy.websocket === true;
-    const proxyBlock = renderProxyBlock({
-      path: '/',
-      upstream,
-      websocket,
-    });
+    // Resolve the upstream per request (Docker DNS) so a missing or stopped project
+    // container yields a 503 for that host instead of nginx failing to start.
+    const fallbackName = `@botz_sub_${name.replace(/-/g, '_')}_unavailable`;
+    const proxyBlock = renderLazyProjectProxyBlock({ upstream, websocket, fallbackName });
 
     return `server {
     listen 80;

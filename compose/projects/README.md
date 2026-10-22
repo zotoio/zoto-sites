@@ -45,3 +45,7 @@ The botz editorial archive at `backends/botz.ai/cache` is guarded separately —
 
 - Service name in `proxy.upstream` must match the Compose service name (e.g. `http://myapp:8080`).
 - `nginx` depends on `botz` today; add `depends_on` for your service if nginx must wait for it on startup.
+
+## mcp.botz.ai
+
+`compose/projects/botz-mcp.yml` runs [zotoio/botz-mcp](https://github.com/zotoio/botz-mcp) from a gitignored checkout at `backends/botz-mcp` (image built with `BOTZ_EXTRAS=cursor`). Secrets live in `backends/mcp/.env` (see `backends/mcp/.env.example`); state in `backends/mcp/data`. The vhost (`projects/botz.ai/mcp/project.yml`) uses `proxy.streaming: true`: unbuffered streamable HTTP, 900s timeouts, `X-Forwarded-Proto https`, and `cache: no-store`. Full env reference: botz-mcp `docs/deploy/mcp.botz.ai.md`.

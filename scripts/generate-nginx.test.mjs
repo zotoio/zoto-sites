@@ -39,3 +39,23 @@ test('botz.ai subdomain proxy resolves upstream lazily and swarm is never cached
   assert.match(conf, /add_header Cloudflare-CDN-Cache-Control "no-store" always;/);
   assert.match(conf, /proxy_hide_header Cache-Control;/);
 });
+
+test('mcp.botz.ai proxies everything to botz-mcp unbuffered with forwarded headers and no-store', () => {
+  const conf = fs.readFileSync(path.join(ROOT, 'nginx-conf/botz.ai-sub-mcp.conf'), 'utf8');
+  assert.match(conf, /server_name  mcp\.botz\.ai;/);
+  // location / covers /mcp, /.well-known/*, /auth/*, /register, /authorize, /token, /revoke, /admin
+  assert.match(conf, /location \/ \{/);
+  assert.match(conf, /set \$project_upstream "http:\/\/botz-mcp:4444";/);
+  assert.match(conf, /proxy_buffering off;/);
+  assert.match(conf, /proxy_request_buffering off;/);
+  assert.match(conf, /proxy_read_timeout 900s;/);
+  assert.match(conf, /proxy_set_header X-Forwarded-Proto https;/);
+  assert.match(conf, /proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;/);
+  assert.match(conf, /add_header Cloudflare-CDN-Cache-Control "no-store" always;/);
+  assert.doesNotMatch(conf, /proxy_intercept_errors on/); // 401 + WWW-Authenticate must reach MCP clients
+});
+
+test('streaming flag does not change existing swarm vhost', () => {
+  const conf = fs.readFileSync(path.join(ROOT, 'nginx-conf/botz.ai-sub-swarm.conf'), 'utf8');
+  assert.doesNotMatch(conf, /proxy_buffering off;/);
+});

@@ -1,0 +1,12 @@
+enabled: true
+type: proxy
+title: mcp.botz.ai
+# botz-mcp (zotoio/botz-mcp): MCP streamable HTTP + GitHub OAuth (/mcp,
+# /.well-known/*, /auth/*, /register, /authorize, /token, /revoke) and /admin.
+# Authenticated app: never cache at Cloudflare or in browsers.
+cache: no-store
+proxy:
+  upstream: http://botz-mcp:4444
+  # Streamable HTTP/SSE: no proxy buffering, forwarded headers for the
+  # app's https public URL and Secure cookies.
+  streaming: true

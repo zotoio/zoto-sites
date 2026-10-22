@@ -304,6 +304,10 @@ echo "Checking out ${DEPLOY_BRANCH} and pulling (ff-only)..."
 git checkout "${DEPLOY_BRANCH}"
 git pull --ff-only origin "${DEPLOY_BRANCH}"
 
+# Re-collect compose fragments: the pull may add or remove compose/projects/*.yml.
+zoto_compose_init "$ROOT"
+echo "Compose files: ${COMPOSE_FILE_ARGS[*]}"
+
 assert_data_guards "post-pull"
 
 # --- (d) Build and start ---

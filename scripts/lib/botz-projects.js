@@ -170,6 +170,10 @@ function validateProject(name, manifest) {
     }
   }
 
+  if (manifest.cache != null && manifest.cache !== 'no-store') {
+    errors.push('cache must be "no-store" when set');
+  }
+
   if (manifest.headers != null) {
     if (typeof manifest.headers !== 'object' || Array.isArray(manifest.headers)) {
       errors.push('headers must be a map of field-name: value');

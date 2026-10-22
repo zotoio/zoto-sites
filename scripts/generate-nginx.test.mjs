@@ -27,3 +27,15 @@ test('botz.ai story images are cached for a year (200 only) and dot-paths under 
   for (const p of ['/cache/.replaced/x.json', '/cache/images/.k-480w.webp.1.deadbeef.tmp']) assert.match(p, deny, p);
   for (const p of ['/cache/images/2026-10-19-08-ab.png', '/cache/images/2026-10-19-08-ab-768w.webp', '/cache/2026-10-19-08.json']) assert.doesNotMatch(p, deny, p);
 });
+
+test('botz.ai subdomain proxy resolves upstream lazily and swarm is never cached', () => {
+  const conf = fs.readFileSync(path.join(ROOT, 'nginx-conf/botz.ai-sub-swarm.conf'), 'utf8');
+  assert.match(conf, /resolver 127\.0\.0\.11/);
+  assert.match(conf, /set \$project_upstream "http:\/\/swarm:4310";/);
+  assert.match(conf, /proxy_pass \$project_upstream;/);
+  assert.doesNotMatch(conf, /proxy_pass http:\/\/swarm:4310;/);
+  assert.match(conf, /error_page 502 504 = @botz_sub_swarm_unavailable;/);
+  assert.match(conf, /add_header Cache-Control "private, no-store" always;/);
+  assert.match(conf, /add_header Cloudflare-CDN-Cache-Control "no-store" always;/);
+  assert.match(conf, /proxy_hide_header Cache-Control;/);
+});

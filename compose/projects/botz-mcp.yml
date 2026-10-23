@@ -28,7 +28,9 @@ services:
       BOTZ_MCP_OAUTH: "true"
       BOTZ_STATIC_TOKENS_ENABLED: "false"
       BOTZ_MCP_OAUTH_STORAGE_DIR: /app/.data/oauth-proxy
-      BOTZ_GEN_PROVIDER: cursor:grok-4.7
+      # All LLM ops (generate, compress, distill) -> Claude Haiku 5.5
+      # (Cursor model id from Cursor.models.list()).
+      BOTZ_GEN_PROVIDER: cursor:claude-haiku-5-5
       BOTZ_MCP_WRITE_ROLE: operator
       # Enterprise plan: org/team management, IAM policies + API tokens
       # (mint in /admin -> IAM · API tokens), private catalogues, inference

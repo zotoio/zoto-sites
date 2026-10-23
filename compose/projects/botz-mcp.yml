@@ -34,6 +34,10 @@ services:
       # (mint in /admin -> IAM · API tokens), private catalogues, inference
       # profiles, steering.
       BOTZ_PLAN: enterprise
+      # Jev (Typesafe) quality check on newly generated skills. Off until the
+      # BOTZ_TYPESAFE_API_KEY is in backends/mcp/.env; flip to "true" to enable.
+      BOTZ_JEV_ENABLED: "false"
+      BOTZ_JEV_MODEL: jev-latest
       # Paid Cursor generation: no cold-start CRUX compile of every skill;
       # artifacts still compile on demand when skills are written.
       BOTZ_CRUX_RECONCILE_ON_START: "false"

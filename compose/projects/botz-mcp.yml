@@ -30,6 +30,9 @@ services:
       BOTZ_MCP_OAUTH_STORAGE_DIR: /app/.data/oauth-proxy
       BOTZ_GEN_PROVIDER: cursor:grok-4.7
       BOTZ_MCP_WRITE_ROLE: operator
+      # Paid Cursor generation: no cold-start CRUX compile of every skill;
+      # artifacts still compile on demand when skills are written.
+      BOTZ_CRUX_RECONCILE_ON_START: "false"
       # Generated/published skills live outside the image (seeded from the
       # bundled skills on first start) so they survive rebuilds.
       BOTZ_SKILLS_DIR: /app/.data/skills

@@ -28,14 +28,10 @@ services:
       BOTZ_MCP_OAUTH: "true"
       BOTZ_STATIC_TOKENS_ENABLED: "false"
       BOTZ_MCP_OAUTH_STORAGE_DIR: /app/.data/oauth-proxy
-      # All LLM ops (generate, compress, distill) -> Claude Haiku 5.5
-      # (Cursor model id from Cursor.models.list()).
-      BOTZ_GEN_PROVIDER: cursor:claude-haiku-5-5
-      # Per-model Cursor params (JSON dict -> ModelSelection.params). Haiku 5.5
-      # with thinking on keeps starting new thinking turns after emitting the
-      # skill JSON and never finishes inside the 300s deadline; thinking=false
-      # (param id/value from Cursor models.list) finishes the full prompt ~46s.
-      BOTZ_CURSOR_MODEL_PARAMS: '{"thinking": "false"}'
+      # All LLM ops (generate, compress, distill) -> Cursor Composer 2.5.
+      # Eval stays typesafe:jev-latest. No BOTZ_CURSOR_MODEL_PARAMS: params are
+      # sent to every cursor model, and "thinking" was Haiku-5.5-specific.
+      BOTZ_GEN_PROVIDER: cursor:composer-2.5
       BOTZ_MCP_WRITE_ROLE: operator
       # Enterprise plan: org/team management, IAM policies + API tokens
       # (mint in /admin -> IAM · API tokens), private catalogues, inference

@@ -103,7 +103,22 @@ function renderCacheHeaders(cache) {
         add_header Cloudflare-CDN-Cache-Control "no-store" always;`;
 }
 
-function renderLazyProjectProxyBlock({ upstream, websocket, fallbackName }) {
+function renderLazyProjectProxyBlock({ upstream, websocket, streaming, fallbackName }) {
+  // `proxy.streaming: true` (e.g. MCP streamable HTTP / SSE + OAuth apps):
+  // no buffering either way, HTTP/1.1 keep-alive, and X-Forwarded-* so the app
+  // sees the public https origin behind Cloudflare.
+  const streamHeaders = streaming
+    ? `
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_cache off;
+        proxy_send_timeout 900s;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;${websocket ? '' : `
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";`}`
+    : '';
   const wsHeaders = websocket
     ? `
         proxy_http_version 1.1;
@@ -116,7 +131,7 @@ function renderLazyProjectProxyBlock({ upstream, websocket, fallbackName }) {
         proxy_set_header Host $host;
         proxy_read_timeout 900s;
         proxy_connect_timeout 75s;
-        proxy_set_header X-Real-IP $remote_addr;${wsHeaders}
+        proxy_set_header X-Real-IP $remote_addr;${wsHeaders}${streamHeaders}
         proxy_pass $project_upstream;
         error_page 502 504 = ${fallbackName};
     }
@@ -208,7 +223,8 @@ function renderBotzSubdomainProject(project) {
     // Resolve the upstream per request (Docker DNS) so a missing or stopped project
     // container yields a 503 for that host instead of nginx failing to start.
     const fallbackName = `@botz_sub_${name.replace(/-/g, '_')}_unavailable`;
-    const proxyBlock = renderLazyProjectProxyBlock({ upstream, websocket, fallbackName });
+    const streaming = manifest.proxy.streaming === true;
+    const proxyBlock = renderLazyProjectProxyBlock({ upstream, websocket, streaming, fallbackName });
 
     return `server {
     listen 80;

@@ -1,0 +1,44 @@
+# mcp.botz.ai — botz-mcp MCP server (zotoio/botz-mcp).
+#
+# Source: a gitignored checkout at backends/botz-mcp, e.g.
+#   git clone https://github.com/zotoio/botz-mcp.git backends/botz-mcp
+#   git -C backends/botz-mcp pull --ff-only
+# Built from that repo's deploy/Dockerfile with the Cursor SDK extra (skill
+# generation via Cursor Grok 4.7; no Ollama container).
+# Config/secrets: backends/mcp/.env (copy backends/mcp/.env.example, chmod 600).
+# State (OAuth client store, usage ledger, org config) persists in backends/mcp/data;
+# generated skills persist in backends/mcp/data/skills (BOTZ_SKILLS_DIR).
+services:
+  botz-mcp:
+    build:
+      context: ./backends/botz-mcp
+      dockerfile: deploy/Dockerfile
+      args:
+        BOTZ_EXTRAS: cursor
+    image: zoto-sites-botz-mcp
+    container_name: botz-mcp
+    restart: unless-stopped
+    env_file:
+      - ./backends/mcp/.env
+    environment:
+      BOTZ_HOST: 0.0.0.0
+      BOTZ_PORT: 4444
+      BOTZ_PUBLIC_URL: https://mcp.botz.ai
+      BOTZ_FORWARDED_ALLOW_IPS: "*"
+      BOTZ_MCP_OAUTH: "true"
+      BOTZ_STATIC_TOKENS_ENABLED: "false"
+      BOTZ_MCP_OAUTH_STORAGE_DIR: /app/.data/oauth-proxy
+      BOTZ_GEN_PROVIDER: cursor:grok-4.7
+      BOTZ_MCP_WRITE_ROLE: operator
+      # Generated/published skills live outside the image (seeded from the
+      # bundled skills on first start) so they survive rebuilds.
+      BOTZ_SKILLS_DIR: /app/.data/skills
+    expose:
+      - "4444"
+    volumes:
+      - ./backends/mcp/data:/app/.data
+    mem_limit: 2048m
+
+  nginx:
+    depends_on:
+      - botz-mcp

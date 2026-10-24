@@ -1160,3 +1160,35 @@ html[data-theme="light"] .site-footer {
     font-size: 0.83rem;
   }
 }
+
+/* Header AI Experiment Note Pill */
+.experiment-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-family: var(--font-sans);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  padding: 0.14rem 0.55rem;
+  border-radius: 999px;
+  background: var(--accent-gold-dim);
+  color: #fcd34d;
+  border: 1px solid var(--border-gold);
+  white-space: nowrap;
+}
+
+html[data-theme="light"] .experiment-note {
+  background: rgba(217, 119, 6, 0.12);
+  color: #92400e;
+  border-color: rgba(217, 119, 6, 0.4);
+}
+
+@media (max-width: 768px) {
+  .experiment-note {
+    font-size: 0.65rem;
+    padding: 0.1rem 0.45rem;
+    white-space: normal;
+    line-height: 1.25;
+  }
+}

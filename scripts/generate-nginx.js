@@ -197,6 +197,7 @@ function renderSite(site) {
   const fallbackBlock = apiFallbackName ? `\n\n${renderApiUnavailableFallback(apiFallbackName)}` : '';
   const proxySection = proxyBlocks ? `\n\n${proxyBlocks}${fallbackBlock}` : '';
   const cacheBlocks = site.id === 'botz.ai' ? renderBotzEditorialCacheBlocks() : '';
+  const cacheHeaders = renderCacheHeaders(site.cache);
 
   return `${renderHttpToHttpsRedirect(site)}server {
     listen 443 ssl;
@@ -205,7 +206,7 @@ function renderSite(site) {
 
     location / {
         root   /usr/share/nginx/html/${site.id};
-        index  index.html index.htm;
+        index  index.html index.htm;${cacheHeaders}
     }${cacheBlocks}${proxySection}
 ${ERROR_PAGE_BLOCK}
 }

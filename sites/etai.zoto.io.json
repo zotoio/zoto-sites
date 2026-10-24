@@ -1,4 +1,5 @@
 {
   "id": "etai.zoto.io",
-  "domains": ["etai.zoto.io", "aai.zoto.io"]
+  "domains": ["etai.zoto.io", "aai.zoto.io"],
+  "cache": "no-store"
 }

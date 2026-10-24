@@ -947,3 +947,75 @@ table.dossier-table td strong {
     gap: 0.35rem;
   }
 }
+
+/* Light Theme Override */
+html[data-theme="light"] {
+  --bg-deep: #f8fafc;
+  --bg-surface: #f1f5f9;
+  --bg-elevated: #e2e8f0;
+  --bg-card: rgba(255, 255, 255, 0.94);
+  --bg-glass: rgba(248, 250, 252, 0.92);
+  --border-subtle: rgba(15, 23, 42, 0.12);
+  --border-teal: rgba(13, 148, 136, 0.45);
+  --border-gold: rgba(217, 119, 6, 0.45);
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+  --accent-teal: #0d9488;
+  --accent-teal-dim: rgba(13, 148, 136, 0.12);
+  --accent-gold: #d97706;
+  --accent-gold-dim: rgba(217, 119, 6, 0.12);
+  --accent-blue: #0284c7;
+  --accent-blue-dim: rgba(2, 132, 199, 0.12);
+  --shadow-lg: 0 16px 40px rgba(15, 23, 42, 0.08);
+}
+
+html[data-theme="light"] body {
+  background:
+    radial-gradient(circle at 82% 8%, rgba(13, 148, 136, 0.08) 0%, transparent 40%),
+    radial-gradient(circle at 15% 28%, rgba(2, 132, 199, 0.06) 0%, transparent 45%),
+    var(--bg-deep);
+}
+
+html[data-theme="light"] .hero {
+  background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 55%, #e2e8f0 100%);
+}
+
+html[data-theme="light"] .hero h1,
+html[data-theme="light"] .section-title,
+html[data-theme="light"] .card h3,
+html[data-theme="light"] .evo-step-title {
+  color: #0f172a;
+}
+
+html[data-theme="light"] .hero-meta-grid,
+html[data-theme="light"] .evo-detail-box,
+html[data-theme="light"] .chart-box,
+html[data-theme="light"] .table-wrap,
+html[data-theme="light"] .readout-box {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.14);
+}
+
+html[data-theme="light"] table.dossier-table th {
+  background: #f1f5f9;
+  color: #0f766e;
+}
+
+html[data-theme="light"] .hero-img-caption {
+  background: rgba(255, 255, 255, 0.95);
+  color: #475569;
+}
+
+html[data-theme="light"] .site-footer {
+  background: #f1f5f9;
+}
+
+html[data-theme="light"] .btn-gold {
+  color: #b45309;
+}
+
+html[data-theme="light"] .p-bar-track {
+  background: #e2e8f0;
+  border-color: rgba(15, 23, 42, 0.1);
+}

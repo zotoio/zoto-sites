@@ -1,6 +1,6 @@
 /* ETAI.ZOTO.IO — Extraterrestrial Artificial Intelligence Interactive Research Portal */
 
-// Canonical hostname notice / redirect support for aai.zoto.io -> etai.zoto.io
+// Canonical hostname redirect support for aai.zoto.io -> etai.zoto.io
 (function checkCanonicalHost() {
   if (typeof window !== 'undefined' && window.location.hostname === 'aai.zoto.io') {
     const target = 'https://etai.zoto.io' + window.location.pathname + window.location.search + window.location.hash;
@@ -8,7 +8,11 @@
   }
 })();
 
-// 1. 6-Step Evolutionary Sequence Data (Chat Transcript Section 1 + Dossier Section 1)
+function isLightMode() {
+  return document.documentElement.getAttribute('data-theme') === 'light';
+}
+
+// 1. 6-Step Evolutionary Sequence Data
 const EVO_STEPS = [
   {
     step: '01',
@@ -60,7 +64,7 @@ const EVO_STEPS = [
   }
 ];
 
-// 2. 30 Primary References from Dossier Page 09
+// 2. 30 Primary References
 const REFERENCES = [
   { id: '01', cat: 'exoplanets', title: 'NASA Exoplanet Archive (15 Oct 2026)', desc: '6,445 confirmed exoplanets documented at the 8 October 2026 benchmark.', type: 'Institutional Record', url: 'https://exoplanetarchive.ipac.caltech.edu/docs/exonews_archive.html' },
   { id: '02', cat: 'exoplanets', title: 'NASA Kepler / Gaia Occurrence Study (2020)', desc: 'About Half of Sun-Like Stars Could Host Rocky, Potentially Habitable Planets (~300 million in Milky Way).', type: 'Peer-Reviewed / NASA', url: 'https://www.nasa.gov/missions/kepler/about-half-of-sun-like-stars-could-host-rocky-potentially-habitable-planets/' },
@@ -94,21 +98,7 @@ const REFERENCES = [
   { id: '30', cat: 'exoplanets', title: 'Moody et al. (2024) — Nature Ecology & Evolution 8', desc: 'The nature of the last universal common ancestor and its impact on the early Earth system (~4.2 Ga).', type: 'Peer-Reviewed', url: 'https://doi.org/10.1038/s41559-024-02461-1' }
 ];
 
-// 3. Dossier Pages Metadata for Visual Reader
-const DOSSIER_PAGES = [
-  { page: 1, file: 'assets/pages/page-01.png', title: 'Cover — Extraterrestrial Artificial Intelligence (2026)', desc: 'Evidence Dossier cover: research synthesis scope, 24 October 2026 cutoff, and institutional sources.' },
-  { page: 2, file: 'assets/pages/page-02.png', title: 'Page 01 — Executive Findings & Epistemic Standards', desc: 'Propositions A, B, C; how to read Observed vs. Inferred vs. Hypothetical vs. Alleged; Section 1 entity table.' },
-  { page: 3, file: 'assets/pages/page-03.png', title: 'Page 02 — Machine Civilisations & Generative Model', desc: 'Definition of self-maintaining machine lineages; 6,445 exoplanets; Kipping (2020/2025); p_chain decomposition.' },
-  { page: 4, file: 'assets/pages/page-04.png', title: 'Page 03 — Sigmoid Probability Curves & Cosmic Head Start', desc: 'P = 1 - (1 - p_chain)^N across 3M, 300M, and 30B worlds; steady-state detections μ ≈ rLqs; 9.3 Gyr delta.' },
-  { page: 5, file: 'assets/pages/page-05.png', title: 'Page 04 — Von Neumann Replication & Fermi Paradox × AI', desc: '10- and 20-generation probe replication; engineering constraints; Durability vs. Great Filter vs. Quiet Optimisation.' },
-  { page: 6, file: 'assets/pages/page-06.png', title: 'Page 05 — Technosignature Persistence & Search Programme', desc: 'Ordinal persistence bar chart; G-HAT & Project Hephaistos; 3I/ATLAS; Silurian hypothesis; Lunar regolith.' },
-  { page: 7, file: 'assets/pages/page-07.png', title: 'Page 06 — Convergent Discovery Chain & Government Secrecy', desc: '7 requirements for credible discovery; CIA U-2/A-12 precedent; AARO FY2025 319 reports; institutional incentives.' },
-  { page: 8, file: 'assets/pages/page-08.png', title: 'Page 07 — Bayesian Scrutiny of Cover-Up Claims & H1–H5', desc: 'Posterior odds O(H|E) = O(H) × LR sensitivity table; Alternative Models H1–H5; Alien AI invisibility motives.' },
-  { page: 9, file: 'assets/pages/page-09.png', title: 'Page 08 — What Would Change the Assessment & Priorities', desc: 'Inference impact table; IAA SETI June 2026 protocol update; 4 core research priorities.' },
-  { page: 10, file: 'assets/pages/page-10.png', title: 'Page 09 — 30 Primary Sources & Methodological Note', desc: 'Full bibliography [01]–[30] with links to NASA, PNAS, Nature, arXiv, SETI, CIA, and AARO.' }
-];
-
-// 4. Section 11 Inference Impact Scenarios
+// 3. Section 11 Inference Impact Scenarios
 const INFERENCE_SCENARIOS = [
   {
     title: 'Second independent origin of life (e.g., Solar System microbe unrelated to Earth)',
@@ -153,15 +143,41 @@ const INFERENCE_SCENARIOS = [
 ];
 
 document.addEventListener('DOMContentLoaded', () => {
+  initThemeToggle();
   initEvoSequence();
   initSigmoidCalculator();
   initHaystackSimulator();
   initProbeSimulator();
   initBayesCoverupCalculator();
   initInferenceExplorer();
-  initDossierViewer();
   initReferencesLibrary();
 });
+
+/* --- THEME TOGGLE (Dark Mode Default) --- */
+function initThemeToggle() {
+  const btn = document.getElementById('theme-toggle');
+  if (!btn) return;
+
+  const saved = localStorage.getItem('etai-theme') || 'dark';
+  applyTheme(saved);
+
+  btn.addEventListener('click', () => {
+    const next = isLightMode() ? 'dark' : 'light';
+    applyTheme(next);
+    localStorage.setItem('etai-theme', next);
+    window.dispatchEvent(new Event('resize'));
+  });
+
+  function applyTheme(mode) {
+    if (mode === 'light') {
+      document.documentElement.setAttribute('data-theme', 'light');
+      btn.textContent = '☀ Light Mode';
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+      btn.textContent = '☾ Dark Mode';
+    }
+  }
+}
 
 /* --- MODULE A: 6-Step Evolutionary Sequence --- */
 function initEvoSequence() {
@@ -176,7 +192,7 @@ function initEvoSequence() {
     });
     detail.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.45rem;">
-        <div style="font-weight:800;font-size:1.05rem;color:#fff;">Step ${s.step}: ${s.title}</div>
+        <div style="font-weight:800;font-size:1.05rem;color:var(--text-primary);">Step ${s.step}: ${s.title}</div>
         <div style="display:flex;gap:0.5rem;align-items:center;">
           <span class="badge ${s.badgeClass}">${s.status}</span>
           <span class="brand-badge">Refs ${s.refs}</span>
@@ -214,7 +230,6 @@ function initSigmoidCalculator() {
   }
 
   function probAtLeastOne(pChain, N) {
-    // P = 1 - (1 - p)^N ≈ 1 - exp(-N * p) for small p
     const np = N * pChain;
     if (np > 50) return 1.0;
     return 1 - Math.exp(-np);
@@ -259,6 +274,7 @@ function initSigmoidCalculator() {
 }
 
 function drawSigmoidChart(ctx, canvas, currentLogP, p3M, p300M, p30B) {
+  const light = isLightMode();
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
   canvas.width = rect.width * dpr;
@@ -278,11 +294,10 @@ function drawSigmoidChart(ctx, canvas, currentLogP, p3M, p300M, p30B) {
   const xForLog = (lp) => pad.left + ((lp - minLog) / (maxLog - minLog)) * pw;
   const yForPct = (pct) => pad.top + ph - (pct / 100) * ph;
 
-  // Grid lines
-  ctx.strokeStyle = 'rgba(148, 163, 184, 0.14)';
+  ctx.strokeStyle = light ? 'rgba(15, 23, 42, 0.1)' : 'rgba(148, 163, 184, 0.14)';
   ctx.lineWidth = 1;
   ctx.font = '11px JetBrains Mono, monospace';
-  ctx.fillStyle = '#94a3b8';
+  ctx.fillStyle = light ? '#475569' : '#94a3b8';
 
   [0, 25, 50, 75, 100].forEach(pct => {
     const y = yForPct(pct);
@@ -304,11 +319,10 @@ function drawSigmoidChart(ctx, canvas, currentLogP, p3M, p300M, p30B) {
     }
   }
 
-  // Curves: 30B (Gold), 300M (Teal), 3M (Light Blue)
   const series = [
     { N: 3e10, color: '#f59e0b', label: '30B worlds' },
-    { N: 3e8,  color: '#2dd4bf', label: '300M worlds (Milky Way rocky HZ)' },
-    { N: 3e6,  color: '#38bdf8', label: '3M worlds' }
+    { N: 3e8,  color: '#14b8a6', label: '300M worlds (Milky Way rocky HZ)' },
+    { N: 3e6,  color: '#0284c7', label: '3M worlds' }
   ];
 
   series.forEach(s => {
@@ -328,12 +342,11 @@ function drawSigmoidChart(ctx, canvas, currentLogP, p3M, p300M, p30B) {
     ctx.stroke();
   });
 
-  // Current logP vertical marker
   const clampedLog = Math.max(minLog, Math.min(maxLog, currentLogP));
   const cx = xForLog(clampedLog);
   ctx.save();
   ctx.setLineDash([5, 4]);
-  ctx.strokeStyle = '#ffffff';
+  ctx.strokeStyle = light ? '#0f172a' : '#ffffff';
   ctx.lineWidth = 1.5;
   ctx.beginPath();
   ctx.moveTo(cx, pad.top);
@@ -341,28 +354,26 @@ function drawSigmoidChart(ctx, canvas, currentLogP, p3M, p300M, p30B) {
   ctx.stroke();
   ctx.restore();
 
-  // Dots on curves
   [
     { pct: p30B, color: '#f59e0b' },
-    { pct: p300M, color: '#2dd4bf' },
-    { pct: p3M, color: '#38bdf8' }
+    { pct: p300M, color: '#14b8a6' },
+    { pct: p3M, color: '#0284c7' }
   ].forEach(pt => {
     const cy = yForPct(pt.pct);
     ctx.fillStyle = pt.color;
     ctx.beginPath();
     ctx.arc(cx, cy, 5, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = '#060a14';
+    ctx.strokeStyle = light ? '#ffffff' : '#060a14';
     ctx.lineWidth = 2;
     ctx.stroke();
   });
 
-  // Legend
   let lx = pad.left + 10;
   series.forEach(s => {
     ctx.fillStyle = s.color;
     ctx.fillRect(lx, 8, 12, 12);
-    ctx.fillStyle = '#e2e8f0';
+    ctx.fillStyle = light ? '#0f172a' : '#e2e8f0';
     ctx.fillText(s.label, lx + 17, 18);
     lx += ctx.measureText(s.label).width + 36;
   });
@@ -379,10 +390,10 @@ function initHaystackSimulator() {
   const ctx = canvas.getContext('2d');
 
   function update() {
-    const r = Math.pow(10, parseFloat(rEl.value)); // emergences/yr
-    const L = Math.pow(10, parseFloat(lEl.value)); // detectable years
-    const q = Math.pow(10, parseFloat(qEl.value)); // fraction detectable
-    const s = Math.pow(10, parseFloat(sEl.value)); // window overlap
+    const r = Math.pow(10, parseFloat(rEl.value));
+    const L = Math.pow(10, parseFloat(lEl.value));
+    const q = Math.pow(10, parseFloat(qEl.value));
+    const s = Math.pow(10, parseFloat(sEl.value));
 
     document.getElementById('val-rate-r').textContent = `10^${parseFloat(rEl.value).toFixed(1)} / yr`;
     document.getElementById('val-life-l').textContent = `10^${parseFloat(lEl.value).toFixed(1)} yr`;
@@ -406,6 +417,7 @@ function initHaystackSimulator() {
 }
 
 function drawHaystackRadar(ctx, canvas, logL, logQ, logS) {
+  const light = isLightMode();
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
   canvas.width = rect.width * dpr;
@@ -429,7 +441,6 @@ function drawHaystackRadar(ctx, canvas, logL, logQ, logS) {
     'Artefact Persistence'
   ];
 
-  // Concentric rings
   [0.25, 0.5, 0.75, 1.0].forEach(level => {
     ctx.beginPath();
     axes.forEach((_, i) => {
@@ -440,13 +451,12 @@ function drawHaystackRadar(ctx, canvas, logL, logQ, logS) {
       else ctx.lineTo(x, y);
     });
     ctx.closePath();
-    ctx.strokeStyle = 'rgba(148, 163, 184, 0.18)';
+    ctx.strokeStyle = light ? 'rgba(15, 23, 42, 0.14)' : 'rgba(148, 163, 184, 0.18)';
     ctx.stroke();
   });
 
-  // Spokes & labels
   ctx.font = '11px Inter, sans-serif';
-  ctx.fillStyle = '#cbd5e1';
+  ctx.fillStyle = light ? '#334155' : '#cbd5e1';
   axes.forEach((label, i) => {
     const ang = (Math.PI * 2 * i) / axes.length - Math.PI / 2;
     const x = cx + Math.cos(ang) * radius;
@@ -454,7 +464,7 @@ function drawHaystackRadar(ctx, canvas, logL, logQ, logS) {
     ctx.beginPath();
     ctx.moveTo(cx, cy);
     ctx.lineTo(x, y);
-    ctx.strokeStyle = 'rgba(148, 163, 184, 0.22)';
+    ctx.strokeStyle = light ? 'rgba(15, 23, 42, 0.18)' : 'rgba(148, 163, 184, 0.22)';
     ctx.stroke();
 
     const lx = cx + Math.cos(ang) * (radius + 22);
@@ -463,9 +473,7 @@ function drawHaystackRadar(ctx, canvas, logL, logQ, logS) {
     ctx.fillText(label, lx, ly + 4);
   });
 
-  // Polygon 1: Traditional Radio SETI (narrow slice of Cosmic Haystack)
   const radioVals = [0.22, 0.18, 0.12, 0.28, 0.25, 0.15];
-  // Polygon 2: Current slider-adjusted Durable Machine Search
   const qNorm = Math.min(0.95, Math.max(0.15, (logQ + 6) / 6));
   const lNorm = Math.min(0.95, Math.max(0.15, (logL - 2) / 7));
   const sNorm = Math.min(0.95, Math.max(0.15, (logS + 4) / 4));
@@ -488,8 +496,8 @@ function drawHaystackRadar(ctx, canvas, logL, logQ, logS) {
     ctx.stroke();
   }
 
-  drawPoly(radioVals, '#38bdf8', 'rgba(56, 189, 248, 0.18)');
-  drawPoly(machineVals, '#2dd4bf', 'rgba(45, 212, 191, 0.24)');
+  drawPoly(radioVals, '#0284c7', 'rgba(56, 189, 248, 0.18)');
+  drawPoly(machineVals, '#0d9488', 'rgba(45, 212, 191, 0.24)');
 }
 
 /* --- MODULE D: Interstellar Probe Propagation & Von Neumann Replication --- */
@@ -502,17 +510,17 @@ function initProbeSimulator() {
   const ctx = canvas.getContext('2d');
 
   function update() {
-    const vPct = parseFloat(speedEl.value); // % of c
+    const vPct = parseFloat(speedEl.value);
     const gens = parseInt(genEl.value, 10);
-    const stopYr = parseFloat(stopEl.value); // kyr stop per generation
+    const stopYr = parseFloat(stopEl.value);
 
     document.getElementById('val-probe-speed').textContent = `${vPct.toFixed(1)}% c`;
     document.getElementById('val-probe-gen').textContent = `${gens} generations`;
     document.getElementById('val-probe-stop').textContent = `${stopYr.toFixed(0)} kyr`;
 
     const vFrac = vPct / 100;
-    const t1000ly = 1000 / vFrac; // years
-    const tGalaxy = (100000 / vFrac) + (gens * stopYr * 1000); // years across 100k ly
+    const t1000ly = 1000 / vFrac;
+    const tGalaxy = (100000 / vFrac) + (gens * stopYr * 1000);
     const totalProbes = Math.pow(2, gens);
 
     document.getElementById('probe-1k-readout').textContent =
@@ -531,6 +539,7 @@ function initProbeSimulator() {
 }
 
 function drawGalaxyWave(ctx, canvas, vPct, gens, tGalaxy) {
+  const light = isLightMode();
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
   canvas.width = rect.width * dpr;
@@ -545,33 +554,28 @@ function drawGalaxyWave(ctx, canvas, vPct, gens, tGalaxy) {
 
   ctx.clearRect(0, 0, w, h);
 
-  // Milky Way spiral disk backdrop
   const grad = ctx.createRadialGradient(cx, cy, 4, cx, cy, maxR);
-  grad.addColorStop(0, 'rgba(245, 158, 11, 0.45)');
-  grad.addColorStop(0.45, 'rgba(56, 189, 248, 0.16)');
+  grad.addColorStop(0, 'rgba(245, 158, 11, 0.38)');
+  grad.addColorStop(0.45, 'rgba(56, 189, 248, 0.14)');
   grad.addColorStop(1, 'rgba(11, 18, 34, 0.02)');
   ctx.fillStyle = grad;
   ctx.beginPath();
   ctx.arc(cx, cy, maxR, 0, Math.PI * 2);
   ctx.fill();
 
-  // Concentric scale rings (25k, 50k, 100k ly diameter)
   [0.25, 0.5, 0.75, 1.0].forEach((frac, idx) => {
-    ctx.strokeStyle = 'rgba(148, 163, 184, 0.2)';
+    ctx.strokeStyle = light ? 'rgba(15, 23, 42, 0.15)' : 'rgba(148, 163, 184, 0.2)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.arc(cx, cy, maxR * frac, 0, Math.PI * 2);
     ctx.stroke();
-    ctx.fillStyle = '#64748b';
+    ctx.fillStyle = light ? '#475569' : '#64748b';
     ctx.font = '10px JetBrains Mono, monospace';
     ctx.fillText(`${(idx + 1) * 25}k ly`, cx + 6, cy - maxR * frac + 12);
   });
 
-  // Origin star offset from galactic center
   const ox = cx - maxR * 0.35;
   const oy = cy + maxR * 0.15;
-
-  // Replication wave circles
   const reachFrac = Math.min(1.35, (gens / 20) * (0.5 + vPct / 4));
   const waveR = maxR * reachFrac;
 
@@ -581,37 +585,36 @@ function drawGalaxyWave(ctx, canvas, vPct, gens, tGalaxy) {
   ctx.clip();
 
   const waveGrad = ctx.createRadialGradient(ox, oy, 2, ox, oy, waveR);
-  waveGrad.addColorStop(0, 'rgba(45, 212, 191, 0.38)');
-  waveGrad.addColorStop(0.8, 'rgba(45, 212, 191, 0.14)');
-  waveGrad.addColorStop(1, 'rgba(45, 212, 191, 0.0)');
+  waveGrad.addColorStop(0, 'rgba(20, 184, 166, 0.38)');
+  waveGrad.addColorStop(0.8, 'rgba(20, 184, 166, 0.14)');
+  waveGrad.addColorStop(1, 'rgba(20, 184, 166, 0.0)');
   ctx.fillStyle = waveGrad;
   ctx.beginPath();
   ctx.arc(ox, oy, waveR, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.strokeStyle = '#2dd4bf';
+  ctx.strokeStyle = '#14b8a6';
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.arc(ox, oy, waveR, 0, Math.PI * 2);
   ctx.stroke();
 
-  // Plot deterministic descendant probe nodes inside wave
   const nodeCount = Math.min(140, Math.pow(2, Math.min(gens, 8)));
   for (let i = 0; i < nodeCount; i++) {
-    const angle = i * 2.3999632; // golden angle
+    const angle = i * 2.3999632;
     const dist = Math.sqrt((i + 1) / nodeCount) * waveR * 0.94;
     const nx = ox + Math.cos(angle) * dist;
     const ny = oy + Math.sin(angle) * dist;
-    ctx.fillStyle = i === 0 ? '#f59e0b' : '#2dd4bf';
+    ctx.fillStyle = i === 0 ? '#f59e0b' : '#0d9488';
     ctx.beginPath();
     ctx.arc(nx, ny, i === 0 ? 5 : 2.2, 0, Math.PI * 2);
     ctx.fill();
   }
   ctx.restore();
 
-  ctx.fillStyle = '#f8fafc';
+  ctx.fillStyle = light ? '#0f172a' : '#f8fafc';
   ctx.font = '11px JetBrains Mono, monospace';
-  ctx.fillText(` Milky Way Disk (100,000 ly) · Full Traversal ≈ ${(tGalaxy / 1e6).toFixed(2)} Myr (${ ((tGalaxy / 13.8e9) * 100).toFixed(4) }% of cosmic age)`, 12, h - 12);
+  ctx.fillText(`Milky Way Disk (100,000 ly) · Full Traversal ≈ ${(tGalaxy / 1e6).toFixed(2)} Myr (${ ((tGalaxy / 13.8e9) * 100).toFixed(4) }% of cosmic age)`, 12, h - 12);
 }
 
 /* --- MODULE E: Bayesian Cover-Up Scrutiny Calculator --- */
@@ -662,6 +665,7 @@ function initBayesCoverupCalculator() {
 }
 
 function drawBayesCurve(ctx, canvas, priorPct, currentLogLR, currentPostPct, calcPosteriorPct) {
+  const light = isLightMode();
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
   canvas.width = rect.width * dpr;
@@ -676,14 +680,14 @@ function drawBayesCurve(ctx, canvas, priorPct, currentLogLR, currentPostPct, cal
 
   ctx.clearRect(0, 0, w, h);
 
-  const minLogLR = 0; // LR = 1
-  const maxLogLR = 4; // LR = 10,000
+  const minLogLR = 0;
+  const maxLogLR = 4;
   const xForLog = (l) => pad.left + ((l - minLogLR) / (maxLogLR - minLogLR)) * pw;
   const yForPct = (pct) => pad.top + ph - (pct / 100) * ph;
 
-  ctx.strokeStyle = 'rgba(148, 163, 184, 0.15)';
+  ctx.strokeStyle = light ? 'rgba(15, 23, 42, 0.12)' : 'rgba(148, 163, 184, 0.15)';
   ctx.font = '11px JetBrains Mono, monospace';
-  ctx.fillStyle = '#94a3b8';
+  ctx.fillStyle = light ? '#475569' : '#94a3b8';
 
   [0, 25, 50, 75, 100].forEach(pct => {
     const y = yForPct(pct);
@@ -703,7 +707,6 @@ function drawBayesCurve(ctx, canvas, priorPct, currentLogLR, currentPostPct, cal
     ctx.fillText(`LR=${Math.pow(10, l)}`, x - 22, h - 14);
   });
 
-  // Curve for current prior
   ctx.strokeStyle = '#f59e0b';
   ctx.lineWidth = 2.8;
   ctx.beginPath();
@@ -717,14 +720,13 @@ function drawBayesCurve(ctx, canvas, priorPct, currentLogLR, currentPostPct, cal
   }
   ctx.stroke();
 
-  // Active marker
   const cx = xForLog(currentLogLR);
   const cy = yForPct(currentPostPct);
-  ctx.fillStyle = '#2dd4bf';
+  ctx.fillStyle = '#14b8a6';
   ctx.beginPath();
   ctx.arc(cx, cy, 6, 0, Math.PI * 2);
   ctx.fill();
-  ctx.strokeStyle = '#060a14';
+  ctx.strokeStyle = light ? '#ffffff' : '#060a14';
   ctx.lineWidth = 2;
   ctx.stroke();
 }
@@ -764,62 +766,7 @@ function initInferenceExplorer() {
   selectScenario(2);
 }
 
-/* --- MODULE G: 10-Page PDF Dossier Visual Viewer --- */
-function initDossierViewer() {
-  const pillsEl = document.getElementById('dossier-page-pills');
-  const imgA = document.getElementById('dossier-img-a');
-  const imgB = document.getElementById('dossier-img-b');
-  const capA = document.getElementById('dossier-cap-a');
-  const capB = document.getElementById('dossier-cap-b');
-  if (!pillsEl || !imgA) return;
-
-  let currentPair = 0; // 0 -> pages 1-2, 1 -> pages 3-4, etc.
-  const pairs = [
-    [0, 1],
-    [2, 3],
-    [4, 5],
-    [6, 7],
-    [8, 9]
-  ];
-
-  function renderPair(pairIdx) {
-    currentPair = pairIdx;
-    const [aIdx, bIdx] = pairs[pairIdx];
-    const pA = DOSSIER_PAGES[aIdx];
-    const pB = DOSSIER_PAGES[bIdx];
-
-    imgA.src = pA.file;
-    imgA.alt = pA.title;
-    capA.innerHTML = `<strong>${pA.title}</strong><br><span>${pA.desc}</span>`;
-
-    imgB.src = pB.file;
-    imgB.alt = pB.title;
-    capB.innerHTML = `<strong>${pB.title}</strong><br><span>${pB.desc}</span>`;
-
-    pillsEl.querySelectorAll('.page-pill').forEach((b, i) => b.classList.toggle('active', i === pairIdx));
-  }
-
-  pillsEl.innerHTML = pairs.map((p, i) => `
-    <button type="button" class="page-pill ${i === 0 ? 'active' : ''}" data-pair="${i}">
-      Pages ${p[0] + 1}–${p[1] + 1}
-    </button>
-  `).join('');
-
-  pillsEl.querySelectorAll('.page-pill').forEach(btn => {
-    btn.addEventListener('click', () => renderPair(Number(btn.dataset.pair)));
-  });
-
-  document.getElementById('dossier-prev')?.addEventListener('click', () => {
-    renderPair((currentPair - 1 + pairs.length) % pairs.length);
-  });
-  document.getElementById('dossier-next')?.addEventListener('click', () => {
-    renderPair((currentPair + 1) % pairs.length);
-  });
-
-  renderPair(0);
-}
-
-/* --- MODULE H: 30 Primary Sources Search & Filter --- */
+/* --- MODULE G: 30 Primary Sources Search & Filter --- */
 function initReferencesLibrary() {
   const grid = document.getElementById('references-grid');
   const searchInput = document.getElementById('ref-search');

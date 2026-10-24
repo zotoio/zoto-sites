@@ -369,13 +369,20 @@ function drawSigmoidChart(ctx, canvas, currentLogP, p3M, p300M, p30B) {
     ctx.stroke();
   });
 
-  let lx = pad.left + 10;
-  series.forEach(s => {
+  const shortSeries = w < 520
+    ? [
+        { color: '#f59e0b', label: '30B worlds' },
+        { color: '#14b8a6', label: '300M (MW)' },
+        { color: '#0284c7', label: '3M worlds' }
+      ]
+    : series;
+  let lx = pad.left;
+  shortSeries.forEach(s => {
     ctx.fillStyle = s.color;
-    ctx.fillRect(lx, 8, 12, 12);
+    ctx.fillRect(lx, 8, 10, 10);
     ctx.fillStyle = light ? '#0f172a' : '#e2e8f0';
-    ctx.fillText(s.label, lx + 17, 18);
-    lx += ctx.measureText(s.label).width + 36;
+    ctx.fillText(s.label, lx + 14, 17);
+    lx += ctx.measureText(s.label).width + (w < 520 ? 22 : 34);
   });
 }
 
@@ -614,7 +621,10 @@ function drawGalaxyWave(ctx, canvas, vPct, gens, tGalaxy) {
 
   ctx.fillStyle = light ? '#0f172a' : '#f8fafc';
   ctx.font = '11px JetBrains Mono, monospace';
-  ctx.fillText(`Milky Way Disk (100,000 ly) · Full Traversal ≈ ${(tGalaxy / 1e6).toFixed(2)} Myr (${ ((tGalaxy / 13.8e9) * 100).toFixed(4) }% of cosmic age)`, 12, h - 12);
+  const mwCaption = w < 500
+    ? `100k ly Traversal ≈ ${(tGalaxy / 1e6).toFixed(2)} Myr (${((tGalaxy / 13.8e9) * 100).toFixed(3)}% cosmic age)`
+    : `Milky Way Disk (100,000 ly) · Full Traversal ≈ ${(tGalaxy / 1e6).toFixed(2)} Myr (${((tGalaxy / 13.8e9) * 100).toFixed(4)}% of cosmic age)`;
+  ctx.fillText(mwCaption, 10, h - 10);
 }
 
 /* --- MODULE E: Bayesian Cover-Up Scrutiny Calculator --- */

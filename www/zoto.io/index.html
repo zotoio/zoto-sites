@@ -45,14 +45,17 @@
   crossorigin="anonymous"></script>
 		<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/90/three.min.js"></script>
 		<script src="/3js-extra.js"></script>
-		<span style="margin-left: -25px; font-size:20px;top: 200px;position: absolute;"><a class="reboot" style="color:#fff" href="https://halt.sh/#zoto.io">reboot</a></span>
 
 		<script>
 			var reboot = false;
 			var sprite1;
-			$("a.reboot").click(function(e){
-  				e.preventDefault();
-  				$(this).hide();
+			var REBOOT_HREF = "https://halt.sh/#zoto.io";
+			var IDLE_MS = 3000;
+			var idleTimer = null;
+			function doReboot(){
+				if (reboot) { return; }
+				clearTimeout(idleTimer);
+				$(document).off("mousemove pointermove", armIdle);
 				container.removeChild(container.firstChild);
 				reboot = true;	
 				init();
@@ -72,8 +75,14 @@
 
                                 scene.add( particles );
 				setTimeout('glitchPass.goWild = true', 600);
-				setTimeout('window.location.href="' + $(this).attr('href') + '"', 1000);
-			});
+				setTimeout('window.location.href="' + REBOOT_HREF + '"', 1000);
+			}
+			function armIdle(){
+				clearTimeout(idleTimer);
+				idleTimer = setTimeout(doReboot, IDLE_MS);
+			}
+			$(document).on("mousemove pointermove", armIdle);
+			armIdle();
 
 			/**
 			 * @author alteredq / http://alteredqualia.com/

@@ -48,6 +48,11 @@ services:
       # Paid Cursor generation: no cold-start CRUX compile of every skill;
       # artifacts still compile on demand when skills are written.
       BOTZ_CRUX_RECONCILE_ON_START: "false"
+      # Async AI image generation (gpt-image-2 via BOTZ_IMAGE_API_KEY in backends/mcp/.env)
+      # and startup background backfill of any missing/procedural skill & agent artwork.
+      BOTZ_IMAGE_ENABLED: "true"
+      BOTZ_IMAGE_MODEL: gpt-image-2
+      BOTZ_IMAGE_RECONCILE_ON_START: "true"
       # Generated/published skills live outside the image (seeded from the
       # bundled skills on first start) so they survive rebuilds.
       BOTZ_SKILLS_DIR: /app/.data/skills

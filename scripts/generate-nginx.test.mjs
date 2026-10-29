@@ -68,3 +68,13 @@ test('D2: every server block caps request bodies at 16m (reverse-proxy backstop)
     assert.equal(caps, servers, `${f}: ${caps} caps for ${servers} server blocks`);
   }
 });
+
+test('swarm.botz.ai exposes /otlp/v1/ with body cap and rate limit', () => {
+  const conf = fs.readFileSync(path.join(ROOT, 'nginx-conf/botz.ai-sub-swarm.conf'), 'utf8');
+  assert.match(conf, /limit_req_zone \$otlp_swarm_client zone=otlp_swarm:10m rate=20r\/s;/);
+  const block = conf.match(/location \^~ \/otlp\/v1\/ \{[\s\S]*?\n    \}/)?.[0];
+  assert.ok(block, 'otlp location present');
+  assert.match(block, /limit_req zone=otlp_swarm burst=40 nodelay;/);
+  assert.match(block, /client_max_body_size 4m;/);
+  assert.match(block, /proxy_pass \$project_upstream;/);
+});

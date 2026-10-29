@@ -7,7 +7,7 @@
 #
 # Steps: back up backends/<src> as backends/<src>.prev-<ts>, tag the running image
 # rollback-<ts>, swap in the new source, rebuild and recreate ONLY that service,
-# wait for /healthz 200 inside the container network. If it never becomes healthy,
+# wait for the health endpoint (botz-mcp /healthz, swarm /health) to return 200 inside the container network. If it never becomes healthy,
 # restore the backup and the previous image and recreate again (rollback), keeping
 # the failed tree as backends/<src>.failed-<ts> for inspection.
 #
@@ -20,8 +20,8 @@ NEW="${2:?usage: deploy-backend.sh <botz-mcp|swarm> <new-source-dir>}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-180}"
 
 case "$SVC" in
-  botz-mcp) SRC=botz-mcp; IMAGE=zoto-sites-botz-mcp; PORT=4444 ;;
-  swarm) SRC=botz-mcp-swarm; IMAGE=zoto-sites-swarm; PORT=4310 ;;
+  botz-mcp) SRC=botz-mcp; IMAGE=zoto-sites-botz-mcp; PORT=4444; HEALTH_PATH=/healthz ;;
+  swarm) SRC=botz-mcp-swarm; IMAGE=zoto-sites-swarm; PORT=4310; HEALTH_PATH=/health ;;
   *) echo "deploy-backend: unknown service $SVC" >&2; exit 2 ;;
 esac
 
@@ -39,14 +39,14 @@ healthy() {
   while (( SECONDS < deadline )); do
     # Probe over the compose network from the nginx container (it ships curl).
     code="$(docker exec nginx curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
-      "http://${SVC}:${PORT}/healthz" 2>/dev/null || true)"
+      "http://${SVC}:${PORT}${HEALTH_PATH}" 2>/dev/null || true)"
     if [[ "$code" == "200" ]]; then
-      echo "deploy-backend: $SVC /healthz 200"
+      echo "deploy-backend: $SVC ${HEALTH_PATH} 200"
       return 0
     fi
     sleep 5
   done
-  echo "deploy-backend: $SVC /healthz not 200 after ${HEALTH_TIMEOUT}s (last: ${code:-none})" >&2
+  echo "deploy-backend: $SVC ${HEALTH_PATH} not 200 after ${HEALTH_TIMEOUT}s (last: ${code:-none})" >&2
   return 1
 }
 

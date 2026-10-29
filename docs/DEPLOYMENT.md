@@ -310,7 +310,7 @@ Approved 2026-10-29 (crash-loop guards). Prepare the new source tree next to the
 sudo ./scripts/deploy-backend.sh botz-mcp backends/botz-mcp.new   # or: swarm backends/botz-mcp-swarm.new
 ```
 
-The script backs up `backends/<src>` as `backends/<src>.prev-<UTC ts>`, tags the running image `<image>:rollback-<ts>`, rebuilds and recreates only that service, and waits up to `HEALTH_TIMEOUT` seconds (default 180) for `/healthz` 200 (probed from the nginx container over the compose network). If the health check fails it moves the new tree to `backends/<src>.failed-<ts>`, restores the backup and the previous image, and recreates the service. It never touches other services, volumes or the botz.ai mounted cache (source images and article JSON are read-only).
+The script backs up `backends/<src>` as `backends/<src>.prev-<UTC ts>`, tags the running image `<image>:rollback-<ts>`, rebuilds and recreates only that service, and waits up to `HEALTH_TIMEOUT` seconds (default 180) for the health endpoint to return 200 (botz-mcp `/healthz`, swarm `/health`; probed from the nginx container over the compose network). If the health check fails it moves the new tree to `backends/<src>.failed-<ts>`, restores the backup and the previous image, and recreates the service. It never touches other services, volumes or the botz.ai mounted cache (source images and article JSON are read-only).
 
 `botz-mcp` runs with `restart: on-failure:5`: a broken image stops after five failed starts instead of crash-looping. After a host reboot, confirm `docker ps` shows `botz-mcp`; if not, `docker compose ... up -d botz-mcp`.
 

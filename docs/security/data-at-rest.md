@@ -28,16 +28,18 @@ host 170.64.250.36 (`/home/andrewv/git/zoto-sites`).
 | swarm dashboard sessions (upstream GitHub token) | `…/data/sessions/*.json` | Envelope (file names were already SHA-256 of the session token). |
 | swarm IAM / worker tokens | `…/data/iam-tokens.json` | Already SHA-256 hashes only. |
 
-Not yet covered (follow-up, documented risk): swarm MCP *target* credentials (`target.auth.apiKey` in `policy.json`, `catalogue/*.json`, `projects/*/project.json`). They are read by many code paths that another change is editing concurrently, so they were left in place rather than risk breaking target calls; as an interim control `backends/swarm` was tightened to `0700 andrewv` on 2026-10-29 (it was `0755`; `backends/mcp` was already `0700`), so only root and `andrewv` (uid 1000, the container's `node` user) can read them.
+Swarm MCP *target* credentials (`apiKey`, `clientSecret`, `accessToken`, `refreshToken` in `policy.json`, `catalogue/*.json`, `projects/**.json`) are sealed per field (`enc:v1:<kid>:…`, AES-256-GCM, AAD = field name); readers accept legacy plaintext and fail closed on decryption errors (botz-mcp-swarm #108). `backends/swarm` is also `0700 andrewv`.
 
 Format: AES-256-GCM, 96-bit random nonce, 128-bit tag, key id stored with every ciphertext, AAD binds the
 purpose (file/field), so a ciphertext cannot be swapped between files. Writes are atomic (temp file + rename).
 
-## Migration (done 2026-10-29)
+## Migration status
 
 1. `sudo scripts/backup-data.sh <svc>` — every data file copied in place to `<file>.bak-<ts>` (`root:root 0400`; SQLite via the online backup API). Nothing is deleted.
 2. Deploy the new code (`sudo scripts/deploy-backend.sh <svc> <dir>`). Readers accept both formats (botz-mcp still reads the old JWT-derived Fernet values; swarm reads plaintext JSON), so nothing breaks before re-encryption.
 3. `sudo scripts/rotate-storage-key.sh <svc> --migrate-only` — backup again, then rewrite everything with the active key; legacy raw codes/refresh tokens/states become hashes; the SQLite file is VACUUMed so freed pages keep no old raw keys.
+
+Status (2026-10-29, AEDT): **all live.** swarm OAuth/session files deployed (#103) and migrated 19:54 (key `k20261029-f39c5e`, test client `swarm_client_27879b02e98b4d68` removed). swarm target credentials deployed (#108, `a08c057`) and resealed 20:50. botz-mcp deployed (#96, `3811e85`) 20:33 and migrated with `rotate-storage-key.sh botz-mcp --migrate-only` (OAuth store re-encrypted + VACUUMed, `swarm_instrumentation.json` API key sealed). Pre-deploy backups: `*.bak-20261029T0930Z-predeploy` (botz-mcp), `*.bak-20261029T0945Z-predeploy` (swarm). Verified: no plaintext tokens/keys in data files, healthz 200 on both, programmatic code+refresh flow OK on both, `cursor://anysphere.cursor-mcp/oauth/callback` DCR 201. No re-login needed.
 
 Existing sessions keep working: botz-mcp refresh tokens and OAuth clients are re-encrypted (same JWT signing key, same SHA-256 refresh-token index); swarm refresh tokens are converted to hashes and still match. No re-login was needed.
 

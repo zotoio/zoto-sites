@@ -25,3 +25,5 @@ ssl
 ./backends/swarm/data
 ./backends/mcp/data
 ${SSL_CERT_DIR:-./ssl}
+./compose/otel
+./backends/otel

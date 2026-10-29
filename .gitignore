@@ -90,3 +90,4 @@ backends/botz-mcp-swarm/
 backends/swarm/data/
 backends/botz-mcp/
 backends/mcp/data/
+backends/otel/

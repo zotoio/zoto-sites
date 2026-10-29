@@ -1,0 +1,37 @@
+# Internal-only OTEL collector for swarm (one per system; never shared, never published).
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+processors:
+  memory_limiter:
+    check_interval: 2s
+    limit_mib: 96
+    spike_limit_mib: 24
+  resource:
+    attributes:
+      - key: collector.system
+        value: swarm
+        action: upsert
+  batch: {}
+exporters:
+  file:
+    path: /data/otel-swarm.jsonl
+    rotation:
+      max_megabytes: 20
+      max_days: 7
+      max_backups: 3
+  # Keep Swarm dashboard "Local OTEL"/Signals populated: forward to Swarm own /otlp (internal network).
+  otlphttp/swarm:
+    endpoint: http://swarm:4310/otlp
+    encoding: json
+    headers:
+      X-Swarm-Token: ${env:SWARM_OTLP_TOKEN}
+service:
+  telemetry:
+    logs: { level: warn }
+  pipelines:
+    traces: { receivers: [otlp], processors: [memory_limiter, resource, batch], exporters: [file, otlphttp/swarm] }
+    metrics: { receivers: [otlp], processors: [memory_limiter, resource, batch], exporters: [file, otlphttp/swarm] }
+    logs: { receivers: [otlp], processors: [memory_limiter, resource, batch], exporters: [file] }

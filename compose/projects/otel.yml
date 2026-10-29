@@ -1,0 +1,33 @@
+# Per-system internal OTEL collectors (no ports, no nginx route). Bounded: memory_limiter + mem_limit,
+# file exporter rotation (20MB x 3 backups, 7 days). Data: backends/otel/<system>/ (owned by uid 10001).
+# backends/otel/swarm-collector.env holds SWARM_OTLP_TOKEN (same value as backends/swarm/.env), chmod 600.
+services:
+  otel-collector-swarm:
+    image: otel/opentelemetry-collector-contrib:0.115.1
+    container_name: otel-collector-swarm
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yaml"]
+    env_file:
+      - path: ./backends/otel/swarm-collector.env
+        required: false
+    volumes:
+      - ./compose/otel/collector-swarm.yaml:/etc/otelcol/config.yaml:ro
+      - ./backends/otel/swarm:/data
+    expose: ["4318"]
+    mem_limit: 160m
+  otel-collector-botz-mcp:
+    image: otel/opentelemetry-collector-contrib:0.115.1
+    container_name: otel-collector-botz-mcp
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./compose/otel/collector-botz-mcp.yaml:/etc/otelcol/config.yaml:ro
+      - ./backends/otel/botz-mcp:/data
+    expose: ["4318"]
+    mem_limit: 160m
+  swarm:
+    environment:
+      SWARM_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector-swarm:4318
+  botz-mcp:
+    environment:
+      BOTZ_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector-botz-mcp:4318

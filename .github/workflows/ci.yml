@@ -81,6 +81,9 @@ jobs:
           bash -n scripts/deploy.sh
           bash -n scripts/compose-stack.sh
           bash -n scripts/deploy-backend.sh
+          bash -n scripts/backup-data.sh
+          bash -n scripts/botz-keys.sh
+          bash -n scripts/rotate-storage-key.sh
           if command -v shellcheck >/dev/null 2>&1; then
             shellcheck -x scripts/deploy-safe.sh scripts/deploy.sh scripts/sync-ssl.sh || true
           fi

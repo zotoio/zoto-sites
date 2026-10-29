@@ -1,4 +1,4 @@
-FROM node:18-alpine AS nginx-config
+FROM node:25-alpine AS nginx-config
 WORKDIR /build
 COPY scripts/generate-nginx.js scripts/
 COPY scripts/lib/ scripts/lib/

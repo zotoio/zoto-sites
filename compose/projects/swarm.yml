@@ -15,6 +15,9 @@ services:
     restart: unless-stopped
     env_file:
       - ./backends/swarm/.env
+      # Data-at-rest master keys (security D3): root-only 0400, created on the host with
+      # `sudo scripts/botz-keys.sh init swarm`; never in git. See docs/security/data-at-rest.md.
+      - /etc/botz/keys/swarm.env
     environment:
       PORT: 4310
       SWARM_BASE_URL: https://swarm.botz.ai

@@ -22,6 +22,9 @@ services:
     restart: on-failure:5
     env_file:
       - ./backends/mcp/.env
+      # Data-at-rest master keys (security D3): root-only 0400, created on the host with
+      # `sudo scripts/botz-keys.sh init botz-mcp`; never in git. See docs/security/data-at-rest.md.
+      - /etc/botz/keys/botz-mcp.env
     environment:
       BOTZ_HOST: 0.0.0.0
       BOTZ_PORT: 4444

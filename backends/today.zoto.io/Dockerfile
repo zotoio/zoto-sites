@@ -1,9 +1,9 @@
-FROM node:20-alpine AS deps
+FROM node:25-alpine AS deps
 WORKDIR /home/root
 COPY package.json yarn.lock ./
 RUN yarn install --frozen-lockfile --production
 
-FROM node:20-alpine
+FROM node:25-alpine
 WORKDIR /home/root
 COPY package.json yarn.lock index.js ./
 COPY lib ./lib

@@ -30,6 +30,9 @@ services:
       BOTZ_MCP_OAUTH: "true"
       BOTZ_STATIC_TOKENS_ENABLED: "false"
       BOTZ_MCP_OAUTH_STORAGE_DIR: /app/.data/oauth-proxy
+      # DCR redirect allowlist (approved 2026-10-29): Cursor desktop prefix, Cursor web
+      # callback, loopback. Other cursor:// hosts are rejected.
+      BOTZ_MCP_ALLOWED_REDIRECT_URIS: '["cursor://anysphere.cursor-mcp/*","https://www.cursor.com/agents/mcp/oauth/callback","http://localhost:*","http://127.0.0.1:*"]'
       # All LLM ops (generate, compress, distill) -> Claude Haiku 5.5
       # (Cursor model id from Cursor.models.list()).
       BOTZ_GEN_PROVIDER: cursor:claude-haiku-5-5

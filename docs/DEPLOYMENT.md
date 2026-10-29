@@ -302,6 +302,29 @@ Each deploy runs `scripts/deploy-safe.sh`:
 
 GitHub Actions (`.github/workflows/deploy.yml`) runs `git fetch origin main` and `bash scripts/deploy-safe.sh` over SSH when `DEPLOY_*` secrets are set.
 
+## Deploy one backend with auto-rollback (botz-mcp, swarm)
+
+Approved 2026-10-29 (crash-loop guards). Prepare the new source tree next to the live one (for example extract a release tarball into `backends/botz-mcp.new`), then:
+
+```bash
+sudo ./scripts/deploy-backend.sh botz-mcp backends/botz-mcp.new   # or: swarm backends/botz-mcp-swarm.new
+```
+
+The script backs up `backends/<src>` as `backends/<src>.prev-<UTC ts>`, tags the running image `<image>:rollback-<ts>`, rebuilds and recreates only that service, and waits up to `HEALTH_TIMEOUT` seconds (default 180) for `/healthz` 200 (probed from the nginx container over the compose network). If the health check fails it moves the new tree to `backends/<src>.failed-<ts>`, restores the backup and the previous image, and recreates the service. It never touches other services, volumes or the botz.ai mounted cache (source images and article JSON are read-only).
+
+`botz-mcp` runs with `restart: on-failure:5`: a broken image stops after five failed starts instead of crash-looping. After a host reboot, confirm `docker ps` shows `botz-mcp`; if not, `docker compose ... up -d botz-mcp`.
+
+## Request body caps (reverse proxy)
+
+Every generated nginx `server` block sets `client_max_body_size 16m` (`CLIENT_MAX_BODY_SIZE` in `scripts/generate-nginx.js`). This is the outer backstop; the apps enforce tighter caps and return 413 themselves:
+
+| Service | OAuth | MCP / ingest | Admin JSON | Uploads | Default |
+| --- | --- | --- | --- | --- | --- |
+| botz-mcp (mcp.botz.ai) | 16 KiB | 4 MiB | 256 KiB | 10 MiB | 1 MiB |
+| swarm (swarm.botz.ai) | 16 KiB | 4 MiB (OTLP 8 MiB inflated) | 1 MiB | n/a | 1 MiB |
+
+Each cap is env-configurable in the service (`BOTZ_MAX_BODY_*`, `SWARM_MAX_BODY_*`); see each repo's `docs/security/security-defaults.md`.
+
 ## botz.ai subdomains (`*.botz.ai`)
 
 For projects on `something.botz.ai` (not a separate apex domain), use the manifest flow in [SUBDOMAINS.md](./SUBDOMAINS.md) instead of `add-site.sh`.
@@ -377,3 +400,12 @@ sudo LE_CERT_DIR=/etc/letsencrypt/live/botz.ai ./scripts/sync-ssl.sh
 ```
 
 Prefer **DNS-01** challenge via Cloudflare when the site is already proxied (HTTP-01 to the origin can fail while orange-cloud is on). After issuance, use **Full (strict)** and the sync/deploy flow above.
+
+## CI supply chain (D5)
+
+- Every third-party `uses:` is pinned to a full 40-character commit SHA followed by a `# vX.Y.Z` comment. Tags and branches (`@v4`, `@release/v1`) are not allowed.
+- Every workflow sets top-level `permissions: contents: read`. Jobs widen only what they need (for example `pages: write` + `id-token: write` for GitHub Pages, `id-token: write` for PyPI/npm trusted publishing).
+- `.github/dependabot.yml` runs weekly (Monday 09:00 Australia/Sydney), one grouped PR per ecosystem: `github-actions` plus each package ecosystem the repo uses. Dependabot updates the SHA and the version comment together.
+- An `actionlint` CI job (actionlint v1.7.12, download script pinned by commit) lints all workflows, including shellcheck on `run:` blocks.
+- To pin a new action: resolve the tag to its commit (`git ls-remote https://github.com/OWNER/REPO refs/tags/vX.Y.Z`) and write `uses: OWNER/REPO@<sha> # vX.Y.Z`.
+- `appleboy/ssh-action` (holds the deploy SSH key) is pinned by SHA; replacing it with plain `ssh` and a forced-command key is a follow-up.

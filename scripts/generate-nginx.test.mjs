@@ -59,3 +59,12 @@ test('streaming flag does not change existing swarm vhost', () => {
   const conf = fs.readFileSync(path.join(ROOT, 'nginx-conf/botz.ai-sub-swarm.conf'), 'utf8');
   assert.doesNotMatch(conf, /proxy_buffering off;/);
 });
+
+test('D2: every server block caps request bodies at 16m (reverse-proxy backstop)', () => {
+  for (const f of fs.readdirSync(path.join(ROOT, 'nginx-conf')).filter((n) => n.endsWith('.conf'))) {
+    const conf = fs.readFileSync(path.join(ROOT, 'nginx-conf', f), 'utf8');
+    const servers = (conf.match(/\bserver\s*\{/g) || []).length;
+    const caps = (conf.match(/client_max_body_size 16m;/g) || []).length;
+    assert.equal(caps, servers, `${f}: ${caps} caps for ${servers} server blocks`);
+  }
+});

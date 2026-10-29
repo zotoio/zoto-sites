@@ -1,0 +1,160 @@
+# Weekly, grouped Dependabot updates (security decision D5).
+# All GitHub Actions are pinned to full commit SHAs with a version comment; Dependabot bumps SHA + comment together.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 5
+    groups:
+      github_actions:
+        patterns:
+          - "*"
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 5
+    groups:
+      npm:
+        patterns:
+          - "*"
+  - package-ecosystem: npm
+    directory: "/backends/botz.ai"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 5
+    groups:
+      npm_backends_botz_ai:
+        patterns:
+          - "*"
+  - package-ecosystem: npm
+    directory: "/backends/discord"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 5
+    groups:
+      npm_backends_discord:
+        patterns:
+          - "*"
+  - package-ecosystem: npm
+    directory: "/backends/today.zoto.io"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 5
+    groups:
+      npm_backends_today_zoto_io:
+        patterns:
+          - "*"
+  - package-ecosystem: npm
+    directory: "/backends/zoto.io"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 5
+    groups:
+      npm_backends_zoto_io:
+        patterns:
+          - "*"
+  - package-ecosystem: npm
+    directory: "/www/botz.ai"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 5
+    groups:
+      npm_www_botz_ai:
+        patterns:
+          - "*"
+  - package-ecosystem: npm
+    directory: "/www/today.zoto.io"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 5
+    groups:
+      npm_www_today_zoto_io:
+        patterns:
+          - "*"
+  - package-ecosystem: npm
+    directory: "/www/zoto.io"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 5
+    groups:
+      npm_www_zoto_io:
+        patterns:
+          - "*"
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 5
+    groups:
+      docker:
+        patterns:
+          - "*"
+  - package-ecosystem: docker
+    directory: "/backends/botz.ai"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 5
+    groups:
+      docker_backends_botz_ai:
+        patterns:
+          - "*"
+  - package-ecosystem: docker
+    directory: "/backends/discord"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 5
+    groups:
+      docker_backends_discord:
+        patterns:
+          - "*"
+  - package-ecosystem: docker
+    directory: "/backends/today.zoto.io"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 5
+    groups:
+      docker_backends_today_zoto_io:
+        patterns:
+          - "*"

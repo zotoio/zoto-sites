@@ -28,6 +28,10 @@ const ERROR_PAGE_BLOCK = `
       root /usr/share/nginx/html;
     }`;
 
+
+// D2 (2026-10-29): reverse-proxy body backstop, above every app cap (apps return 413 at 16 KiB-10 MiB).
+const CLIENT_MAX_BODY_SIZE = '16m';
+
 function loadSites() {
   const files = fs
     .readdirSync(SITES_DIR)
@@ -179,6 +183,7 @@ function renderHttpToHttpsRedirect(site) {
   return `server {
     listen 80;
     server_name  ${serverNames};
+    client_max_body_size ${CLIENT_MAX_BODY_SIZE};
     return 301 https://$host$request_uri;
 }
 
@@ -203,6 +208,7 @@ function renderSite(site) {
     listen 443 ssl;
     http2 on;
     server_name  ${serverNames};
+    client_max_body_size ${CLIENT_MAX_BODY_SIZE};
 
     location / {
         root   /usr/share/nginx/html/${site.id};
@@ -232,6 +238,7 @@ function renderBotzSubdomainProject(project) {
     listen 443 ssl;
     http2 on;
     server_name  ${hostname};${titleComment}
+    client_max_body_size ${CLIENT_MAX_BODY_SIZE};
 ${extraHeaders}
 
 ${proxyBlock}
@@ -258,6 +265,7 @@ ${ERROR_PAGE_BLOCK}
     listen 443 ssl;
     http2 on;
     server_name  ${hostname};${titleComment}
+    client_max_body_size ${CLIENT_MAX_BODY_SIZE};
 ${extraHeaders}
 
 ${locationBlock}
@@ -272,6 +280,7 @@ function renderBotzSubdomainCatchAll() {
     listen 443 ssl;
     http2 on;
     server_name  *.botz.ai;
+    client_max_body_size ${CLIENT_MAX_BODY_SIZE};
 
     error_page 404 /subdomain-not-found.html;
 

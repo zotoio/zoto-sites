@@ -17,7 +17,9 @@ services:
         BOTZ_EXTRAS: cursor
     image: zoto-sites-botz-mcp
     container_name: botz-mcp
-    restart: unless-stopped
+    # Crash-loop guard (2026-10-29): stop after 5 failed starts instead of flapping;
+    # scripts/deploy-backend.sh rolls back automatically when /healthz fails.
+    restart: on-failure:5
     env_file:
       - ./backends/mcp/.env
     environment:

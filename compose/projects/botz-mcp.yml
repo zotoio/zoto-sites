@@ -20,6 +20,9 @@ services:
     # Crash-loop guard (2026-10-29): stop after 5 failed starts instead of flapping;
     # scripts/deploy-backend.sh rolls back automatically when /healthz fails.
     restart: on-failure:5
+    # Blue/green drain (scripts/deploy-backend.sh): SIGTERM, then 30s for in-flight requests.
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
     env_file:
       - ./backends/mcp/.env
       # Data-at-rest master keys (security D3): root-only 0400, created on the host with

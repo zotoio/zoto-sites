@@ -13,6 +13,9 @@ services:
     image: zoto-sites-swarm
     container_name: swarm
     restart: unless-stopped
+    # Blue/green drain (scripts/deploy-backend.sh): SIGTERM, then 30s for in-flight requests.
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
     env_file:
       - ./backends/swarm/.env
       # Data-at-rest master keys (security D3): root-only 0400, created on the host with

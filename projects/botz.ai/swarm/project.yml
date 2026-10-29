@@ -6,3 +6,9 @@ cache: no-store
 proxy:
   upstream: http://swarm:4310
   websocket: true
+  # Public OTLP/HTTP receiver (/otlp/v1/*) for remote instrumented clients/MCP servers.
+  # Auth is enforced by Swarm (HMAC / IAM bearer / SWARM_OTLP_TOKEN / worker token).
+  otlp: true
+  otlp_body_limit: 4m
+  otlp_rate: 20r/s
+  otlp_burst: 40

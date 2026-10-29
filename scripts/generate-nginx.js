@@ -219,6 +219,58 @@ ${ERROR_PAGE_BLOCK}
 `;
 }
 
+// `proxy.otlp` exposes the app's OTLP/HTTP receiver (/otlp/v1/*) publicly with a body cap and
+// per-client rate limit. Auth stays in the app (HMAC / bearer / token). Client key: CF-Connecting-IP
+// (Cloudflare) else the socket address.
+function otlpSettings(proxy) {
+  if (!proxy || proxy.otlp !== true) return null;
+  const body_limit = proxy.otlp_body_limit || '4m';
+  const rate = proxy.otlp_rate || '20r/s';
+  const burst = proxy.otlp_burst === undefined ? 40 : Number.parseInt(String(proxy.otlp_burst), 10);
+  if (!/^[0-9]{1,4}[km]$/.test(body_limit)) throw new Error(`invalid otlp_body_limit: ${body_limit}`);
+  if (!/^[0-9]{1,5}r\/[sm]$/.test(rate)) throw new Error(`invalid otlp_rate: ${rate}`);
+  if (!Number.isInteger(burst) || burst < 0 || burst > 10000) throw new Error(`invalid otlp_burst`);
+  return { body_limit, rate, burst };
+}
+
+function renderOtlpZone(name, otlp) {
+  if (!otlp) return '';
+  const zone = `otlp_${name.replace(/-/g, '_')}`;
+  const rate = otlp.rate || '20r/s';
+  return `map $http_cf_connecting_ip $${zone}_client {
+    ""      $binary_remote_addr;
+    default $http_cf_connecting_ip;
+}
+limit_req_zone $${zone}_client zone=${zone}:10m rate=${rate};
+
+`;
+}
+
+function renderOtlpLocation(name, upstream, otlp, fallbackName) {
+  if (!otlp) return '';
+  const zone = `otlp_${name.replace(/-/g, '_')}`;
+  const body = otlp.body_limit || '4m';
+  const burst = Number.isInteger(otlp.burst) ? otlp.burst : 40;
+  return `    location ^~ /otlp/v1/ {
+        limit_req zone=${zone} burst=${burst} nodelay;
+        limit_req_status 429;
+        client_max_body_size ${body};
+        resolver 127.0.0.11 valid=30s ipv6=off;
+        set $project_upstream "${upstream}";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_read_timeout 60s;
+        proxy_pass $project_upstream;
+        error_page 502 504 = ${fallbackName};
+    }
+
+`;
+}
+
 function renderBotzSubdomainProject(project) {
   const { name, hostname, manifest } = project;
   const extraHeaders = renderExtraHeaders(manifest.headers) + renderCacheHeaders(manifest.cache);
@@ -232,8 +284,9 @@ function renderBotzSubdomainProject(project) {
     const fallbackName = `@botz_sub_${name.replace(/-/g, '_')}_unavailable`;
     const streaming = manifest.proxy.streaming === true;
     const proxyBlock = renderLazyProjectProxyBlock({ upstream, websocket, streaming, fallbackName });
+    const otlp = otlpSettings(manifest.proxy);
 
-    return `server {
+    return `${renderOtlpZone(name, otlp)}server {
     listen 80;
     listen 443 ssl;
     http2 on;
@@ -241,7 +294,7 @@ function renderBotzSubdomainProject(project) {
     client_max_body_size ${CLIENT_MAX_BODY_SIZE};
 ${extraHeaders}
 
-${proxyBlock}
+${renderOtlpLocation(name, upstream, otlp, fallbackName)}${proxyBlock}
 ${ERROR_PAGE_BLOCK}
 }
 `;

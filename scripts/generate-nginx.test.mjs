@@ -78,3 +78,20 @@ test('swarm.botz.ai exposes /otlp/v1/ with body cap and rate limit', () => {
   assert.match(block, /client_max_body_size 4m;/);
   assert.match(block, /proxy_pass \$project_upstream;/);
 });
+
+test('botz.ai project proxies support blue/green switching and a JSON-RPC 503 fallback', () => {
+  for (const [name, host] of [['mcp', 'botz-mcp:4444'], ['swarm', 'swarm:4310']]) {
+    const conf = fs.readFileSync(path.join(ROOT, `nginx-conf/botz.ai-sub-${name}.conf`), 'utf8');
+    const sets = conf.match(new RegExp(`set \\$project_upstream "http://${host}";\\n\\s+include /etc/nginx/botz-upstreams/${name}\\.conf\\*;`, 'g')) || [];
+    assert.ok(sets.length >= 1, `${name}: override include follows every upstream set`);
+    assert.equal(sets.length, (conf.match(/set \$project_upstream/g) || []).length);
+    assert.match(conf, /proxy_next_upstream error timeout http_502;/);
+    const fb = conf.match(/location @botz_sub_\w+_unavailable \{([\s\S]*?)\n    \}/)[1];
+    assert.match(fb, /add_header Retry-After "5" always;/);
+    assert.match(fb, /default_type application\/json;/);
+    const body = JSON.parse(fb.match(/return 503 '(.*)';/)[1]);
+    assert.equal(body.jsonrpc, '2.0');
+    assert.equal(body.error.message, 'Service temporarily unavailable. Please retry shortly.');
+    assert.equal(body.error.data.transient, true);
+  }
+});

@@ -310,7 +310,18 @@ Approved 2026-10-29 (crash-loop guards). Prepare the new source tree next to the
 sudo ./scripts/deploy-backend.sh botz-mcp backends/botz-mcp.new   # or: swarm backends/botz-mcp-swarm.new
 ```
 
-The script backs up `backends/<src>` as `backends/<src>.prev-<UTC ts>`, tags the running image `<image>:rollback-<ts>`, rebuilds and recreates only that service, and waits up to `HEALTH_TIMEOUT` seconds (default 180) for the health endpoint to return 200 (botz-mcp `/healthz`, swarm `/health`; probed from the nginx container over the compose network). If the health check fails it moves the new tree to `backends/<src>.failed-<ts>`, restores the backup and the previous image, and recreates the service. It never touches other services, volumes or the botz.ai mounted cache (source images and article JSON are read-only).
+The deploy is **blue/green (zero downtime)**. The script backs up `backends/<src>` as `backends/<src>.prev-<UTC ts>`, tags the running image `<image>:rollback-<ts>`, swaps in and builds the new source while the old container keeps serving, then:
+
+1. starts a candidate `<svc>-next` from the new image next to the old container (same env files, volumes and network) and waits up to `HEALTH_TIMEOUT` (default 300s) for readiness: botz-mcp `/healthz` **and** `/readyz` (200 only once the embedding model has produced a vector), swarm `/health`, probed from the nginx container;
+2. switches nginx to the candidate by writing `/etc/nginx/botz-upstreams/<project>.conf` inside the nginx container (included after `set $project_upstream` in every generated proxy location), `nginx -t`, `nginx -s reload`;
+3. recreates the compose-managed `<svc>` on the new image (compose sends SIGTERM and waits `stop_grace_period: 30s` so in-flight requests drain), waits for readiness again;
+4. removes the override (nginx back to `<svc>`), reloads, then drains the candidate (SIGTERM, 30s) and removes it.
+
+Rollback is automatic: if the candidate never becomes ready, the old container was never touched and the source/image are restored. If the recreated `<svc>` fails, the previous image/source are restored and recreated while nginx keeps routing to the healthy candidate, then traffic switches back. Failed trees stay at `backends/<src>.failed-<ts>`. It never touches other services, volumes or the botz.ai mounted cache (source images and article JSON are read-only).
+
+Both containers share the data dir for a few seconds; stores write with atomic renames. **Check that no swarm suite run is in progress before deploying** (Swarm console → Runs), and wait if one is.
+
+If no backend container answers (`502`/`504`), nginx returns `503` with `Retry-After: 5` and a JSON-RPC-shaped body (`{"jsonrpc":"2.0","id":null,"error":{"code":-32003,"message":"Service temporarily unavailable. Please retry shortly.","data":{"transient":true,"retryAfter":5}}}`); `proxy_next_upstream error timeout http_502` is set on every project proxy. Clients (incl. the swarm harness) treat it as transient and retry.
 
 `botz-mcp` runs with `restart: on-failure:5`: a broken image stops after five failed starts instead of crash-looping. After a host reboot, confirm `docker ps` shows `botz-mcp`; if not, `docker compose ... up -d botz-mcp`.
 

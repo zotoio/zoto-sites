@@ -107,7 +107,34 @@ function renderCacheHeaders(cache) {
         add_header Cloudflare-CDN-Cache-Control "no-store" always;`;
 }
 
-function renderLazyProjectProxyBlock({ upstream, websocket, streaming, fallbackName }) {
+// Blue/green switch (scripts/deploy-backend.sh): an optional per-project override file
+// re-sets $project_upstream to the candidate container. The glob matches nothing
+// normally, so the manifest upstream applies.
+function upstreamOverride(name) {
+  return `
+        include /etc/nginx/botz-upstreams/${name}.conf*;`;
+}
+
+// Body of the @unavailable fallback: JSON-RPC shaped so MCP clients surface it as a
+// retryable transport error (swarm classifies it as transient/unavailable).
+const UNAVAILABLE_MESSAGE = 'Service temporarily unavailable. Please retry shortly.';
+const UNAVAILABLE_BODY = JSON.stringify({
+  jsonrpc: '2.0',
+  id: null,
+  error: { code: -32003, message: UNAVAILABLE_MESSAGE, data: { transient: true, retryAfter: 5 } },
+});
+
+function renderUnavailableLocation(fallbackName) {
+  return `    location ${fallbackName} {
+        internal;
+        default_type application/json;
+        add_header Cache-Control "no-store" always;
+        add_header Retry-After "5" always;
+        return 503 '${UNAVAILABLE_BODY}';
+    }`;
+}
+
+function renderLazyProjectProxyBlock({ name, upstream, websocket, streaming, fallbackName }) {
   // `proxy.streaming: true` (e.g. MCP streamable HTTP / SSE + OAuth apps):
   // no buffering either way, HTTP/1.1 keep-alive, and X-Forwarded-* so the app
   // sees the public https origin behind Cloudflare.
@@ -131,21 +158,17 @@ function renderLazyProjectProxyBlock({ upstream, websocket, streaming, fallbackN
     : '';
   return `    location / {
         resolver 127.0.0.11 valid=30s ipv6=off;
-        set $project_upstream "${upstream}";
+        set $project_upstream "${upstream}";${upstreamOverride(name)}
         proxy_set_header Host $host;
         proxy_read_timeout 900s;
         proxy_connect_timeout 75s;
         proxy_set_header X-Real-IP $remote_addr;${wsHeaders}${streamHeaders}
         proxy_pass $project_upstream;
+        proxy_next_upstream error timeout http_502;
         error_page 502 504 = ${fallbackName};
     }
 
-    location ${fallbackName} {
-        internal;
-        default_type text/plain;
-        add_header Cache-Control "no-store" always;
-        return 503 "Service temporarily unavailable. Please retry shortly.";
-    }`;
+${renderUnavailableLocation(fallbackName)}`;
 }
 
 function renderExtraHeaders(headers) {
@@ -256,7 +279,7 @@ function renderOtlpLocation(name, upstream, otlp, fallbackName) {
         limit_req_status 429;
         client_max_body_size ${body};
         resolver 127.0.0.11 valid=30s ipv6=off;
-        set $project_upstream "${upstream}";
+        set $project_upstream "${upstream}";${upstreamOverride(name)}
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -265,6 +288,7 @@ function renderOtlpLocation(name, upstream, otlp, fallbackName) {
         proxy_set_header Connection "";
         proxy_read_timeout 60s;
         proxy_pass $project_upstream;
+        proxy_next_upstream error timeout http_502;
         error_page 502 504 = ${fallbackName};
     }
 
@@ -283,7 +307,7 @@ function renderBotzSubdomainProject(project) {
     // container yields a 503 for that host instead of nginx failing to start.
     const fallbackName = `@botz_sub_${name.replace(/-/g, '_')}_unavailable`;
     const streaming = manifest.proxy.streaming === true;
-    const proxyBlock = renderLazyProjectProxyBlock({ upstream, websocket, streaming, fallbackName });
+    const proxyBlock = renderLazyProjectProxyBlock({ name, upstream, websocket, streaming, fallbackName });
     const otlp = otlpSettings(manifest.proxy);
 
     return `${renderOtlpZone(name, otlp)}server {

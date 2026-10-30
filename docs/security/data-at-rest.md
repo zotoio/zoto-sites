@@ -80,3 +80,16 @@ For each of `botz-mcp` and `swarm`:
 3. In the password manager create a Secure Note named **"botz data-at-rest keys: botz-mcp (170.64.250.36)"** (and one for swarm). Paste the whole file (all lines). Add the path `/etc/botz/keys/<svc>.env`, today's date, and the active key id from `sudo scripts/botz-keys.sh status`.
 4. Run `sudo sha256sum /etc/botz/keys/<svc>.env` and put the checksum in the note, so later you can confirm the saved copy matches.
 5. Clear the terminal (`clear`) and close the SSH session. Don't paste the values into chat, email, tickets or git.
+
+## swarm GitHub App private key
+
+The swarm service mounts `/etc/botz/secrets/swarm` read-only at `/run/secrets/botz-mcp-swarm`
+(`compose/projects/swarm.yml`). Put the GitHub App key there as `github-app.pem`. The directory is
+`1000:1000 0500` and the file is `1000:1000 0400`, because the container runs as `node` (uid 1000):
+
+    sudo install -d -o 1000 -g 1000 -m 0500 /etc/botz/secrets/swarm
+    sudo install -o 1000 -g 1000 -m 0400 /path/to/downloaded.pem /etc/botz/secrets/swarm/github-app.pem
+
+Then set `SWARM_GITHUB_APP_ID`, `SWARM_GITHUB_APP_INSTALLATION_ID` and
+`SWARM_GITHUB_APP_PRIVATE_KEY_FILE=/run/secrets/botz-mcp-swarm/github-app.pem` in `backends/swarm/.env`
+and recreate swarm. Keep a copy of the key in the password manager.

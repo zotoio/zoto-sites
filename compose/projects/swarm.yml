@@ -28,6 +28,14 @@ services:
       - "4310"
     volumes:
       - ./backends/swarm/data:/data/.botz
+      # GitHub App private key for membership checks (botz-mcp-swarm docs/security/github-app-membership.md).
+      # Host dir /etc/botz/secrets/swarm: owner 1000:1000 (container `node`), dir 0500, github-app.pem 0400.
+      # Must exist before `compose up` (create with: sudo install -d -o 1000 -g 1000 -m 0500 /etc/botz/secrets/swarm).
+      # Use SWARM_GITHUB_APP_PRIVATE_KEY_FILE=/run/secrets/botz-mcp-swarm/github-app.pem in backends/swarm/.env.
+      - type: bind
+        source: /etc/botz/secrets/swarm
+        target: /run/secrets/botz-mcp-swarm
+        read_only: true
     mem_limit: 1536m
 
   # nginx resolves http://swarm:4310 at startup; make sure the container exists first.

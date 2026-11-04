@@ -9,7 +9,7 @@ import path from 'path';
 import sanitize from 'sanitize-filename';
 import helmet from 'helmet';
 import crypto from 'crypto';
-import cheerio from 'cheerio';
+import * as cheerio from 'cheerio';
 import sanitizeHtml from 'sanitize-html';
 import { buildImageGenerateParams, requestGeneratedImage } from './openaiImages.js';
 import {
@@ -34,6 +34,7 @@ import {
 import { stripPrivateEditorialFields, writeEditorialUsageRecord } from './editorialUsageStore.js';
 import { archivePageWindow, buildArchiveListItem, formatEditorialByline } from './archiveListing.js';
 import { writeVariantsForPng } from './imageVariants.js';
+import { safeAxiosConfig, resolveWithinRoot } from './safeHttp.js';
 import {
     CACHE_NONE,
     CACHE_RECENT,
@@ -92,6 +93,9 @@ try {
 }
 
 const cacheDir = CACHE_DIR;
+// Hosts OpenAI serves generated image URLs from (override with comma-separated IMAGE_URL_HOSTS).
+const IMAGE_URL_HOSTS = (process.env.IMAGE_URL_HOSTS || '.blob.core.windows.net,.openai.com,.oaiusercontent.com')
+    .split(',').map(h => h.trim().toLowerCase()).filter(Boolean);
 
 // Ensure the cache directory exists
 if (!fs.existsSync(`${cacheDir}/images`)) {
@@ -156,7 +160,7 @@ const isWeekend = () => {
 const fetchAiNews = async (req) => {
     const asOfDate =
         authorisedAdminRequest(req) &&
-        req.query.asOf &&
+        typeof req.query.asOf === 'string' &&
         /^\d{4}-\d{2}-\d{2}$/.test(req.query.asOf)
             ? req.query.asOf
             : null;
@@ -169,7 +173,7 @@ const fetchAiNews = async (req) => {
         let articleUrlHostname = new URL(articleUrl).hostname;
         let randomDateInLast3days = new Date(Date.now() - getRandomInt(0, 259200000));
 
-        const articleHtml = await axios.get(articleUrl);
+        const articleHtml = await axios.request(safeAxiosConfig(articleUrl));
         const html = articleHtml.data;
 
         // Use Cheerio to parse the HTML
@@ -337,7 +341,7 @@ app.get('/editorials', async (req, res) => {
         const currentDate = new Date();
         const isAdmin = authorisedAdminRequest(req);
         const asOfDate =
-            isAdmin && req.query.asOf && /^\d{4}-\d{2}-\d{2}$/.test(req.query.asOf)
+            isAdmin && typeof req.query.asOf === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.asOf)
                 ? req.query.asOf
                 : null;
 
@@ -359,7 +363,7 @@ app.get('/editorials', async (req, res) => {
             cacheKey = getLatestFileCacheKey();
         }
 
-        cacheFilePath = path.join(cacheDir, sanitize(cacheKey) + '.json');
+        cacheFilePath = resolveWithinRoot(cacheDir, sanitize(cacheKey) + '.json');
 
         if (suppliedCacheKey) {
             // suppliedCacheKey must be: 
@@ -372,7 +376,7 @@ app.get('/editorials', async (req, res) => {
                 return res.status(400).json({ message: 'Invalid cache key' });
             }
 
-            const suppliedCacheFilePath = path.join(cacheDir, `${suppliedCacheKey}.json`);
+            const suppliedCacheFilePath = resolveWithinRoot(cacheDir, `${suppliedCacheKey}.json`);
             if (fs.existsSync(suppliedCacheFilePath)) {
                 cacheKey = suppliedCacheKey;
                 cacheFilePath = suppliedCacheFilePath;
@@ -515,7 +519,7 @@ app.get('/editorials', async (req, res) => {
             return res.status(503).json({ error: 'news_request_budget_exhausted' });
         }
 
-        const status = error?.statusCode || 500;
+        const status = Number.isInteger(error?.statusCode) && error.statusCode >= 400 && error.statusCode < 600 ? error.statusCode : 500;
         let message = 'An internal server error occurred.';
         if (status === 409) {
             message = 'Requested editorial cache already exists.';
@@ -525,7 +529,7 @@ app.get('/editorials', async (req, res) => {
         attachNewsFetchHeaders();
         const body = { message };
         if (req.newsFetchRequestCount != null) {
-            body.news_fetch_requests = req.newsFetchRequestCount;
+            body.news_fetch_requests = Math.max(0, Math.trunc(Number(req.newsFetchRequestCount)) || 0);
         }
         res.status(status).json(body);
     }
@@ -644,7 +648,7 @@ const getArticlePrompt = async (article, generationContext = {}) => {
 async function extractSummary(article) {
     let summary = article.description || '';
     try {
-        const response = await axios.get(article.url);
+        const response = await axios.request(safeAxiosConfig(article.url));
         if (!response.status >= 400) throw new Error(`http status code ${response.status} indicates failure: ${response}`);
         let html = response.data;
         html = html.substring(html.indexOf('article'), html.length);
@@ -725,7 +729,8 @@ const saveImageToFile = async (response, generationContext = {}) => {
         hashInput = item.b64_json.slice(0, 256);
     } else if (item.url) {
         hashInput = item.url;
-        const res = await axios.get(item.url, { responseType: 'arraybuffer' });
+        // OpenAI-hosted image URLs only
+        const res = await axios.request(safeAxiosConfig(item.url, { responseType: 'arraybuffer' }, { allowHosts: IMAGE_URL_HOSTS }));
         buffer = Buffer.from(res.data, 'binary');
     } else {
         throw new Error('saveImageToFile: response missing url and b64_json');
@@ -740,7 +745,7 @@ const saveImageToFile = async (response, generationContext = {}) => {
         datePrefix = `${currentDate.getFullYear()}-${padNumber(currentDate.getMonth() + 1)}-${padNumber(currentDate.getDate())}-${padNumber(currentDate.getHours())}`;
     }
     let cacheKey = `${datePrefix}-${urlHash}`;
-    let cacheFilePath = `${path.join(cacheDir, 'images', cacheKey)}.png`;
+    let cacheFilePath = resolveWithinRoot(cacheDir, 'images', sanitize(`${cacheKey}.png`));
     console.log(cacheFilePath);
     try {
         // 'wx': a new image never replaces an existing PNG (existing source images are read-only)
@@ -749,7 +754,7 @@ const saveImageToFile = async (response, generationContext = {}) => {
         if (error.code !== 'EEXIST') throw error;
         // same name already taken: name the new image by a hash of its full bytes instead
         cacheKey = `${datePrefix}-${crypto.createHash('sha256').update(buffer).digest('hex')}`;
-        cacheFilePath = `${path.join(cacheDir, 'images', cacheKey)}.png`;
+        cacheFilePath = resolveWithinRoot(cacheDir, 'images', sanitize(`${cacheKey}.png`));
         try {
             fs.writeFileSync(cacheFilePath, buffer, { flag: 'wx' });
         } catch (again) {
@@ -759,7 +764,7 @@ const saveImageToFile = async (response, generationContext = {}) => {
     response.data[0].localUrl = `/cache/images/${cacheKey}.png`;
     // resized WebP variants next to the PNG (new files only; failures never block the editorial)
     try {
-        const variants = await writeVariantsForPng(cacheFilePath);
+        const variants = await writeVariantsForPng(cacheFilePath, { root: path.join(cacheDir, 'images') });
         if (variants.failed.length) console.error('imageVariants: some variants failed', JSON.stringify(variants.failed));
     } catch (error) {
         console.error('imageVariants: skipped', error?.message || error);
@@ -845,8 +850,14 @@ function authorisedAdminRequest(req) {
 app.get('/cache/images/:image', (req, res) => {
     const { image } = req.params;
     // santize the image param
-    const imageName = image.replace(/[^a-zA-Z0-9-_.]/g, '');
-    const imagePath = path.join(cacheDir, 'images', imageName);
+    const imageName = String(image).replace(/[^a-zA-Z0-9-_.]/g, '');
+    let imagePath;
+    try {
+        if (!imageName || imageName.startsWith('.')) throw new Error('bad name');
+        imagePath = resolveWithinRoot(cacheDir, 'images', sanitize(path.basename(imageName)));
+    } catch {
+        return res.status(404).send('Image not found');
+    }
     if (fs.existsSync(imagePath)) {
         // content-addressed names (hash in the PNG name; variants derive from it): same policy as nginx
         res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
@@ -872,10 +883,10 @@ async function readArchiveDay(date) {
     const editorials = [];
     for (const file of files) {
         try {
-            const rows = JSON.parse(await fs.promises.readFile(path.join(cacheDir, file), 'utf8'));
+            const rows = JSON.parse(await fs.promises.readFile(resolveWithinRoot(cacheDir, file), 'utf8'));
             editorials.push(buildArchiveDayItem(cacheKeyOfFile(file), rows?.[0]));
         } catch (error) {
-            console.error(`archive day ${date}: unreadable ${file}`, error.message);
+            console.error('archive day %s: unreadable %s', date, file, error.message);
         }
     }
     return { date, count: files.length, older, editorials };
@@ -964,7 +975,7 @@ app.get('/archive', async (req, res) => {
     console.log(pagejsonFiles);
 
     const editorialPromises = pagejsonFiles.map(file => {
-        const filePath = path.join(cacheDir, file);
+        const filePath = resolveWithinRoot(cacheDir, file);
         console.log(`Reading file: ${filePath}`); // Log the file path
 
         return new Promise((resolve, reject) => {

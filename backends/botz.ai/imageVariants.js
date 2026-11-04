@@ -150,7 +150,13 @@ export function missingVariantWidths(pngPath, widths = VARIANT_WIDTHS) {
  * Create the missing WebP variants for one PNG. Existing valid variants are skipped (idempotent and resumable).
  * The PNG is only read. Returns { created, skipped, failed } as lists of widths.
  */
-export async function writeVariantsForPng(pngPath, { sharp, widths = VARIANT_WIDTHS, quality = WEBP_QUALITY, dryRun = false } = {}) {
+export async function writeVariantsForPng(pngPath, { sharp, widths = VARIANT_WIDTHS, quality = WEBP_QUALITY, dryRun = false, root } = {}) {
+    pngPath = path.resolve(String(pngPath));
+    if (root) {
+        // optional confinement: the PNG must live inside root once normalised
+        const base = path.resolve(root);
+        if (!pngPath.startsWith(base + path.sep)) throw new Error(`PNG outside image root: ${pngPath}`);
+    }
     if (!isSourceImageName(path.basename(pngPath))) throw new Error(`not a source PNG: ${pngPath}`);
     const todo = missingVariantWidths(pngPath, widths);
     const result = { created: [], skipped: widths.filter(w => !todo.includes(w)), failed: [] };

@@ -2,9 +2,9 @@
   "name": "today-zoto-io",
   "type": "module",
   "dependencies": {
-    "axios": "^1.8.4",
+    "axios": "^1.21.0",
     "dotenv": "^16.4.7",
-    "express": "^4.21.2",
+    "express": "^4.22.3",
     "express-rate-limit": "^7.5.0",
     "helmet": "^8.0.0"
   },

@@ -245,5 +245,5 @@ test('saveImageToFile never replaces an existing PNG (exclusive create) and only
         assert.equal(call, 'writeFileSync', `unexpected fs call in saveImageToFile: ${call}`);
         assert.match(args, /flag: 'wx'/, 'PNG writes must use exclusive create');
     }
-    assert.match(fn, /writeVariantsForPng\(cacheFilePath\)/);
+    assert.match(fn, /writeVariantsForPng\(cacheFilePath[,)]/);
 });

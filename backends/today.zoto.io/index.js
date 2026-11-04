@@ -449,7 +449,10 @@ app.get('/api/camera-image', async (req, res) => {
     if (!img) return res.status(404).send('not found or expired');
     res.set('Cache-Control', 'public, max-age=60');
     if (img.attribution) res.set('X-Camera-Attribution', img.attribution.slice(0, 200));
-    res.type(img.contentType).send(img.buffer);
+    const type = /^image\/(jpeg|png|gif|webp|avif|svg\+xml)$/.test(img.contentType) ? img.contentType : 'application/octet-stream';
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+    res.type(type).send(Buffer.from(img.buffer));
   } catch {
     return res.status(502).send('upstream error');
   }

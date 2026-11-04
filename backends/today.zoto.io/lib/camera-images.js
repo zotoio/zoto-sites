@@ -1,4 +1,7 @@
 import axios from 'axios';
+import { safeAxiosConfig } from './safeHttp.js';
+
+const SAFE_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif']);
 
 /** @type {Map<string, { url: string, attribution: string, source: string, expires: number }>} */
 const keyRegistry = new Map();
@@ -78,14 +81,16 @@ export async function fetchProxiedCameraImage(key) {
     return { buffer: cached.buffer, contentType: cached.contentType, attribution: reg.attribution };
   }
 
-  const { data, headers } = await axios.get(reg.url, {
+  const { data, headers } = await axios.request(safeAxiosConfig(reg.url, {
     responseType: 'arraybuffer',
     timeout: 15000,
     maxRedirects: 3,
     headers: { Accept: 'image/*,*/*;q=0.8', 'User-Agent': 'today.zoto.io/1.0 (camera proxy)' },
     validateStatus: (s) => s >= 200 && s < 400,
-  });
-  const contentType = headers['content-type']?.split(';')[0] || 'image/jpeg';
+  }));
+  const upstreamType = (headers['content-type']?.split(';')[0] || 'image/jpeg').trim().toLowerCase();
+  // only pass through raster image types (never HTML or SVG from upstream)
+  const contentType = SAFE_IMAGE_TYPES.has(upstreamType) ? upstreamType : 'application/octet-stream';
   const buffer = Buffer.from(data);
   bufferCache.set(key, { buffer, contentType, expires: Date.now() + IMAGE_TTL_MS });
   return { buffer, contentType, attribution: reg.attribution };

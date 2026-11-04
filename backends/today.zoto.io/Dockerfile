@@ -1,9 +1,11 @@
-FROM node:20-alpine AS deps
+FROM node:22-alpine AS deps
 WORKDIR /home/root
 COPY package.json yarn.lock ./
 RUN yarn install --frozen-lockfile --production
 
-FROM node:20-alpine
+FROM node:22-alpine
+# Runtime: no package managers (npm/npx/corepack/yarn); start with node directly.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg /opt/yarn-v*
 WORKDIR /home/root
 COPY package.json yarn.lock index.js ./
 COPY lib ./lib

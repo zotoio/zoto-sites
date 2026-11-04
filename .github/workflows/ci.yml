@@ -58,6 +58,14 @@ jobs:
       - name: Verify today Docker image build and smoke test
         run: bash scripts/verify-today-docker-image.sh
 
+      - name: Verify runtime images have no package managers and discord image loads deps
+        run: |
+          docker build -q -t zoto-discord-ci-verify:ci backends/discord
+          docker run --rm --entrypoint node zoto-discord-ci-verify:ci -e "require('discord.js'); console.log('discord deps ok', process.version)"
+          for img in zoto-discord-ci-verify:ci zoto-today-ci-verify:ci; do
+            docker run --rm --entrypoint sh "$img" -c 'for b in npm npx corepack yarn; do if command -v "$b" >/dev/null; then echo "$b present"; exit 1; fi; done; node -v'
+          done
+
       - name: botz.ai dice roll physics tests
         run: node --test scripts/botz-dice-physics.test.mjs
 

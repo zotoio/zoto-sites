@@ -77,8 +77,10 @@ rollback() {
 dc build botz nginx || rollback
 dc up -d --no-deps botz || rollback
 dc up -d --no-deps nginx || rollback
-$SUDO docker exec nginx nginx -t || rollback
+# Health first: the nginx entrypoint copies TLS material on start, so config tests are only meaningful once it serves.
 health || rollback
+$SUDO docker exec nginx nginx -t >/dev/null 2>&1 || { echo "deploy-botz: nginx -t failed after start" >&2; rollback; }
+[ "$($SUDO docker inspect -f '{{.State.Restarting}}' nginx botz | sort -u)" = "false" ] || { echo "deploy-botz: a container is restart-looping" >&2; rollback; }
 
 echo "$STAMP ${PREV} -> ${SHA} ok" | $SUDO tee -a "$LOG_DIR/receipts.log" >/dev/null
 echo "deploy-botz: deployed ${SHA:0:12}"

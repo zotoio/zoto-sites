@@ -1,46 +1,93 @@
 name: Deploy
 
+# Production deploy of botz.ai (botz + nginx only) for the exact commit that passed CI on main.
+# Runs scripts/deploy-botz.sh on the droplet: flock, ff-only to that SHA, rebuild botz + nginx,
+# health-check /, /archive/index, /archive/latest, and roll back code + nginx on failure.
+# Persistent data (cache images, article JSON, usage) is never modified.
+
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit on main to deploy (defaults to main HEAD)"
+        required: false
 
 concurrency:
   group: deploy-production
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
   validate:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.full.outputs.sha }}
     steps:
+      - id: sha
+        env:
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          INPUT_SHA: ${{ inputs.sha }}
+        run: |
+          sha="${RUN_SHA:-${INPUT_SHA:-$GITHUB_SHA}}"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-
+        with:
+          ref: ${{ steps.sha.outputs.sha }}
+          fetch-depth: 0
+      - name: Commit must be on main
+        run: git merge-base --is-ancestor "$(git rev-parse HEAD)" origin/main
+      - name: Resolve full sha
+        id: full
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
-
       - name: Verify nginx configs match sites manifest
         run: node scripts/generate-nginx.js --check
 
   deploy:
     needs: validate
-    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - name: Deploy to DigitalOcean droplet
+      - name: Check deploy inputs are configured
+        env:
+          H: ${{ secrets.DEPLOY_HOST }}
+          U: ${{ secrets.DEPLOY_USER }}
+          K: ${{ secrets.DEPLOY_SSH_KEY }}
+          P: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          missing=""
+          [ -n "$H" ] || missing="$missing DEPLOY_HOST"
+          [ -n "$U" ] || missing="$missing DEPLOY_USER"
+          [ -n "$K" ] || missing="$missing DEPLOY_SSH_KEY"
+          [ -n "$P" ] || missing="$missing DEPLOY_PATH"
+          [ -z "$missing" ] || { echo "::error::Missing production secrets:$missing"; exit 1; }
+      - name: Deploy botz.ai to droplet
         uses: appleboy/ssh-action@7eaf76671a0d7eec5d98ee897acda4f968735a17 # v1.2.0
+        env:
+          DEPLOY_SHA: ${{ needs.validate.outputs.sha }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
+          envs: DEPLOY_SHA
+          command_timeout: 30m
           script_stop: true
           script: |
             set -euo pipefail
             cd "${{ secrets.DEPLOY_PATH }}"
-            git fetch origin main
-            bash scripts/deploy-safe.sh
-            docker compose ps
+            OWNER="$(stat -c %U .)"
+            sudo -n -u "$OWNER" git fetch --quiet origin main
+            # Run the deploy script from the target commit, so the pipeline always uses the reviewed version.
+            sudo -n -u "$OWNER" git show "$DEPLOY_SHA:scripts/deploy-botz.sh" > /tmp/deploy-botz.sh
+            DEPLOY_ROOT="$PWD" bash /tmp/deploy-botz.sh "$DEPLOY_SHA"

@@ -479,11 +479,13 @@ app.get('/editorials', async (req, res) => {
 
         if (shouldPurgeCloudflare) {
             await purgeEditorialUrlsForCacheKey(cacheKey);
-            setTimeout(() => {
+            setTimeout(async () => {
                 try {
-                    axios.get(`${EDITORIAL_API_URL_PREFIX}/editorials`);
+                    await axios.get(`${EDITORIAL_API_URL_PREFIX}/editorials`, { timeout: 15000 });
                 } catch (error) {
-                    console.error('Error in pregenerating the new article:', error);
+                    // Axios errors contain request headers/config; log only a safe status.
+                    const status = error?.response?.status;
+                    console.error(`Editorial cache warmup failed (${Number.isInteger(status) ? `HTTP ${status}` : 'network error'}).`);
                 }
             }, 10000);
         }

@@ -26,6 +26,8 @@ services:
     tmpfs:
       - /tmp:size=64m,uid=1000,gid=1000,mode=0700
       - /app/.next/cache:size=128m,uid=1000,gid=1000,mode=0700
+      # Writable home: the Cursor SDK keeps its local agent store in ~/.cursor (live runs fail on a read-only root).
+      - /home/node:size=128m,uid=1000,gid=1000,mode=0700
     stop_signal: SIGTERM
     stop_grace_period: 15s
     env_file:
@@ -34,7 +36,9 @@ services:
       STUDIO_HOSTING: public
       CURSOR_SDK_MODE: live
       STUDIO_LOCKED_MODEL: grok-4.7
-      GITHUB_MODE: simulated
+      # Signed-in members and admins get live GitHub via the botzai-studio App installation token;
+      # anonymous visitors always get the simulated board.
+      GITHUB_MODE: live
       SIM_INFERENCE: replay
       SIM_RECORD: "0"
       STUDIO_PUBLIC_ORIGIN: https://studio.botz.ai

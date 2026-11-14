@@ -1,9 +1,12 @@
 name: Deploy
 
-# Production deploy of botz.ai (botz + nginx only) for the exact commit that passed CI on main.
-# Runs scripts/deploy-botz.sh on the droplet: flock, ff-only to that SHA, rebuild botz + nginx,
-# health-check /, /archive/index, /archive/latest, and roll back code + nginx on failure.
-# Persistent data (cache images, article JSON, usage) is never modified.
+# Production deploy of the zoto-sites stack for the exact commit that passed CI on main.
+# Runs scripts/deploy-sites.sh on the droplet: flock, ff-only to that SHA, refresh the studio source to
+# grok-agent-studio main when a newer commit is available, build botz, nginx, today, discord and studio
+# (a failed build fails the deploy), then recreate them, health-check botz.ai, studio.botz.ai/api/health
+# and today.zoto.io/api/health, and roll back code, studio source and images on failure.
+# botz-mcp and swarm deploy separately (scripts/deploy-backend.sh).
+# Persistent data (cache images, article JSON, usage, studio data and secrets) is never modified.
 
 on:
   workflow_run:
@@ -72,7 +75,7 @@ jobs:
           [ -n "$K" ] || missing="$missing DEPLOY_SSH_KEY"
           [ -n "$P" ] || missing="$missing DEPLOY_PATH"
           [ -z "$missing" ] || { echo "::error::Missing production secrets:$missing"; exit 1; }
-      - name: Deploy botz.ai to droplet
+      - name: Build and deploy zoto-sites to droplet
         uses: appleboy/ssh-action@7eaf76671a0d7eec5d98ee897acda4f968735a17 # v1.2.0
         env:
           DEPLOY_SHA: ${{ needs.validate.outputs.sha }}
@@ -89,5 +92,5 @@ jobs:
             OWNER="$(stat -c %U .)"
             sudo -n -u "$OWNER" git fetch --quiet origin main
             # Run the deploy script from the target commit, so the pipeline always uses the reviewed version.
-            sudo -n -u "$OWNER" git show "$DEPLOY_SHA:scripts/deploy-botz.sh" > /tmp/deploy-botz.sh
-            DEPLOY_ROOT="$PWD" bash /tmp/deploy-botz.sh "$DEPLOY_SHA"
+            sudo -n -u "$OWNER" git show "$DEPLOY_SHA:scripts/deploy-sites.sh" > /tmp/deploy-sites.sh
+            DEPLOY_ROOT="$PWD" bash /tmp/deploy-sites.sh "$DEPLOY_SHA"

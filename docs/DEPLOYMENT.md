@@ -300,7 +300,7 @@ Each deploy runs `scripts/deploy-safe.sh`:
 5. `node scripts/generate-nginx.js` only when `node` is on the host (skipped otherwise; image regenerates confs)
 6. `docker compose up -d --build` and post-checks (counts and container health)
 
-GitHub Actions (`.github/workflows/deploy.yml`) runs `git fetch origin main` and `bash scripts/deploy-safe.sh` over SSH when `DEPLOY_*` secrets are set.
+GitHub Actions (`.github/workflows/deploy.yml`) runs after CI passes on `main`: over SSH it runs `scripts/deploy-sites.sh <sha>` from that commit. It always builds first and then deploys: fast-forward to the commit, refresh the studio source to the latest `zotoio/grok-agent-studio` main when available, build `botz`, `nginx`, `today`, `discord` and `studio` (a failed build fails the deploy before anything is replaced), recreate them, then health-check `botz.ai` (`/`, `/archive/index`, `/archive/latest`), `studio.botz.ai/api/health`, `today.zoto.io/api/health` and that `discord` is running. Any failure rolls back the git ref, the studio source tree and the images. `botz-mcp` and `swarm` are deployed separately (below).
 
 ## Deploy one backend with auto-rollback (botz-mcp, swarm)
 

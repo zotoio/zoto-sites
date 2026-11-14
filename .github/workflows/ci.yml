@@ -89,6 +89,7 @@ jobs:
           bash -n scripts/deploy.sh
           bash -n scripts/compose-stack.sh
           bash -n scripts/deploy-backend.sh
+          bash -n scripts/deploy-sites.sh
           bash -n scripts/backup-data.sh
           bash -n scripts/botz-keys.sh
           bash -n scripts/rotate-storage-key.sh

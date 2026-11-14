@@ -1,9 +1,13 @@
-# studio.botz.ai — Grok Agent Studio public simulated site (zotoio/grok-agent-studio, private).
+# studio.botz.ai — Grok Agent Studio (zotoio/grok-agent-studio, private).
 #
 # Source: a gitignored checkout at backends/grok-agent-studio, built from that repo's Dockerfile.
-# No env_file and no secrets: STUDIO_HOSTING=public is always simulated (no model, bridge or GitHub calls).
-# State (seeded demos/specs/sim board and session data) persists in backends/studio/data.
-# Host dir must exist and be owned by the image's node user before `compose up`:
+# Public hosting: everyone gets the simulated site; members of botzai-studio/studio-users who sign in
+# with GitHub (botzai-studio GitHub App) get live runs on the locked model under a daily cap.
+# Secrets (CURSOR_API_KEY, TYPESAFE_API_KEY, GITHUB_APP_CLIENT_SECRET, GITHUB_APP_WEBHOOK_SECRET,
+# STUDIO_SESSION_SECRET, STUDIO_ALERT_WEBHOOK_URL, STUDIO_ALERT_WEBHOOK_TOKEN) live in
+# backends/studio/.env (gitignored, chmod 600); never in git.
+# State (seeded demos/specs, sim board, sessions, usage ledger) persists in backends/studio/data,
+# the only writable path. Host dir must exist and be owned by the image's node user before `compose up`:
 #   sudo install -d -o 1000 -g 1000 -m 0750 backends/studio/data
 services:
   studio:
@@ -24,19 +28,36 @@ services:
       - /app/.next/cache:size=128m,uid=1000,gid=1000,mode=0700
     stop_signal: SIGTERM
     stop_grace_period: 15s
+    env_file:
+      - ./backends/studio/.env
     environment:
       STUDIO_HOSTING: public
-      CURSOR_SDK_MODE: simulated
+      CURSOR_SDK_MODE: live
+      STUDIO_LOCKED_MODEL: grok-4.7
       GITHUB_MODE: simulated
       SIM_INFERENCE: replay
       SIM_RECORD: "0"
       STUDIO_PUBLIC_ORIGIN: https://studio.botz.ai
       NODE_OPTIONS: --max-old-space-size=384
+      GITHUB_APP_ID: "5757756"
+      GITHUB_APP_CLIENT_ID: Iv23lipOYY7UsyqEtAfo
+      GITHUB_APP_INSTALLATION_ID: "181894080"
+      GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/studio/github-app.pem
+      GITHUB_SSO_ORG: botzai-studio
+      GITHUB_SSO_TEAM: studio-users
+      GITHUB_SSO_TEAM_ID: "20690959"
     # No `ports:` — reachable only as http://studio:4747 from nginx.
     expose:
       - "4747"
     volumes:
       - ./backends/studio/data:/data
+      # botzai-studio GitHub App private key (sign-in team check).
+      # Host dir /etc/botz/secrets/studio: owner 1000:1000 (container `node`), dir 0500, github-app.pem 0400.
+      # Create before `compose up`: sudo install -d -o 1000 -g 1000 -m 0500 /etc/botz/secrets/studio
+      - type: bind
+        source: /etc/botz/secrets/studio
+        target: /run/secrets/studio
+        read_only: true
     mem_limit: 512m
     pids_limit: 256
     cpus: 1.0

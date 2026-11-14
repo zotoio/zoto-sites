@@ -42,7 +42,7 @@ jobs:
         run: |
           sha="${RUN_SHA:-${INPUT_SHA:-$GITHUB_SHA}}"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ steps.sha.outputs.sha }}
           fetch-depth: 0
@@ -51,7 +51,7 @@ jobs:
       - name: Resolve full sha
         id: full
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
       - name: Verify nginx configs match sites manifest
@@ -76,7 +76,7 @@ jobs:
           [ -n "$P" ] || missing="$missing DEPLOY_PATH"
           [ -z "$missing" ] || { echo "::error::Missing production secrets:$missing"; exit 1; }
       - name: Build and deploy zoto-sites to droplet
-        uses: appleboy/ssh-action@7eaf76671a0d7eec5d98ee897acda4f968735a17 # v1.2.0
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         env:
           DEPLOY_SHA: ${{ needs.validate.outputs.sha }}
         with:

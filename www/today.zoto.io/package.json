@@ -9,6 +9,6 @@
     "start:dev": "nodemon --watch . --ext html,css,js --exec \"http-server . -p 8081 -c-1 --proxy http://localhost:3001\""
   },
   "dependencies": {
-    "gridstack": "14.0.0"
+    "gridstack": "14.1.0"
   }
 }

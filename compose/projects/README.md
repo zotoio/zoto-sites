@@ -49,3 +49,7 @@ The botz editorial archive at `backends/botz.ai/cache` is guarded separately —
 ## mcp.botz.ai
 
 `compose/projects/botz-mcp.yml` runs [zotoio/botz-mcp](https://github.com/zotoio/botz-mcp) from a gitignored checkout at `backends/botz-mcp` (image built with `BOTZ_EXTRAS=cursor`). Secrets live in `backends/mcp/.env` (see `backends/mcp/.env.example`); state in `backends/mcp/data`. The vhost (`projects/botz.ai/mcp/project.yml`) uses `proxy.streaming: true`: unbuffered streamable HTTP, 900s timeouts, `X-Forwarded-Proto https`, and `cache: no-store`. Full env reference: botz-mcp `docs/deploy/mcp.botz.ai.md`.
+
+## studio.botz.ai
+
+`compose/projects/studio.yml` runs [zotoio/grok-agent-studio](https://github.com/zotoio/grok-agent-studio) from a gitignored checkout at `backends/grok-agent-studio`. It is the public simulated site (`STUDIO_HOSTING=public`): no env file, no secrets, no model or GitHub calls. The container runs as uid 1000 with a read-only root filesystem, tmpfs `/tmp` and `/app/.next/cache`, all capabilities dropped and `no-new-privileges`. State lives in `backends/studio/data` (create it owned by 1000:1000 before the first `up`). Health: `GET /api/health`.

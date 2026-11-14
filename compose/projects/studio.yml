@@ -1,0 +1,47 @@
+# studio.botz.ai — Grok Agent Studio public simulated site (zotoio/grok-agent-studio, private).
+#
+# Source: a gitignored checkout at backends/grok-agent-studio, built from that repo's Dockerfile.
+# No env_file and no secrets: STUDIO_HOSTING=public is always simulated (no model, bridge or GitHub calls).
+# State (seeded demos/specs/sim board and session data) persists in backends/studio/data.
+# Host dir must exist and be owned by the image's node user before `compose up`:
+#   sudo install -d -o 1000 -g 1000 -m 0750 backends/studio/data
+services:
+  studio:
+    build:
+      context: ./backends/grok-agent-studio
+      dockerfile: Dockerfile
+    image: zoto-sites-studio
+    container_name: studio
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=64m,uid=1000,gid=1000,mode=0700
+      - /app/.next/cache:size=128m,uid=1000,gid=1000,mode=0700
+    stop_signal: SIGTERM
+    stop_grace_period: 15s
+    environment:
+      STUDIO_HOSTING: public
+      CURSOR_SDK_MODE: simulated
+      GITHUB_MODE: simulated
+      SIM_INFERENCE: replay
+      SIM_RECORD: "0"
+      STUDIO_PUBLIC_ORIGIN: https://studio.botz.ai
+      NODE_OPTIONS: --max-old-space-size=384
+    # No `ports:` — reachable only as http://studio:4747 from nginx.
+    expose:
+      - "4747"
+    volumes:
+      - ./backends/studio/data:/data
+    mem_limit: 512m
+    pids_limit: 256
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

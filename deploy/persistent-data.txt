@@ -10,6 +10,9 @@ backends/swarm/data
 # DATA — mcp.botz.ai botz-mcp state (OAuth client store, usage ledger, org config).
 backends/mcp/data
 
+# DATA — studio.botz.ai session state (seeded demos/specs, simulated board, sessions).
+backends/studio/data
+
 # CONFIG — secrets and service configuration (not file-count guarded by deploy-safe.sh).
 backends/botz.ai/.env
 backends/discord/.env
@@ -24,6 +27,7 @@ ssl
 ./backends/botz.ai/usage
 ./backends/swarm/data
 ./backends/mcp/data
+./backends/studio/data
 ${SSL_CERT_DIR:-./ssl}
 ./compose/otel
 ./backends/otel

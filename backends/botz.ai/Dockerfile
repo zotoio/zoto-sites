@@ -1,6 +1,6 @@
 # Dependencies are installed inside node:22-alpine (musl), so native modules such as sharp always get their
 # linuxmusl-<arch> binaries here (x64 or arm64), whatever libc the build host has. Versions come from the frozen yarn.lock.
-FROM node:22-alpine AS deps
+FROM node:25-alpine AS deps
 WORKDIR /deps
 COPY backends/botz.ai/package.json backends/botz.ai/yarn.lock ./
 RUN yarn install --frozen-lockfile --production --non-interactive --network-timeout 600000 \
@@ -8,7 +8,7 @@ RUN yarn install --frozen-lockfile --production --non-interactive --network-time
     && node -e "require('sharp')" \
     && ls -d node_modules/@img/sharp-linuxmusl-* >/dev/null
 
-FROM node:22-alpine
+FROM node:25-alpine
 # Runtime: no package managers (npm/npx/corepack/yarn); start with node directly.
 RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg /opt/yarn-v*
 WORKDIR /home/root

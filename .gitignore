@@ -91,3 +91,6 @@ backends/swarm/data/
 backends/botz-mcp/
 backends/mcp/data/
 backends/otel/
+# studio.botz.ai: private source checkout and service state (see compose/projects/studio.yml)
+backends/grok-agent-studio/
+backends/studio/data/

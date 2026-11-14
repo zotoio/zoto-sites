@@ -1,0 +1,9 @@
+enabled: true
+type: proxy
+title: studio.botz.ai
+# Grok Agent Studio (zotoio/grok-agent-studio): public simulated SDK tutorial, Studio and demos.
+# Runs with STUDIO_HOSTING=public, so it never calls a model or GitHub and holds no secrets.
+proxy:
+  upstream: http://studio:4747
+  # Example runs stream their console: no proxy buffering, forwarded https proto.
+  streaming: true

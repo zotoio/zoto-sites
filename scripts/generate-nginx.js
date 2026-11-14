@@ -214,6 +214,12 @@ function renderBotzEditorialCacheBlocks() {
     }`;
 }
 
+// Optional per-zone origin certificate (e.g. Cloudflare Origin CA for botz.ai + *.botz.ai).
+// The snippet lives in the host ssl/ dir (git-ignored, mounted at /etc/nginx/certs) and sets
+// ssl_certificate / ssl_certificate_key for that zone only. The glob include matches nothing
+// when the snippet is absent, so CI and fresh droplets keep the default self-signed cert.
+const BOTZ_TLS_INCLUDE = '    include /etc/nginx/certs/botz.ai.tls.conf*;';
+
 function renderHttpToHttpsRedirect(site) {
   const serverNames = site.domains.join(' ');
   return `server {
@@ -244,7 +250,7 @@ function renderSite(site) {
     listen 443 ssl;
     http2 on;
     server_name  ${serverNames};
-    client_max_body_size ${CLIENT_MAX_BODY_SIZE};
+    client_max_body_size ${CLIENT_MAX_BODY_SIZE};${site.id === 'botz.ai' ? `\n${BOTZ_TLS_INCLUDE}` : ''}
 
     location / {
         root   /usr/share/nginx/html/${site.id};
@@ -329,6 +335,7 @@ function renderBotzSubdomainProject(project) {
     http2 on;
     server_name  ${hostname};${titleComment}
     client_max_body_size ${CLIENT_MAX_BODY_SIZE};
+${BOTZ_TLS_INCLUDE}
     access_log /var/log/nginx/access.log ${TIMED_LOG_FORMAT};
 ${extraHeaders}
 
@@ -357,6 +364,7 @@ ${ERROR_PAGE_BLOCK}
     http2 on;
     server_name  ${hostname};${titleComment}
     client_max_body_size ${CLIENT_MAX_BODY_SIZE};
+${BOTZ_TLS_INCLUDE}
 ${extraHeaders}
 
 ${locationBlock}
@@ -372,6 +380,7 @@ function renderBotzSubdomainCatchAll() {
     http2 on;
     server_name  *.botz.ai;
     client_max_body_size ${CLIENT_MAX_BODY_SIZE};
+${BOTZ_TLS_INCLUDE}
 
     error_page 404 /subdomain-not-found.html;
 

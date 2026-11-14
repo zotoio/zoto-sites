@@ -50,6 +50,22 @@ Not required for the first deploy. When you want Cloudflare to validate the orig
 
 Host LE under `/etc/letsencrypt` can still be synced with `sync-ssl.sh` instead of Origin CA if you prefer.
 
+#### botz.ai only (per-zone cert)
+
+Every botz.ai vhost (`botz.ai`, `www`, `*.botz.ai`, and generated subdomain projects) has
+`include /etc/nginx/certs/botz.ai.tls.conf*;`. Other zones never include it, so they keep the
+default cert. To serve a Cloudflare Origin CA cert for `botz.ai` + `*.botz.ai` only, put these
+git-ignored files in host `ssl/` (mounted read-only at `/etc/nginx/certs`):
+
+| File | Mode | Contents |
+|------|------|----------|
+| `botz.ai-origin.pem` | 644 | Origin CA certificate |
+| `botz.ai-origin.key` | 600 root | private key (never committed, never leaves the droplet) |
+| `botz.ai.tls.conf` | 644 | `ssl_certificate /etc/nginx/certs/botz.ai-origin.pem;` and `ssl_certificate_key /etc/nginx/certs/botz.ai-origin.key;` |
+
+Then `docker exec nginx nginx -t && docker exec nginx nginx -s reload`. Without the snippet the
+glob matches nothing and nginx behaves exactly as before. Remove the snippet to roll back.
+
 ### Sync certs into the repo before deploy
 
 Use the helper script (default cert dir: `/etc/letsencrypt/live/botz.ai`):

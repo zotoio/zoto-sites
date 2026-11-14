@@ -95,3 +95,17 @@ test('botz.ai project proxies support blue/green switching and a JSON-RPC 503 fa
     assert.equal(body.error.data.transient, true);
   }
 });
+
+test('botz.ai vhosts (and only botz.ai vhosts) include the optional per-zone origin cert snippet', () => {
+  const include = 'include /etc/nginx/certs/botz.ai.tls.conf*;';
+  const dir = path.join(ROOT, 'nginx-conf');
+  for (const f of fs.readdirSync(dir).filter((n) => n.endsWith('.conf'))) {
+    const conf = fs.readFileSync(path.join(dir, f), 'utf8');
+    const isBotz = f === 'botz.ai.conf' || f.startsWith('botz.ai-sub');
+    const tlsServers = conf.split(/^server \{/m).filter((b) => /listen 443 ssl;/.test(b));
+    for (const block of tlsServers) {
+      if (isBotz) assert.ok(block.includes(include), `${f}: 443 server must include botz.ai TLS snippet`);
+      else assert.ok(!block.includes('botz.ai.tls.conf'), `${f}: non-botz zone must keep default cert`);
+    }
+  }
+});

@@ -112,6 +112,13 @@ jobs:
                 -keyout "$CERT_DIR/default_key.pem" -out "$CERT_DIR/default_cert.pem" -days 365
             fi
             nginx -t
+            # Same config with the optional botz.ai per-zone origin cert snippet present.
+            mkdir -p /etc/nginx/certs
+            openssl req -subj "/CN=botz.ai" -x509 -newkey rsa:2048 -nodes \
+              -keyout /etc/nginx/certs/botz.ai-origin.key -out /etc/nginx/certs/botz.ai-origin.pem -days 1
+            printf "ssl_certificate /etc/nginx/certs/botz.ai-origin.pem;\nssl_certificate_key /etc/nginx/certs/botz.ai-origin.key;\n" \
+              > /etc/nginx/certs/botz.ai.tls.conf
+            nginx -t
           '
 
       - name: botz.ai OpenAI image API contract
